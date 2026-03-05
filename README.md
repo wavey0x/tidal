@@ -53,16 +53,23 @@ Fallback to direct calls is automatic when a multicall chunk fails.
 
 ## Price Refresh
 
-Each scan refreshes Curve API prices once per unique token discovered in that scan and stores the latest quote fields directly on `tokens`.
+Each scan refreshes USD prices once per unique token discovered in that scan and stores the latest quote fields directly on `tokens`.
 The source endpoint is:
 
-- `https://prices.curve.finance/v1/usd_price/ethereum/<token_address>`
+- `https://prices.wavey.info/v1/price?token=<token_address>&chain_id=1`
+
+The scanner uses `summary.high_price` from the response as the persisted USD value.
 
 Price refresh is bounded by:
 
 - `PRICE_CONCURRENCY`
 - `PRICE_TIMEOUT_SECONDS`
 - `PRICE_RETRY_ATTEMPTS`
+
+Optional pricing env overrides:
+
+- `TOKEN_PRICE_AGG_BASE_URL`
+- `TOKEN_PRICE_AGG_KEY`
 
 ## Strategy Auction Mapping Cache
 

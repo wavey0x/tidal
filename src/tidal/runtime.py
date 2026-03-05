@@ -22,7 +22,7 @@ from tidal.persistence.repositories import (
     TokenRepository,
     VaultRepository,
 )
-from tidal.pricing.curve import CurvePriceProvider
+from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.pricing.service import TokenPriceRefreshService
 from tidal.scanner.balance_reader import BalanceReader
 from tidal.scanner.discovery import StrategyDiscoveryService
@@ -85,9 +85,10 @@ def build_scanner_service(settings: Settings, session) -> ScannerService:
         chain_id=settings.chain_id,
         enabled=settings.price_refresh_enabled,
         concurrency=settings.price_concurrency,
-        curve_provider=CurvePriceProvider(
+        price_provider=TokenPriceAggProvider(
             chain_id=settings.chain_id,
-            base_url=settings.curve_api_base_url,
+            base_url=settings.token_price_agg_base_url,
+            api_key=settings.token_price_agg_key,
             timeout_seconds=settings.price_timeout_seconds,
             retry_attempts=settings.price_retry_attempts,
         ),

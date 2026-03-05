@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import httpx
 
 from tidal.constants import PRICE_TOKEN_ALIAS_TO_CANONICAL
-from tidal.pricing.curve import CurvePriceNotFoundError
+from tidal.pricing.token_price_agg import TokenPriceNotFoundError
 from tidal.normalizers import normalize_address
 from tidal.time import utcnow_iso
 from tidal.types import ScanItemError
@@ -29,13 +29,13 @@ class TokenPriceRefreshService:
         chain_id: int,
         enabled: bool,
         concurrency: int,
-        curve_provider,
+        price_provider,
         token_repository,
     ):
         self.chain_id = chain_id
         self.enabled = enabled
         self.concurrency = max(1, concurrency)
-        self.curve_provider = curve_provider
+        self.price_provider = price_provider
         self.token_repository = token_repository
 
     async def refresh_many(self, *, run_id: str, tokens: list[PriceToken]) -> tuple[dict[str, int], list[ScanItemError]]:
@@ -74,8 +74,8 @@ class TokenPriceRefreshService:
         async def _refresh_token(token: PriceToken) -> tuple[str, str, str | None, str | None]:
             async with sem:
                 try:
-                    quote = await self.curve_provider.quote_usd(token.address, token.decimals)
-                except CurvePriceNotFoundError as exc:
+                    quote = await self.price_provider.quote_usd(token.address, token.decimals)
+                except TokenPriceNotFoundError as exc:
                     return token.address, "NOT_FOUND", None, str(exc)
                 except httpx.HTTPStatusError as exc:
                     if exc.response is not None and exc.response.status_code == 404:
@@ -95,7 +95,7 @@ class TokenPriceRefreshService:
                 self.token_repository.set_latest_price(
                     address=original_address,
                     price_usd=price_usd,
-                    source=self.curve_provider.source_name,
+                    source=self.price_provider.source_name,
                     status=status,
                     fetched_at=fetched_at,
                     run_id=run_id,
@@ -114,8 +114,8 @@ class TokenPriceRefreshService:
                 errors.append(
                     ScanItemError(
                         stage="PRICE_READ",
-                        error_code="curve_price_lookup_failed",
-                        error_message=error_message or "curve price lookup failed",
+                        error_code="token_price_lookup_failed",
+                        error_message=error_message or "token price lookup failed",
                         token_address=original_address,
                     )
                 )

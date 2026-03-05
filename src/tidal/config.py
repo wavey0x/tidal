@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,10 +62,12 @@ class Settings(BaseSettings):
     )
     auction_cache_path: Path | None = Field(default=None, alias="AUCTION_CACHE_PATH")
     price_refresh_enabled: bool = Field(default=True, alias="PRICE_REFRESH_ENABLED")
-    curve_api_base_url: str = Field(
-        default="https://prices.curve.finance",
-        alias="CURVE_API_BASE_URL",
+    token_price_agg_base_url: str = Field(
+        default="https://prices.wavey.info",
+        alias="TOKEN_PRICE_AGG_BASE_URL",
+        validation_alias=AliasChoices("TOKEN_PRICE_AGG_BASE_URL", "CURVE_API_BASE_URL"),
     )
+    token_price_agg_key: str | None = Field(default=None, alias="TOKEN_PRICE_AGG_KEY")
     price_timeout_seconds: int = Field(default=10, alias="PRICE_TIMEOUT_SECONDS")
     price_retry_attempts: int = Field(default=3, alias="PRICE_RETRY_ATTEMPTS")
     price_concurrency: int = Field(default=8, alias="PRICE_CONCURRENCY")

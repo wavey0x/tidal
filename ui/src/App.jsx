@@ -17,6 +17,22 @@ function shortenAddress(address) {
   return `${address.slice(0, 8)}...${address.slice(-6)}`;
 }
 
+function formatStrategyDisplayName(name) {
+  if (!name) {
+    return "Unnamed Strategy";
+  }
+
+  let output = name;
+  if (output.startsWith("Strategy")) {
+    output = output.slice("Strategy".length);
+  }
+  output = output.replaceAll("Boosted", "");
+  output = output.replaceAll("Factory", "");
+  output = output.replace(/-{2,}/g, "-").trim();
+  output = output.replace(/^-+/, "").replace(/-+$/, "");
+  return output || name;
+}
+
 function withGrouping(value) {
   const [integer, decimal] = value.split(".");
   const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -61,6 +77,43 @@ function formatTimestamp(value) {
     return value;
   }
   return date.toLocaleString();
+}
+
+function formatRelativeTimestamp(value, nowMs) {
+  if (!value) {
+    return "—";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  const diffSeconds = Math.floor((nowMs - date.getTime()) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+
+  if (absSeconds < 60) {
+    return diffSeconds >= 0 ? "just now" : "in a moment";
+  }
+
+  const units = [
+    { label: "year", seconds: 365 * 24 * 60 * 60 },
+    { label: "month", seconds: 30 * 24 * 60 * 60 },
+    { label: "week", seconds: 7 * 24 * 60 * 60 },
+    { label: "day", seconds: 24 * 60 * 60 },
+    { label: "hour", seconds: 60 * 60 },
+    { label: "minute", seconds: 60 },
+  ];
+
+  for (const unit of units) {
+    if (absSeconds >= unit.seconds) {
+      const count = Math.floor(absSeconds / unit.seconds);
+      const suffix = count === 1 ? unit.label : `${unit.label}s`;
+      return diffSeconds >= 0 ? `${count} ${suffix} ago` : `in ${count} ${suffix}`;
+    }
+  }
+
+  return "just now";
 }
 
 function resolveSystemTheme() {
@@ -175,10 +228,11 @@ function EntityIdentity({ primary, secondary, address }) {
 }
 
 function AuctionAddressCell({ address }) {
-  if (!address) {
-    return <span className="row-secondary mono">—</span>;
-  }
-  return <AddressCopy address={address} />;
+  return (
+    <span className="auction-value-slot">
+      {address ? <AddressCopy address={address} /> : <span className="row-secondary mono">—</span>}
+    </span>
+  );
 }
 
 function ThemeSwitch({ themePreference, resolvedTheme, onCycle }) {
@@ -214,87 +268,52 @@ function TokenBalances({
   balances,
   displayMode,
   onToggleMode,
-  isExpanded,
-  onToggleExpanded,
-  totalUsdValue,
 }) {
-  const summaryLogos = balances.slice(0, 4);
-  const hiddenLogoCount = Math.max(0, balances.length - summaryLogos.length);
-
   return (
     <div className="token-cell">
-      <button
-        type="button"
-        className={`token-summary ${isExpanded ? "is-open" : ""}`}
-        onClick={onToggleExpanded}
-        title={isExpanded ? "Hide token breakdown" : "Show token breakdown"}
-      >
-        <span className="token-summary-caret" aria-hidden="true">›</span>
-        <span className="token-logo-stack" aria-hidden="true">
-          {summaryLogos.map((balance) => (
+      <div className="token-stack">
+        {balances.map((balance) => (
+          <div key={`${balance.tokenAddress}-${balance.tokenSymbol}`} className="token-item">
             <img
-              key={`summary-${balance.tokenAddress}`}
               src={`/api/token-logo/${balance.tokenAddress}`}
-              alt=""
-              className="token-logo token-logo-stack-item"
+              alt={`${balance.tokenSymbol} logo`}
+              className="token-logo"
               loading="lazy"
               decoding="async"
               onError={(event) => {
                 event.currentTarget.style.visibility = "hidden";
               }}
             />
-          ))}
-          {hiddenLogoCount > 0 ? (
-            <span className="token-logo-more mono">+{hiddenLogoCount}</span>
-          ) : null}
-        </span>
-        <span className="mono token-summary-total">
-          {totalUsdValue ? `$${formatBalance(totalUsdValue)}` : "?"}
-        </span>
-      </button>
-
-      {isExpanded ? (
-        <div className="token-stack">
-          {balances.map((balance) => (
-            <div key={`${balance.tokenAddress}-${balance.tokenSymbol}`} className="token-item">
-              <img
-                src={`/api/token-logo/${balance.tokenAddress}`}
-                alt={`${balance.tokenSymbol} logo`}
-                className="token-logo"
-                loading="lazy"
-                decoding="async"
-                onError={(event) => {
-                  event.currentTarget.style.visibility = "hidden";
-                }}
+            <span className="token-symbol-wrap">
+              <span className="mono token-symbol">{balance.tokenSymbol || "UNKNOWN"}</span>
+              <CopyIconButton
+                valueToCopy={balance.tokenAddress}
+                title={`Copy token address ${balance.tokenAddress}`}
+                ariaLabel={`Copy token address for ${balance.tokenSymbol || "token"}`}
               />
-              <span className="token-symbol-wrap">
-                <span className="mono token-symbol">{balance.tokenSymbol || "UNKNOWN"}</span>
-                <CopyIconButton
-                  valueToCopy={balance.tokenAddress}
-                  title={`Copy token address ${balance.tokenAddress}`}
-                  ariaLabel={`Copy token address for ${balance.tokenSymbol || "token"}`}
-                />
-              </span>
-              <button
-                type="button"
-                className="mono token-balance token-balance-button"
-                onClick={onToggleMode}
-                title={displayMode === "usd" ? "Click to show token amounts" : "Click to show USD values"}
-              >
-                {displayMode === "usd"
-                  ? (balance.usdValue ? `$${formatBalance(balance.usdValue)}` : "?")
-                  : formatBalance(balance.normalizedBalance)}
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
+            </span>
+            <button
+              type="button"
+              className="mono token-balance token-balance-button"
+              onClick={onToggleMode}
+              title={displayMode === "usd" ? "Click to show token amounts" : "Click to show USD values"}
+            >
+              {displayMode === "usd"
+                ? (balance.usdValue ? `$${formatBalance(balance.usdValue)}` : "?")
+                : formatBalance(balance.normalizedBalance)}
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
 export default function App() {
   const [selectedToken, setSelectedToken] = useState(getTokenFromUrl);
+  const [auctionFilter, setAuctionFilter] = useState("all");
+  const [isAuctionFilterMenuOpen, setIsAuctionFilterMenuOpen] = useState(false);
+  const [balanceSortDirection, setBalanceSortDirection] = useState("desc");
   const [themePreference, setThemePreference] = useState(getStoredThemePreference);
   const [systemTheme, setSystemTheme] = useState(resolveSystemTheme);
   const [searchTerm, setSearchTerm] = useState("");
@@ -304,7 +323,8 @@ export default function App() {
   const [loadingRows, setLoadingRows] = useState(true);
   const [error, setError] = useState("");
   const [displayMode, setDisplayMode] = useState("usd");
-  const [expandedRows, setExpandedRows] = useState({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const auctionFilterMenuRef = useRef(null);
 
   const resolvedTheme = themePreference || systemTheme;
   const headerLogoSrc = resolvedTheme === "dark" ? "/tidal-logo-dark.svg" : "/tidal-logo-light.svg";
@@ -347,6 +367,40 @@ export default function App() {
       window.localStorage.removeItem("tidal_theme_preference");
     }
   }, [themePreference]);
+
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30000);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuctionFilterMenuOpen) {
+      return undefined;
+    }
+
+    const onMouseDown = (event) => {
+      if (auctionFilterMenuRef.current && !auctionFilterMenuRef.current.contains(event.target)) {
+        setIsAuctionFilterMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setIsAuctionFilterMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isAuctionFilterMenuOpen]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -524,8 +578,7 @@ export default function App() {
 
   const filteredRows = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-
-    return normalizedRows.filter((row) => {
+    const filtered = normalizedRows.filter((row) => {
       const tokenMatch =
         selectedToken === ALL_TOKENS
           ? true
@@ -534,6 +587,16 @@ export default function App() {
             );
 
       if (!tokenMatch) {
+        return false;
+      }
+
+      const auctionMatch =
+        auctionFilter === "all"
+          ? true
+          : auctionFilter === "null"
+            ? !row.auctionAddress
+            : Boolean(row.auctionAddress);
+      if (!auctionMatch) {
         return false;
       }
 
@@ -556,7 +619,30 @@ export default function App() {
 
       return searchable.includes(term);
     });
-  }, [normalizedRows, searchTerm, selectedToken]);
+
+    filtered.sort((a, b) => {
+      const totalA = parseBig(a.totalUsdValue);
+      const totalB = parseBig(b.totalUsdValue);
+
+      if (!totalA && !totalB) {
+        return a.strategyAddress.localeCompare(b.strategyAddress);
+      }
+      if (!totalA) {
+        return 1;
+      }
+      if (!totalB) {
+        return -1;
+      }
+
+      const cmp = totalA.cmp(totalB);
+      if (cmp === 0) {
+        return a.strategyAddress.localeCompare(b.strategyAddress);
+      }
+      return balanceSortDirection === "desc" ? -cmp : cmp;
+    });
+
+    return filtered;
+  }, [normalizedRows, searchTerm, selectedToken, auctionFilter, balanceSortDirection]);
 
   const latestVisibleScan = useMemo(() => {
     if (!filteredRows.length) {
@@ -575,11 +661,17 @@ export default function App() {
     setDisplayMode((prev) => (prev === "token" ? "usd" : "token"));
   }
 
-  function toggleExpandedRow(strategyAddress) {
-    setExpandedRows((prev) => ({
-      ...prev,
-      [strategyAddress]: !prev[strategyAddress],
-    }));
+  function toggleBalanceSortDirection() {
+    setBalanceSortDirection((prev) => (prev === "desc" ? "asc" : "desc"));
+  }
+
+  function toggleAuctionFilterMenu() {
+    setIsAuctionFilterMenuOpen((prev) => !prev);
+  }
+
+  function selectAuctionFilter(next) {
+    setAuctionFilter(next);
+    setIsAuctionFilterMenuOpen(false);
   }
 
   function cycleThemePreference() {
@@ -595,7 +687,7 @@ export default function App() {
         <div className="header-row">
           <h1 className="header-title">
             <img src={headerLogoSrc} alt="" className="brand-logo" aria-hidden="true" />
-            <span>Tidal Scan Dashboard</span>
+            <span>Tidal - Curve Factory Automation</span>
           </h1>
           <ThemeSwitch
             themePreference={themePreference}
@@ -643,11 +735,73 @@ export default function App() {
         <table>
           <thead>
             <tr>
+              <th className="last-scan-col">Last Scan</th>
               <th>Strategy</th>
               <th>Vault</th>
-              <th>Auction</th>
-              <th>Token Balances</th>
-              <th>Scanned</th>
+              <th className="auction-col">
+                <span className="th-header-inline">
+                  <span>Auction</span>
+                  <span className="th-filter-wrap" ref={auctionFilterMenuRef}>
+                    <button
+                      type="button"
+                      className={`th-filter-icon ${auctionFilter !== "all" ? "is-active" : ""}`}
+                      title={`Auction filter: ${auctionFilter}`}
+                      aria-label={`Auction filter: ${auctionFilter}`}
+                      aria-haspopup="menu"
+                      aria-expanded={isAuctionFilterMenuOpen}
+                      onClick={toggleAuctionFilterMenu}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M2.5 3.5h11l-4.5 5v3.5l-2 1v-4.5z" />
+                      </svg>
+                    </button>
+                    {isAuctionFilterMenuOpen ? (
+                      <div className="th-filter-popover" role="menu">
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={auctionFilter === "all"}
+                          className={`th-filter-option ${auctionFilter === "all" ? "is-active" : ""}`}
+                          onClick={() => selectAuctionFilter("all")}
+                        >
+                          all
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={auctionFilter === "null"}
+                          className={`th-filter-option ${auctionFilter === "null" ? "is-active" : ""}`}
+                          onClick={() => selectAuctionFilter("null")}
+                        >
+                          null
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={auctionFilter === "not_null"}
+                          className={`th-filter-option ${auctionFilter === "not_null" ? "is-active" : ""}`}
+                          onClick={() => selectAuctionFilter("not_null")}
+                        >
+                          not null
+                        </button>
+                      </div>
+                    ) : null}
+                  </span>
+                </span>
+              </th>
+              <th>
+                <button
+                  type="button"
+                  className="th-sort-button"
+                  onClick={toggleBalanceSortDirection}
+                  title={`Sort by total token USD (${balanceSortDirection === "desc" ? "descending" : "ascending"})`}
+                >
+                  Token Balances
+                  <span className="sort-indicator" aria-hidden="true">
+                    {balanceSortDirection === "desc" ? "↓" : "↑"}
+                  </span>
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -660,9 +814,12 @@ export default function App() {
             {!loadingRows
               ? filteredRows.map((row) => (
                   <tr key={row.strategyAddress}>
+                    <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)}>
+                      {formatRelativeTimestamp(row.scannedAt, nowMs)}
+                    </td>
                     <td>
                       <EntityIdentity
-                        primary={row.strategyName || "Unnamed Strategy"}
+                        primary={formatStrategyDisplayName(row.strategyName)}
                         address={row.strategyAddress}
                       />
                     </td>
@@ -680,12 +837,8 @@ export default function App() {
                         balances={row.balances}
                         displayMode={displayMode}
                         onToggleMode={toggleDisplayMode}
-                        isExpanded={Boolean(expandedRows[row.strategyAddress])}
-                        onToggleExpanded={() => toggleExpandedRow(row.strategyAddress)}
-                        totalUsdValue={row.totalUsdValue}
                       />
                     </td>
-                    <td className="mono muted">{formatTimestamp(row.scannedAt)}</td>
                   </tr>
                 ))
               : null}

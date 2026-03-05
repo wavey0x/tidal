@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.26.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tidal"
+version = "0.1.0"
+description = "Yearn strategy scanner and reward balance cache"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.13.2",
+  "httpx>=0.27.0",
+  "pydantic-settings>=2.5.2",
+  "PyYAML>=6.0.2",
+  "python-dotenv>=1.0.1",
+  "sqlalchemy>=2.0.34",
+  "structlog>=24.4.0",
+  "typer>=0.12.5",
+  "web3>=6.20.2,<8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.3",
+  "pytest-asyncio>=0.24.0",
+]
+
+[project.scripts]
+tidal = "tidal.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tidal"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

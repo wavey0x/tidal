@@ -1,0 +1,30 @@
+"""Project constants."""
+
+from __future__ import annotations
+
+YEARN_CURVE_FACTORY_ADDRESS = "0x21b1fc8a52f179757bf555346130bf27c0c2a17a"
+YEARN_AUCTION_FACTORY_ADDRESS = "0xe87af17acba165686e5aa7de2cec523864c25712"
+YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
+CRV_ADDRESS = "0xd533a949740bb3306d119cc777fa900ba034cd52"
+CVX_ADDRESS = "0x4e3fbd56cd56c3e72c1403e103b45db9da5b9d2b"
+CVX_PRICE_ALIAS_ADDRESS = "0xa60f211e86d3511635e8309dbc4e535d6fcd9f97"
+USDC_ADDRESS = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+CURVE_NATIVE_TOKEN_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+CORE_REWARD_TOKENS = frozenset({CRV_ADDRESS, CVX_ADDRESS})
+PRICE_TOKEN_ALIAS_TO_CANONICAL = {
+    CVX_PRICE_ALIAS_ADDRESS: CVX_ADDRESS,
+}
+
+DEFAULT_MAX_WITHDRAWAL_QUEUE = 256
+
+# Vaults that must be scanned even if they are absent from factory enumeration.
+ADDITIONAL_DISCOVERY_VAULTS = frozenset(
+    {
+        "0x790a60024bc3aea28385b60480f15a0771f26d09",
+    }
+)
+
+# Strategies that must be scanned even if they are absent from vault withdrawal queues.
+ADDITIONAL_DISCOVERY_STRATEGIES = frozenset()

@@ -44,7 +44,7 @@ class TokenPriceAggProvider:
         self.retry_attempts = retry_attempts
         self.quote_token_address = "usd"
         self.quote_token_decimals = 0
-        self._headers = {"x-api-key": api_key} if api_key else {}
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     async def quote_usd(self, token_address: str, token_decimals: int) -> TokenPriceQuote:
         normalized_token = normalize_address(token_address)

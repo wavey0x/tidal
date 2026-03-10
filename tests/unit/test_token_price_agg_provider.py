@@ -72,7 +72,7 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
         captured["base_url"] = str(client.base_url)
         captured["path"] = path
         captured["params"] = params
-        captured["x_api_key"] = client.headers.get("x-api-key")
+        captured["authorization"] = client.headers.get("authorization")
         return {
             "token": {
                 "logo_url": "https://assets.example/logo.png",
@@ -94,17 +94,18 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
     assert captured["params"] == {
         "token": "0x4e3fbd56cd56c3e72c1403e103b45db9da5b9d2b",
         "chain_id": 1,
+        "use_underlying": "true",
     }
-    assert captured["x_api_key"] is None
+    assert captured["authorization"] is None
 
 
 @pytest.mark.asyncio
-async def test_quote_usd_sends_x_api_key_when_configured() -> None:
+async def test_quote_usd_sends_authorization_bearer_when_configured() -> None:
     provider = _provider(api_key="test-key")
     captured: dict[str, object] = {}
 
     async def fake_get_price(client, path, params):  # noqa: ANN001
-        captured["x_api_key"] = client.headers.get("x-api-key")
+        captured["authorization"] = client.headers.get("authorization")
         return {
             "summary": {
                 "successful_providers": 1,
@@ -115,7 +116,7 @@ async def test_quote_usd_sends_x_api_key_when_configured() -> None:
     provider._get_price = fake_get_price  # type: ignore[method-assign]  # noqa: SLF001
     await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
 
-    assert captured["x_api_key"] == "test-key"
+    assert captured["authorization"] == "Bearer test-key"
 
 
 @pytest.mark.asyncio

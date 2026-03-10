@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(pip list:*)",
-      "Bash(factory-dashboard --help 2>&1)"
+      "Bash(factory-dashboard --help 2>&1)",
+      "WebFetch(domain:factory-dashboard.wavey.info)"
     ]
   }
 }

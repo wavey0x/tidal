@@ -35,6 +35,7 @@ class TokenPriceRefreshService:
         chain_id: int,
         enabled: bool,
         concurrency: int,
+        delay_seconds: float = 0.5,
         price_provider,
         logo_validator,
         token_repository,
@@ -42,6 +43,7 @@ class TokenPriceRefreshService:
         self.chain_id = chain_id
         self.enabled = enabled
         self.concurrency = max(1, concurrency)
+        self.delay_seconds = delay_seconds
         self.price_provider = price_provider
         self.logo_validator = logo_validator
         self.token_repository = token_repository
@@ -81,6 +83,8 @@ class TokenPriceRefreshService:
 
         async def _refresh_token(token: PriceToken) -> tuple[str, str, str | None, str | None, str | None]:
             async with sem:
+                if self.delay_seconds > 0:
+                    await asyncio.sleep(self.delay_seconds)
                 try:
                     quote = await self.price_provider.quote_usd(token.address, token.decimals)
                 except httpx.HTTPStatusError as exc:

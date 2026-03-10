@@ -69,7 +69,8 @@ class Settings(BaseSettings):
     token_price_agg_key: str | None = Field(default=None, alias="TOKEN_PRICE_AGG_KEY")
     price_timeout_seconds: int = Field(default=10, alias="PRICE_TIMEOUT_SECONDS")
     price_retry_attempts: int = Field(default=3, alias="PRICE_RETRY_ATTEMPTS")
-    price_concurrency: int = Field(default=8, alias="PRICE_CONCURRENCY")
+    price_concurrency: int = Field(default=3, alias="PRICE_CONCURRENCY")
+    price_delay_seconds: float = Field(default=0.5, alias="PRICE_DELAY_SECONDS")
 
     telegram_alerts_enabled: bool = Field(default=False, alias="TELEGRAM_ALERTS_ENABLED")
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")

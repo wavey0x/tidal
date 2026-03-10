@@ -86,6 +86,7 @@ def build_scanner_service(settings: Settings, session) -> ScannerService:
         chain_id=settings.chain_id,
         enabled=settings.price_refresh_enabled,
         concurrency=settings.price_concurrency,
+        delay_seconds=settings.price_delay_seconds,
         price_provider=TokenPriceAggProvider(
             chain_id=settings.chain_id,
             base_url=settings.token_price_agg_base_url,

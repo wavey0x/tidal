@@ -432,7 +432,7 @@ export default function App() {
       setError("");
 
       try {
-        const response = await fetch(apiUrl("/dashboard"), {
+        const response = await fetch(apiUrl(""), {
           signal: controller.signal,
         });
 

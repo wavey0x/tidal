@@ -4,10 +4,14 @@ CLI service for discovering Yearn strategies and caching reward token balances i
 
 ## Quick Start
 
-1. Create and activate a Python 3.12+ virtualenv.
+1. Create and activate a Python 3.12+ virtualenv:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 2. Install:
    ```bash
-   pip install -e .[dev]
+   pip install -e ".[dev]"
    ```
 3. Copy `.env.example` to `.env` and set `RPC_URL`.
 4. Run migrations:
@@ -28,7 +32,19 @@ CLI service for discovering Yearn strategies and caching reward token balances i
 
 ## UI Dashboard
 
-A React dashboard is available in [`ui/`](./ui) for browsing scan results served by an external read-only API backed by `factory_dashboard.db`.
+A React dashboard in [`ui/`](./ui) is deployed to Vercel as a static site. API calls are rewritten to the external dashboard API via `vercel.json`:
+
+```json
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://api.wavey.info/factory-dashboard/:path*" }
+  ]
+}
+```
+
+Deploy by connecting the `ui/` directory to a Vercel project (root directory = `ui`).
+
+### Local development
 
 ```bash
 cd ui
@@ -36,9 +52,7 @@ npm install
 npm run dev
 ```
 
-This starts the frontend on `http://localhost:5173`.
-
-For local development, either:
+For local dev, either:
 
 - set `VITE_FACTORY_DASHBOARD_API_BASE_URL` to your external dashboard API, or
 - keep the default `/api` base path and point the Vite proxy at your local API with `FACTORY_DASHBOARD_API_PROXY_TARGET`

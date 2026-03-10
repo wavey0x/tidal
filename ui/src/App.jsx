@@ -291,7 +291,7 @@ function TokenBalances({
                   event.currentTarget.style.visibility = "hidden";
                 }}
               />
-            ) : null}
+            ) : <span className="token-logo-placeholder" />}
             <span className="token-symbol-wrap">
               <span className="mono token-symbol">{balance.tokenSymbol || "UNKNOWN"}</span>
               <CopyIconButton

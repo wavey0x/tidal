@@ -523,6 +523,11 @@ tbody tr:hover td {
   background: transparent;
 }
 
+.token-logo-placeholder {
+  width: var(--token-icon-size);
+  height: var(--token-icon-size);
+}
+
 .token-symbol-wrap {
   display: flex;
   align-items: center;

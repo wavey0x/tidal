@@ -4,6 +4,11 @@ import Big from "big.js";
 const ALL_TOKENS = "__all__";
 const MIN_USD_VISIBLE = new Big("0.01");
 const THEME_SEQUENCE = ["light", "dark"];
+const API_BASE_URL = (import.meta.env.VITE_TIDAL_API_BASE_URL || "/api").replace(/\/$/, "");
+
+function apiUrl(path) {
+  return `${API_BASE_URL}${path}`;
+}
 
 function getTokenFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -274,16 +279,19 @@ function TokenBalances({
       <div className="token-stack">
         {balances.map((balance) => (
           <div key={`${balance.tokenAddress}-${balance.tokenSymbol}`} className="token-item">
-            <img
-              src={`/api/token-logo/${balance.tokenAddress}`}
-              alt={`${balance.tokenSymbol} logo`}
-              className="token-logo"
-              loading="lazy"
-              decoding="async"
-              onError={(event) => {
-                event.currentTarget.style.visibility = "hidden";
-              }}
-            />
+            {balance.tokenLogoUrl ? (
+              <img
+                src={balance.tokenLogoUrl}
+                alt={`${balance.tokenSymbol} logo`}
+                className="token-logo"
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={(event) => {
+                  event.currentTarget.style.visibility = "hidden";
+                }}
+              />
+            ) : null}
             <span className="token-symbol-wrap">
               <span className="mono token-symbol">{balance.tokenSymbol || "UNKNOWN"}</span>
               <CopyIconButton
@@ -417,38 +425,60 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
 
-    async function loadCatalog() {
+    async function loadDashboard() {
+      setLoadingRows(true);
+      setError("");
+
       try {
-        const [summaryResponse, tokenResponse] = await Promise.all([
-          fetch("/api/summary"),
-          fetch("/api/tokens"),
-        ]);
+        const response = await fetch(apiUrl("/dashboard"), {
+          signal: controller.signal,
+        });
 
-        if (!summaryResponse.ok || !tokenResponse.ok) {
-          throw new Error("Unable to load dashboard metadata");
+        if (!response.ok) {
+          throw new Error("Unable to load dashboard");
         }
 
-        const summaryPayload = await summaryResponse.json();
-        const tokenPayload = await tokenResponse.json();
+        const payload = await response.json();
 
         if (!isMounted) {
           return;
         }
 
+        const summaryPayload = payload.summary
+          ? {
+              ...payload.summary,
+              latestScanAt: payload.latestScanAt || payload.summary.latestScanAt || null,
+            }
+          : {
+              strategyCount: Array.isArray(payload.rows) ? payload.rows.length : 0,
+              tokenCount: Array.isArray(payload.tokens) ? payload.tokens.length : 0,
+              latestScanAt: payload.latestScanAt || null,
+            };
+
         setSummary(summaryPayload);
-        setTokens(tokenPayload.tokens || []);
+        setTokens(payload.tokens || []);
+        setRows(payload.rows || []);
       } catch (loadError) {
+        if (isMounted && loadError.name !== "AbortError") {
+          setError(loadError.message || "Unable to load dashboard");
+          setSummary(null);
+          setTokens([]);
+          setRows([]);
+        }
+      } finally {
         if (isMounted) {
-          setError(loadError.message || "Unable to load metadata");
+          setLoadingRows(false);
         }
       }
     }
 
-    loadCatalog();
+    loadDashboard();
 
     return () => {
       isMounted = false;
+      controller.abort();
     };
   }, []);
 
@@ -486,50 +516,6 @@ export default function App() {
       setSelectedToken(ALL_TOKENS);
     }
   }, [selectedToken, tokenOptions]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const controller = new AbortController();
-
-    async function loadRows() {
-      setLoadingRows(true);
-      setError("");
-
-      try {
-        const response = await fetch("/api/strategy-balances?limit=2500", {
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error("Unable to load strategy balances");
-        }
-
-        const payload = await response.json();
-
-        if (!isMounted) {
-          return;
-        }
-
-        setRows(payload.rows || []);
-      } catch (loadError) {
-        if (isMounted && loadError.name !== "AbortError") {
-          setError(loadError.message || "Unable to load strategy balances");
-          setRows([]);
-        }
-      } finally {
-        if (isMounted) {
-          setLoadingRows(false);
-        }
-      }
-    }
-
-    loadRows();
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
-  }, []);
 
   const normalizedRows = useMemo(() => {
     return rows

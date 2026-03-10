@@ -10,7 +10,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from tidal.persistence import models
-from tidal.types import BalanceResult, ScanItemError, TokenMetadata
+from tidal.types import BalanceResult, ScanItemError, TokenLogoState, TokenMetadata
 
 
 class StrategyRepository:
@@ -48,6 +48,42 @@ class StrategyRepository:
             .where(models.strategies.c.address == address)
             .values(name=name)
         )
+
+    def set_auction_mappings(self, strategy_to_auction: dict[str, str | None], *, updated_at: str) -> None:
+        for strategy_address, auction_address in strategy_to_auction.items():
+            self.session.execute(
+                update(models.strategies)
+                .where(models.strategies.c.address == strategy_address)
+                .values(
+                    auction_address=auction_address,
+                    auction_updated_at=updated_at,
+                    auction_error_message=None,
+                )
+            )
+
+    def mark_auction_refresh_failed(self, addresses: list[str], *, updated_at: str, error_message: str) -> None:
+        if not addresses:
+            return
+        self.session.execute(
+            update(models.strategies)
+            .where(models.strategies.c.address.in_(addresses))
+            .values(
+                auction_updated_at=updated_at,
+                auction_error_message=error_message,
+            )
+        )
+
+    def auction_mapping_for_addresses(self, addresses: list[str]) -> dict[str, str | None]:
+        if not addresses:
+            return {}
+        stmt = select(
+            models.strategies.c.address,
+            models.strategies.c.auction_address,
+        ).where(models.strategies.c.address.in_(addresses))
+        return {
+            row.address: row.auction_address
+            for row in self.session.execute(stmt)
+        }
 
 
 class VaultRepository:
@@ -179,6 +215,48 @@ class TokenRepository:
                 price_fetched_at=fetched_at,
                 price_run_id=run_id,
                 price_error_message=error_message,
+            )
+        )
+
+    def get_logo_state(self, address: str) -> TokenLogoState | None:
+        stmt = (
+            select(
+                models.tokens.c.address,
+                models.tokens.c.logo_url,
+                models.tokens.c.logo_status,
+                models.tokens.c.logo_validated_at,
+            )
+            .where(models.tokens.c.address == address)
+        )
+        row = self.session.execute(stmt).mappings().first()
+        if row is None:
+            return None
+        return TokenLogoState(
+            address=row["address"],
+            logo_url=row["logo_url"],
+            logo_status=row["logo_status"],
+            logo_validated_at=row["logo_validated_at"],
+        )
+
+    def set_logo_validation(
+        self,
+        *,
+        address: str,
+        logo_url: str | None,
+        source: str | None,
+        status: str,
+        validated_at: str,
+        error_message: str | None,
+    ) -> None:
+        self.session.execute(
+            update(models.tokens)
+            .where(models.tokens.c.address == address)
+            .values(
+                logo_url=logo_url,
+                logo_source=source,
+                logo_status=status,
+                logo_validated_at=validated_at,
+                logo_error_message=error_message,
             )
         )
 

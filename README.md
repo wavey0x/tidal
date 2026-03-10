@@ -28,7 +28,7 @@ CLI service for discovering Yearn strategies and caching reward token balances i
 
 ## UI Dashboard
 
-A React dashboard is available in [`ui/`](./ui) for browsing scan results from `tidal.db`.
+A React dashboard is available in [`ui/`](./ui) for browsing scan results served by an external read-only API backed by `tidal.db`.
 
 ```bash
 cd ui
@@ -36,10 +36,12 @@ npm install
 npm run dev
 ```
 
-This starts:
+This starts the frontend on `http://localhost:5173`.
 
-- Frontend: `http://localhost:5173`
-- API server: `http://localhost:8787`
+For local development, either:
+
+- set `VITE_TIDAL_API_BASE_URL` to your external dashboard API, or
+- keep the default `/api` base path and point the Vite proxy at your local API with `TIDAL_API_PROXY_TARGET`
 
 ## Multicall Batching
 
@@ -71,10 +73,12 @@ Optional pricing env overrides:
 - `TOKEN_PRICE_AGG_BASE_URL`
 - `TOKEN_PRICE_AGG_KEY`
 
-## Strategy Auction Mapping Cache
+Each scan also backfills validated token logo URLs into `tokens.logo_url` using `token.logo_url` from the same price response.
 
-Each scan also refreshes a strategy-to-auction cache at `strategy_auction_map.json` (sibling of the DB file by default).
-The cache maps strategies to auctions by matching `strategy.want()` with `auction.want()` for auctions returned by:
+## Strategy Auction Mapping
+
+Each scan refreshes strategy-to-auction mappings directly into the `strategies` table.
+Mappings are resolved by matching `strategy.want()` with `auction.want()` for auctions returned by:
 
 - `getAllAuctions()` on `AUCTION_FACTORY_ADDRESS` (default `0xe87af17acba165686e5aa7de2cec523864c25712`)
 
@@ -83,5 +87,4 @@ Only auctions with governance `0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b` are c
 Optional env overrides:
 
 - `AUCTION_FACTORY_ADDRESS`
-- `AUCTION_CACHE_PATH`
 - `MULTICALL_AUCTION_BATCH_CALLS`

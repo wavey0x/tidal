@@ -35,7 +35,7 @@ contract StdChainsTest is Test {
         vm.setEnv("ARBITRUM_NOVA_RPC_URL", "https://nova.arbitrum.io/rpc");
 
         // Cannot override RPCs defined in `foundry.toml`
-        vm.setEnv("MAINNET_RPC_URL", "myoverride2");
+        vm.setEnv("MAINNET_URL", "myoverride2");
         assertEq(getChain("mainnet").rpcUrl, "https://ethereum.reth.rs/rpc");
 
         // Other RPCs should remain unchanged.

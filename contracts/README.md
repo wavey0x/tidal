@@ -9,25 +9,43 @@ allowlisted in TradeHandler and then atomically:
 
 The mech builds a fixed 3-step Weiroll command program from typed inputs and
 does not accept arbitrary command/state payloads. `kick(...)` receives an
-auction parameter and validates `auction.want() == strategy.want()`.
+auction parameter and validates `auction.want() == strategy.want()`. The
+TradeHandler is hardcoded to
+`0xb634316E06cC0B358437CbadD4dC94F1D3a92B3b`.
 
 ## Requirements
 
 - Foundry installed
-- `MAINNET_RPC_URL` set to a mainnet RPC endpoint
+- `MAINNET_URL` set to a mainnet RPC endpoint
 
 ## Run tests
 
 ```bash
-MAINNET_RPC_URL=https://your-mainnet-rpc forge test -vvv
+MAINNET_URL=https://your-mainnet-rpc forge test -vvv
 ```
+
+## Deploy
+
+```bash
+cd contracts
+forge script script/DeployAuctionKicker.s.sol:DeployAuctionKicker \
+  --account wavey3 \
+  --rpc-url $MAINNET_URL \
+  --broadcast
+```
+
+The deploy script uses Forge's native signer flow with `vm.startBroadcast()`.
+Because `~/.foundry/keystores/wavey3` is in the default keystore directory, the
+simplest invocation is `--account wavey3`. `--account` expects the keystore
+name, not the deployer address. If you prefer an explicit path, use
+`--keystore ~/.foundry/keystores/wavey3` instead.
 
 ## Notes
 
 - The mech must be allowlisted in `TradeHandler.mechs`.
 - Command packing uses TradeHandler VM's short command format:
   `selector(4) | flags(1) | arg slots(6) | out slot(1) | target(20)`.
-- Short-command packing is isolated in `WeiRollCommandLib`.
+- Short-command packing is isolated in `src/utils/WeiRollCommandLib.sol`.
 - Tests run on a mainnet fork and use:
   - governance impersonation + `TradeHandler.addMech(mech)` to allowlist the mech
   - `deal` to fund strategy CRV balance deterministically

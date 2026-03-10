@@ -169,9 +169,6 @@ class FakeStrategyAuctionMapper:
             source="fresh",
         )
 
-    def load_cached_mapping(self) -> dict[str, str | None]:
-        return dict(self.cached_mapping)
-
 
 @pytest.mark.asyncio
 async def test_scanner_persists_lowercase_and_zero_balances() -> None:
@@ -261,6 +258,11 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
 
         strategy_rows = session.execute(select(models.strategies)).mappings().all()
         assert all(row["name"] is not None for row in strategy_rows)
+        strategy_rows_by_address = {row["address"]: row for row in strategy_rows}
+        assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_address"] == (
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        assert strategy_rows_by_address["0x2222222222222222222222222222222222222222"]["auction_address"] is None
 
 
 @pytest.mark.asyncio
@@ -284,7 +286,33 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
             erc20_reader=fake_erc20,
         )
 
+        healthy_mapper = FakeStrategyAuctionMapper()
         scanner = ScannerService(
+            session=session,
+            chain_id=1,
+            concurrency=5,
+            multicall_enabled=True,
+            web3_client=FakeWeb3Client(),
+            strategy_auction_mapper=healthy_mapper,
+            strategy_discovery_service=FakeDiscoveryService(),
+            reward_token_resolver=FakeRewardTokenResolver(),
+            token_metadata_service=token_metadata_service,
+            token_price_refresh_service=FakeTokenPriceRefreshService(),
+            balance_reader=FakeBalanceReader(),
+            name_reader=FakeNameReader(),
+            vault_repository=vault_repo,
+            strategy_repository=strategy_repo,
+            strategy_token_repository=strategy_token_repo,
+            balance_repository=balance_repo,
+            scan_run_repository=scan_run_repo,
+            scan_item_error_repository=scan_item_error_repo,
+            alert_sink=NullAlertSink(),
+        )
+
+        initial_result = await scanner.scan_once()
+        assert initial_result.status == "SUCCESS"
+
+        failing_scanner = ScannerService(
             session=session,
             chain_id=1,
             concurrency=5,
@@ -306,7 +334,7 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
             alert_sink=NullAlertSink(),
         )
 
-        result = await scanner.scan_once()
+        result = await failing_scanner.scan_once()
 
         assert result.status == "SUCCESS"
         error_rows = session.execute(select(models.scan_item_errors)).mappings().all()
@@ -314,4 +342,12 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
             row["stage"] == "AUCTION_MAPPING"
             and row["error_code"] == "strategy_auction_mapping_failed"
             for row in error_rows
+        )
+        strategy_rows = session.execute(select(models.strategies)).mappings().all()
+        strategy_rows_by_address = {row["address"]: row for row in strategy_rows}
+        assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_address"] == (
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_error_message"] == (
+            "auction mapping rpc failed"
         )

@@ -14,8 +14,9 @@ from tidal.normalizers import normalize_address
 
 @dataclass(slots=True)
 class TokenPriceQuote:
-    price_usd: Decimal
+    price_usd: Decimal | None
     quote_amount_in_raw: int
+    logo_url: str | None = None
 
 
 class TokenPriceNotFoundError(Exception):
@@ -64,8 +65,13 @@ class TokenPriceAggProvider:
                 attempts=self.retry_attempts,
             )
 
-        price_usd = self._extract_price_usd(payload)
-        return TokenPriceQuote(price_usd=price_usd, quote_amount_in_raw=1)
+        logo_url = self._extract_logo_url(payload)
+        try:
+            price_usd = self._extract_price_usd(payload)
+        except TokenPriceNotFoundError:
+            price_usd = None
+
+        return TokenPriceQuote(price_usd=price_usd, quote_amount_in_raw=1, logo_url=logo_url)
 
     async def _get_price(
         self,
@@ -74,6 +80,18 @@ class TokenPriceAggProvider:
         params: dict[str, str | int],
     ) -> Any:
         response = await client.get(path, params=params)
+        if response.status_code == 404:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+
+            if isinstance(payload, dict):
+                return {
+                    "_tidal_http_status": 404,
+                    **payload,
+                }
+            return {"_tidal_http_status": 404}
         response.raise_for_status()
         return response.json()
 
@@ -83,6 +101,8 @@ class TokenPriceAggProvider:
 
         summary = payload.get("summary")
         if not isinstance(summary, dict):
+            if _looks_like_not_found_payload(payload):
+                raise TokenPriceNotFoundError("token price not found in response")
             raise ValueError("missing summary in price response")
 
         high_price = summary.get("high_price")
@@ -98,10 +118,28 @@ class TokenPriceAggProvider:
             raise ValueError("negative usd quote")
         return price_usd
 
+    def _extract_logo_url(self, payload: Any) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+
+        token = payload.get("token")
+        if not isinstance(token, dict):
+            return None
+
+        logo_url = token.get("logo_url")
+        if logo_url is None:
+            return None
+
+        normalized = str(logo_url).strip()
+        return normalized or None
+
 
 def _looks_like_not_found_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
+
+    if payload.get("_tidal_http_status") == 404:
+        return True
 
     for key in ("error", "message", "detail"):
         value = payload.get(key)

@@ -23,6 +23,7 @@ from tidal.persistence.repositories import (
     VaultRepository,
 )
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
+from tidal.pricing.token_logo import TokenLogoValidator
 from tidal.pricing.service import TokenPriceRefreshService
 from tidal.scanner.balance_reader import BalanceReader
 from tidal.scanner.discovery import StrategyDiscoveryService
@@ -92,6 +93,10 @@ def build_scanner_service(settings: Settings, session) -> ScannerService:
             timeout_seconds=settings.price_timeout_seconds,
             retry_attempts=settings.price_retry_attempts,
         ),
+        logo_validator=TokenLogoValidator(
+            timeout_seconds=settings.price_timeout_seconds,
+            retry_attempts=settings.price_retry_attempts,
+        ),
         token_repository=token_repository,
     )
 
@@ -111,7 +116,6 @@ def build_scanner_service(settings: Settings, session) -> ScannerService:
             chain_id=settings.chain_id,
             auction_factory_address=settings.auction_factory_address,
             required_governance_address=YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS,
-            cache_path=settings.resolved_auction_cache_path,
             multicall_client=multicall_client,
             multicall_enabled=settings.multicall_enabled,
             multicall_auction_batch_calls=settings.multicall_auction_batch_calls,

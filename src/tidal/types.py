@@ -25,6 +25,14 @@ class TokenMetadata:
 
 
 @dataclass(slots=True)
+class TokenLogoState:
+    address: str
+    logo_url: str | None
+    logo_status: str | None
+    logo_validated_at: str | None
+
+
+@dataclass(slots=True)
 class ScanItemError:
     stage: str
     error_code: str

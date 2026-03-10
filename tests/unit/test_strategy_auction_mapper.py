@@ -1,5 +1,3 @@
-import json
-
 from eth_abi import encode as abi_encode
 import pytest
 
@@ -111,7 +109,7 @@ class FakeMulticallClient:
 
 
 @pytest.mark.asyncio
-async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance_filter(tmp_path) -> None:
+async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance_filter() -> None:
     factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
     required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
     other_governance = "0x1111111111111111111111111111111111111111"
@@ -150,7 +148,6 @@ async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance
         chain_id=1,
         auction_factory_address=factory,
         required_governance_address=required_governance,
-        cache_path=tmp_path / "strategy_auction_map.json",
     )
 
     result = await mapper.refresh_for_strategies([strategy_a, strategy_b, strategy_c])
@@ -166,23 +163,9 @@ async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance
         strategy_c.lower(): None,
     }
 
-    with (tmp_path / "strategy_auction_map.json").open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-
-    assert payload["version"] == 1
-    assert payload["chainId"] == 1
-    assert payload["factoryAddress"] == factory.lower()
-    assert payload["requiredGovernanceAddress"] == required_governance.lower()
-    assert payload["selectionRule"] == "latest_by_factory_order"
-    assert payload["strategyToAuction"] == {
-        strategy_a.lower(): auction_new.lower(),
-        strategy_b.lower(): None,
-        strategy_c.lower(): None,
-    }
-
 
 @pytest.mark.asyncio
-async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_reads(tmp_path) -> None:
+async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_reads() -> None:
     factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
     required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
     token_a = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
@@ -212,7 +195,6 @@ async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_r
         chain_id=1,
         auction_factory_address=factory,
         required_governance_address=required_governance,
-        cache_path=tmp_path / "strategy_auction_map.json",
         multicall_client=multicall,
         multicall_enabled=True,
         multicall_auction_batch_calls=50,

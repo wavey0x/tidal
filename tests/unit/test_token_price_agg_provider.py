@@ -74,6 +74,9 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
         captured["params"] = params
         captured["x_api_key"] = client.headers.get("x-api-key")
         return {
+            "token": {
+                "logo_url": "https://assets.example/logo.png",
+            },
             "summary": {
                 "successful_providers": 1,
                 "high_price": "4.2",
@@ -85,6 +88,7 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
 
     assert quote.price_usd == Decimal("4.2")
     assert quote.quote_amount_in_raw == 1
+    assert quote.logo_url == "https://assets.example/logo.png"
     assert captured["base_url"] == "https://prices.wavey.info"
     assert captured["path"] == "/v1/price"
     assert captured["params"] == {
@@ -112,3 +116,50 @@ async def test_quote_usd_sends_x_api_key_when_configured() -> None:
     await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
 
     assert captured["x_api_key"] == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_quote_usd_returns_logo_url_when_price_not_found() -> None:
+    provider = _provider()
+
+    async def fake_get_price(client, path, params):  # noqa: ANN001
+        del client
+        del path
+        del params
+        return {
+            "token": {
+                "logo_url": "https://assets.example/logo.png",
+            },
+            "summary": {
+                "successful_providers": 0,
+                "high_price": None,
+            },
+            "providers": {
+                "curve": {"status": "unsupported_token"},
+            },
+        }
+
+    provider._get_price = fake_get_price  # type: ignore[method-assign]  # noqa: SLF001
+    quote = await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
+
+    assert quote.price_usd is None
+    assert quote.logo_url == "https://assets.example/logo.png"
+
+
+@pytest.mark.asyncio
+async def test_quote_usd_treats_http_404_payload_without_summary_as_not_found() -> None:
+    provider = _provider()
+
+    async def fake_get_price(client, path, params):  # noqa: ANN001
+        del client
+        del path
+        del params
+        return {
+            "_tidal_http_status": 404,
+        }
+
+    provider._get_price = fake_get_price  # type: ignore[method-assign]  # noqa: SLF001
+    quote = await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
+
+    assert quote.price_usd is None
+    assert quote.logo_url is None

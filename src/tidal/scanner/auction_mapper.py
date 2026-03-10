@@ -1,12 +1,8 @@
-"""Strategy-to-auction mapping refresh and JSON cache persistence."""
+"""Strategy-to-auction mapping refresh."""
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass
-from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 from eth_abi import decode as abi_decode
 from hexbytes import HexBytes
@@ -15,7 +11,6 @@ from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_FACTORY_ABI, STRATEG
 from tidal.chain.contracts.multicall import MulticallClient, MulticallRequest
 from tidal.constants import ZERO_ADDRESS
 from tidal.normalizers import normalize_address
-from tidal.time import utcnow_iso
 
 
 @dataclass(slots=True)
@@ -29,7 +24,7 @@ class AuctionMappingRefreshResult:
 
 
 class StrategyAuctionMapper:
-    """Builds strategy->auction mappings and stores them in a JSON snapshot."""
+    """Builds strategy->auction mappings."""
 
     def __init__(
         self,
@@ -38,7 +33,6 @@ class StrategyAuctionMapper:
         chain_id: int,
         auction_factory_address: str,
         required_governance_address: str,
-        cache_path: Path,
         multicall_client: MulticallClient | None = None,
         multicall_enabled: bool = True,
         multicall_auction_batch_calls: int = 500,
@@ -47,7 +41,6 @@ class StrategyAuctionMapper:
         self.chain_id = chain_id
         self.auction_factory_address = normalize_address(auction_factory_address)
         self.required_governance_address = normalize_address(required_governance_address)
-        self.cache_path = cache_path
         self.multicall_client = multicall_client
         self.multicall_enabled = multicall_enabled
         self.multicall_auction_batch_calls = multicall_auction_batch_calls
@@ -81,17 +74,6 @@ class StrategyAuctionMapper:
         mapped_count = sum(1 for auction_address in strategy_to_auction.values() if auction_address)
         unmapped_count = len(strategy_to_auction) - mapped_count
 
-        payload = {
-            "version": 1,
-            "chainId": self.chain_id,
-            "factoryAddress": self.auction_factory_address,
-            "requiredGovernanceAddress": self.required_governance_address,
-            "updatedAt": utcnow_iso(),
-            "selectionRule": "latest_by_factory_order",
-            "strategyToAuction": strategy_to_auction,
-        }
-        self._write_cache_payload(payload)
-
         return AuctionMappingRefreshResult(
             strategy_to_auction=strategy_to_auction,
             auction_count=len(auction_addresses),
@@ -100,30 +82,6 @@ class StrategyAuctionMapper:
             unmapped_count=unmapped_count,
             source="fresh",
         )
-
-    def load_cached_mapping(self) -> dict[str, str | None]:
-        payload = self._read_cache_payload()
-        raw_mapping = payload.get("strategyToAuction", {})
-        if not isinstance(raw_mapping, dict):
-            return {}
-
-        output: dict[str, str | None] = {}
-        for strategy_address, auction_address in raw_mapping.items():
-            try:
-                normalized_strategy = normalize_address(str(strategy_address))
-            except Exception:  # noqa: BLE001
-                continue
-
-            if auction_address is None:
-                output[normalized_strategy] = None
-                continue
-
-            try:
-                output[normalized_strategy] = normalize_address(str(auction_address))
-            except Exception:  # noqa: BLE001
-                output[normalized_strategy] = None
-
-        return output
 
     async def _read_auction_addresses(self) -> list[str]:
         factory = self.web3_client.contract(self.auction_factory_address, AUCTION_FACTORY_ABI)
@@ -241,37 +199,3 @@ class StrategyAuctionMapper:
                 output[strategy_address] = None
 
         return output
-
-    def _read_cache_payload(self) -> dict[str, object]:
-        if not self.cache_path.exists():
-            return {}
-
-        try:
-            with self.cache_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-        except Exception:  # noqa: BLE001
-            return {}
-
-        return payload if isinstance(payload, dict) else {}
-
-    def _write_cache_payload(self, payload: dict[str, object]) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-
-        temp_path: Path | None = None
-        try:
-            with NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=self.cache_path.parent,
-                prefix=f".{self.cache_path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                json.dump(payload, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-                temp_path = Path(handle.name)
-
-            os.replace(temp_path, self.cache_path)
-        finally:
-            if temp_path and temp_path.exists():
-                temp_path.unlink(missing_ok=True)

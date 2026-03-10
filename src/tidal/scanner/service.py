@@ -195,8 +195,13 @@ class ScannerService:
         self.vault_repository.delete_strategy_address_rows_without_children()
 
         strategy_addresses = [normalize_address(item.strategy_address) for item in discovered]
+        auction_updated_at = utcnow_iso()
         try:
             mapping_result = await self.strategy_auction_mapper.refresh_for_strategies(strategy_addresses)
+            self.strategy_repository.set_auction_mappings(
+                mapping_result.strategy_to_auction,
+                updated_at=auction_updated_at,
+            )
             stage_e_stats["auction_count"] = mapping_result.auction_count
             stage_e_stats["governance_allowed_auction_count"] = mapping_result.governance_allowed_auction_count
             stage_e_stats["strategies_mapped"] = mapping_result.mapped_count
@@ -210,7 +215,12 @@ class ScannerService:
                     error_message=str(exc),
                 )
             )
-            cached_mapping = self.strategy_auction_mapper.load_cached_mapping()
+            self.strategy_repository.mark_auction_refresh_failed(
+                strategy_addresses,
+                updated_at=auction_updated_at,
+                error_message=str(exc),
+            )
+            cached_mapping = self.strategy_repository.auction_mapping_for_addresses(strategy_addresses)
             mapped_count = sum(
                 1
                 for strategy_address in set(strategy_addresses)

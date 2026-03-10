@@ -36,6 +36,9 @@ strategies = Table(
     Column("name", String, nullable=True),
     Column("adapter", String, nullable=False, server_default="yearn_curve_strategy"),
     Column("active", Integer, nullable=False, server_default="1"),
+    Column("auction_address", String, nullable=True),
+    Column("auction_updated_at", String, nullable=True),
+    Column("auction_error_message", Text, nullable=True),
     Column("first_seen_at", String, nullable=False),
     Column("last_seen_at", String, nullable=False),
 )
@@ -55,6 +58,11 @@ tokens = Table(
     Column("price_fetched_at", String, nullable=True),
     Column("price_run_id", String, nullable=True),
     Column("price_error_message", Text, nullable=True),
+    Column("logo_url", Text, nullable=True),
+    Column("logo_source", String, nullable=True),
+    Column("logo_status", String, nullable=True),
+    Column("logo_validated_at", String, nullable=True),
+    Column("logo_error_message", Text, nullable=True),
     Column("first_seen_at", String, nullable=False),
     Column("last_seen_at", String, nullable=False),
 )

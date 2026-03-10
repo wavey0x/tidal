@@ -60,7 +60,6 @@ class Settings(BaseSettings):
         default="0xe87af17acba165686e5aa7de2cec523864c25712",
         alias="AUCTION_FACTORY_ADDRESS",
     )
-    auction_cache_path: Path | None = Field(default=None, alias="AUCTION_CACHE_PATH")
     price_refresh_enabled: bool = Field(default=True, alias="PRICE_REFRESH_ENABLED")
     token_price_agg_base_url: str = Field(
         default="https://prices.wavey.info",
@@ -82,15 +81,6 @@ class Settings(BaseSettings):
         if not db_path.is_absolute():
             db_path = Path.cwd() / db_path
         return db_path
-
-    @property
-    def resolved_auction_cache_path(self) -> Path:
-        configured_path = self.auction_cache_path
-        if configured_path is not None:
-            if configured_path.is_absolute():
-                return configured_path
-            return Path.cwd() / configured_path
-        return self.resolved_db_path.with_name("strategy_auction_map.json")
 
     @property
     def database_url(self) -> str:

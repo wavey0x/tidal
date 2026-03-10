@@ -54,6 +54,7 @@ class TokenPriceAggProvider:
         params = {
             "token": normalized_token,
             "chain_id": self.chain_id,
+            "use_underlying": "true",
         }
         async with httpx.AsyncClient(
             base_url=self.base_url,

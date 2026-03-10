@@ -673,7 +673,7 @@ export default function App() {
         <div className="header-row">
           <h1 className="header-title">
             <img src={headerLogoSrc} alt="" className="brand-logo" aria-hidden="true" />
-            <span>Factory Dashboard - Curve Factory Automation</span>
+            <span>Factory Dashboard</span>
           </h1>
           <ThemeSwitch
             themePreference={themePreference}

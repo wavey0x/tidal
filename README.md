@@ -88,3 +88,24 @@ Optional env overrides:
 
 - `AUCTION_FACTORY_ADDRESS`
 - `MULTICALL_AUCTION_BATCH_CALLS`
+
+## Dashboard API
+
+The scanner writes all dashboard state to SQLite. A separate read-only API serves `GET /factory-dashboard` from the same database file.
+
+See [`EXTERNAL_PLAN.md`](./EXTERNAL_PLAN.md) for the full endpoint spec, confirmed schema, SQL queries, and response shape.
+
+Key tables the API reads:
+
+| Table | Purpose |
+|-------|---------|
+| `vaults` | Vault name and symbol |
+| `strategies` | Strategy name, vault FK, `auction_address` |
+| `tokens` | Symbol, name, `price_usd`, `logo_url` |
+| `strategy_token_balances_latest` | Latest normalized balances per strategy-token pair |
+| `scan_runs` | Scan metadata for diagnostics |
+
+SQLite concurrency:
+
+- WAL mode is enabled by this repo's migration.
+- The API should open the database in read-only mode with `busy_timeout` set.

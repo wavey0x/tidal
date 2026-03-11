@@ -59,10 +59,20 @@ def scan_once(
         raise typer.Exit(code=1) from exc
 
     import sys
+    import time
+
+    _scan_start = time.monotonic()
+    _step_start = _scan_start
 
     def _show_progress(step: int, total: int, label: str, detail: str) -> None:
+        nonlocal _step_start
         if detail:
-            sys.stdout.write(f"\r  [{step}/{total}] {label:<28} {detail}\n")
+            step_elapsed = time.monotonic() - _step_start
+            total_elapsed = time.monotonic() - _scan_start
+            sys.stdout.write(
+                f"\r  [{step}/{total}] {label:<28} {detail}  ({step_elapsed:.1f}s / {total_elapsed:.1f}s total)\n"
+            )
+            _step_start = time.monotonic()
         else:
             sys.stdout.write(f"\r  [{step}/{total}] {label}...")
         sys.stdout.flush()
@@ -71,11 +81,13 @@ def scan_once(
     with db.session() as session:
         scanner = build_scanner_service(settings, session)
         result = asyncio.run(scanner.scan_once(on_progress=_show_progress))
+        elapsed = time.monotonic() - _scan_start
         typer.echo(
             (
                 f"scan_complete run_id={result.run_id} status={result.status} "
                 f"strategies={result.strategies_seen} pairs={result.pairs_seen} "
-                f"succeeded={result.pairs_succeeded} failed={result.pairs_failed}"
+                f"succeeded={result.pairs_succeeded} failed={result.pairs_failed} "
+                f"elapsed={elapsed:.1f}s"
             )
         )
 
@@ -149,7 +161,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         precision_line = None
         if quote_amount > 0 and starting_price > quote_amount * 2:
             precision_line = (
-                f"               \u21b3 lot worth {quote_amount:.4f} want tokens (ceiled per contract)"
+                f"               \u21b3 ceiled lot based on {quote_amount:.4f} quote"
             )
 
         content = [
@@ -162,7 +174,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         if precision_line:
             content.append(precision_line)
         content.extend([
-            f"  Gas est:     {summary['gas_estimate']:,} (~{gas_cost_eth:.4f} ETH)",
+            f"  Gas est:     {summary['gas_estimate']:,} (~{gas_cost_eth:.6f} ETH)",
             f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",
         ])
 

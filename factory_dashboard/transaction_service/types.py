@@ -3,6 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class KickAction(str, Enum):
+    KICK = "KICK"
+    SKIP = "SKIP"
+
+
+class SkipReason(str, Enum):
+    COOLDOWN = "COOLDOWN"
+    CIRCUIT_BREAKER = "CIRCUIT_BREAKER"
+
+
+class KickStatus(str, Enum):
+    CONFIRMED = "CONFIRMED"
+    REVERTED = "REVERTED"
+    SUBMITTED = "SUBMITTED"
+    ESTIMATE_FAILED = "ESTIMATE_FAILED"
+    ERROR = "ERROR"
+    DRY_RUN = "DRY_RUN"
+    USER_SKIPPED = "USER_SKIPPED"
+    SKIP = "SKIP"
 
 
 @dataclass(slots=True)
@@ -24,8 +46,8 @@ class KickDecision:
     """Evaluator output — whether to kick and why."""
 
     candidate: KickCandidate
-    action: str  # "KICK" or "SKIP"
-    skip_reason: str | None = None  # "COOLDOWN", "CIRCUIT_BREAKER"
+    action: KickAction
+    skip_reason: SkipReason | None = None
 
 
 @dataclass(slots=True)
@@ -33,7 +55,7 @@ class KickResult:
     """Kicker output — what happened when we tried to kick."""
 
     kick_tx_id: int
-    status: str  # CONFIRMED, REVERTED, SUBMITTED, ESTIMATE_FAILED, ERROR, DRY_RUN, USER_SKIPPED
+    status: KickStatus
     tx_hash: str | None = None
     gas_used: int | None = None
     gas_price_gwei: str | None = None

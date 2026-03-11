@@ -17,7 +17,7 @@ from factory_dashboard.persistence.repositories import KickTxRepository
 from factory_dashboard.pricing.token_price_agg import TokenPriceAggProvider
 from factory_dashboard.time import utcnow_iso
 from factory_dashboard.transaction_service.signer import TransactionSigner
-from factory_dashboard.transaction_service.types import KickCandidate, KickResult
+from factory_dashboard.transaction_service.types import KickCandidate, KickResult, KickStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -73,7 +73,7 @@ class AuctionKicker:
         candidate: KickCandidate,
         now_iso: str,
         *,
-        status: str,
+        status: KickStatus,
         error_message: str | None = None,
         sell_amount: str | None = None,
         starting_price: str | None = None,
@@ -101,6 +101,26 @@ class AuctionKicker:
             row["tx_hash"] = tx_hash
         return self.kick_tx_repository.insert(row)
 
+    def _fail(
+        self,
+        run_id: str,
+        candidate: KickCandidate,
+        now_iso: str,
+        *,
+        status: KickStatus,
+        error_message: str,
+        sell_amount: str | None = None,
+        starting_price: str | None = None,
+        usd_value: str | None = None,
+    ) -> KickResult:
+        """Insert a kick_tx row and return a terminal KickResult."""
+        kick_tx_id = self._insert_kick_tx(
+            run_id, candidate, now_iso,
+            status=status, error_message=error_message,
+            sell_amount=sell_amount, starting_price=starting_price, usd_value=usd_value,
+        )
+        return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
+
     async def kick(self, candidate: KickCandidate, run_id: str) -> KickResult:
         """Execute the full kick flow for a single candidate."""
 
@@ -113,15 +133,14 @@ class AuctionKicker:
                 candidate.token_address, candidate.strategy_address
             )
         except Exception as exc:  # noqa: BLE001
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR", error_message=f"balance read failed: {exc}",
+                status=KickStatus.ERROR, error_message=f"balance read failed: {exc}",
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message=str(exc))
 
         # 2. Recalculate USD value with live balance.
         normalized_balance = to_decimal_string(live_balance_raw, candidate.decimals)
-        live_usd_value = float(normalized_balance) * float(candidate.price_usd)
+        live_usd_value = Decimal(normalized_balance) * Decimal(candidate.price_usd)
 
         if live_usd_value < self.usd_threshold:
             logger.info(
@@ -134,7 +153,7 @@ class AuctionKicker:
             # Below threshold on live read — log only, no kick_txs row per spec.
             return KickResult(
                 kick_tx_id=0,
-                status="SKIP",
+                status=KickStatus.SKIP,
                 error_message="below threshold on live balance",
                 live_balance_raw=live_balance_raw,
                 usd_value=str(live_usd_value),
@@ -149,18 +168,16 @@ class AuctionKicker:
                 amount_in=str(sell_amount),
             )
         except Exception as exc:  # noqa: BLE001
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR", error_message=f"quote API failed: {exc}",
+                status=KickStatus.ERROR, error_message=f"quote API failed: {exc}",
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message=str(exc))
 
         if quote_result.amount_out_raw is None:
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR", error_message="no quote available for this pair",
+                status=KickStatus.ERROR, error_message="no quote available for this pair",
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message="no quote available")
 
         amount_out_normalized = Decimal(to_decimal_string(quote_result.amount_out_raw, quote_result.token_out_decimals))
         buffer = Decimal(1) + Decimal(self.start_price_buffer_bps) / Decimal(10_000)
@@ -183,22 +200,20 @@ class AuctionKicker:
             gas_price_wei = await self.web3_client.get_gas_price()
             gas_price_gwei = gas_price_wei / 1e9
         except Exception as exc:  # noqa: BLE001
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR", error_message=f"gas price check failed: {exc}",
+                status=KickStatus.ERROR, error_message=f"gas price check failed: {exc}",
                 sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message=str(exc))
 
         if gas_price_gwei > self.max_gas_price_gwei:
             logger.warning("txn_safety_block", reason="gas_price_high", gas_gwei=gas_price_gwei, **log_ctx)
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR",
+                status=KickStatus.ERROR,
                 error_message=f"gas price {gas_price_gwei:.1f} gwei exceeds ceiling {self.max_gas_price_gwei}",
                 sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message="gas price too high")
 
         # 5. Build transaction and estimateGas.
         kicker_contract = self.web3_client.contract(AUCTION_KICKER_ADDRESS, AUCTION_KICKER_ABI)
@@ -224,12 +239,12 @@ class AuctionKicker:
             logger.info("txn_estimate_failed", error=str(exc), **log_ctx)
             kick_tx_id = self._insert_kick_tx(
                 run_id, candidate, now_iso,
-                status="ESTIMATE_FAILED", error_message=str(exc),
+                status=KickStatus.ESTIMATE_FAILED, error_message=str(exc),
                 sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
             )
             return KickResult(
                 kick_tx_id=kick_tx_id,
-                status="ESTIMATE_FAILED",
+                status=KickStatus.ESTIMATE_FAILED,
                 error_message=str(exc),
                 sell_amount=sell_amount_str,
                 starting_price=starting_price_str,
@@ -242,12 +257,11 @@ class AuctionKicker:
         if gas_estimate > self.max_gas_limit:
             error_msg = f"gas estimate {gas_estimate} exceeds cap {self.max_gas_limit}"
             logger.warning("txn_safety_block", reason="gas_estimate_over_cap", **log_ctx)
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR", error_message=error_msg,
+                status=KickStatus.ERROR, error_message=error_msg,
                 sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message=error_msg)
 
         # 7. Interactive confirmation gate.
         if self.confirm_fn is not None:
@@ -268,12 +282,12 @@ class AuctionKicker:
             if not self.confirm_fn(summary):
                 kick_tx_id = self._insert_kick_tx(
                     run_id, candidate, now_iso,
-                    status="USER_SKIPPED",
+                    status=KickStatus.USER_SKIPPED,
                     sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
                 )
                 return KickResult(
                     kick_tx_id=kick_tx_id,
-                    status="USER_SKIPPED",
+                    status=KickStatus.USER_SKIPPED,
                     sell_amount=sell_amount_str,
                     starting_price=starting_price_str,
                     live_balance_raw=live_balance_raw,
@@ -302,17 +316,16 @@ class AuctionKicker:
             tx_hash = await self.web3_client.send_raw_transaction(signed_tx)
         except Exception as exc:  # noqa: BLE001
             logger.error("txn_send_failed", error=str(exc), **log_ctx)
-            kick_tx_id = self._insert_kick_tx(
+            return self._fail(
                 run_id, candidate, now_iso,
-                status="ERROR", error_message=f"send failed: {exc}",
+                status=KickStatus.ERROR, error_message=f"send failed: {exc}",
                 sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
             )
-            return KickResult(kick_tx_id=kick_tx_id, status="ERROR", error_message=str(exc))
 
         # Persist SUBMITTED immediately after broadcast.
         kick_tx_id = self._insert_kick_tx(
             run_id, candidate, now_iso,
-            status="SUBMITTED", tx_hash=tx_hash,
+            status=KickStatus.SUBMITTED, tx_hash=tx_hash,
             sell_amount=sell_amount_str, starting_price=starting_price_str, usd_value=usd_value_str,
         )
 
@@ -326,7 +339,7 @@ class AuctionKicker:
             logger.warning("txn_receipt_timeout", tx_hash=tx_hash, error=str(exc), **log_ctx)
             return KickResult(
                 kick_tx_id=kick_tx_id,
-                status="SUBMITTED",
+                status=KickStatus.SUBMITTED,
                 tx_hash=tx_hash,
                 sell_amount=sell_amount_str,
                 starting_price=starting_price_str,
@@ -343,7 +356,7 @@ class AuctionKicker:
         effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
 
         if receipt_status == 1:
-            final_status = "CONFIRMED"
+            final_status = KickStatus.CONFIRMED
             logger.info(
                 "txn_kick_confirmed",
                 tx_hash=tx_hash,
@@ -352,7 +365,7 @@ class AuctionKicker:
                 **log_ctx,
             )
         else:
-            final_status = "REVERTED"
+            final_status = KickStatus.REVERTED
             logger.warning("txn_kick_reverted", tx_hash=tx_hash, block_number=receipt_block, **log_ctx)
 
         self.kick_tx_repository.update_status(

@@ -12,7 +12,7 @@ from factory_dashboard.persistence.repositories import KickTxRepository, TxnRunR
 from factory_dashboard.time import utcnow_iso
 from factory_dashboard.transaction_service.evaluator import check_pre_send, shortlist_candidates
 from factory_dashboard.transaction_service.kicker import AuctionKicker
-from factory_dashboard.transaction_service.types import TxnRunResult
+from factory_dashboard.transaction_service.types import KickAction, KickStatus, TxnRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -104,7 +104,7 @@ class TxnService:
         kicks_failed = 0
 
         for decision in decisions:
-            if decision.action == "SKIP":
+            if decision.action == KickAction.SKIP:
                 logger.debug(
                     "txn_candidate_skip",
                     run_id=run_id,
@@ -140,17 +140,17 @@ class TxnService:
             kicks_attempted += 1
             result = await self.kicker.kick(decision.candidate, run_id)
 
-            if result.status == "CONFIRMED":
+            if result.status == KickStatus.CONFIRMED:
                 kicks_succeeded += 1
-            elif result.status == "SKIP":
+            elif result.status == KickStatus.SKIP:
                 # Below threshold on live balance — not counted as failure.
                 kicks_attempted -= 1
-            elif result.status in ("REVERTED", "ERROR", "ESTIMATE_FAILED"):
+            elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
                 kicks_failed += 1
             # SUBMITTED (receipt timeout) counts as attempted but neither succeeded nor failed yet.
 
         # 4. Finalize txn_runs.
-        candidates_found = len([d for d in decisions if d.action == "KICK"])
+        candidates_found = len([d for d in decisions if d.action == KickAction.KICK])
         if not live:
             status = "DRY_RUN"
         elif kicks_failed > 0 and kicks_succeeded == 0:

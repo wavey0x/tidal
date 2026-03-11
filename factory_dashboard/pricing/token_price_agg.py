@@ -51,6 +51,22 @@ class TokenPriceAggProvider:
         self.quote_token_address = "usd"
         self.quote_token_decimals = 0
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _client(self) -> httpx.AsyncClient:
+        """Return a shared HTTP client, creating on first use."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout_seconds,
+                headers=self._headers,
+            )
+        return self._http_client
+
+    async def close(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def quote(self, token_in: str, token_out: str, amount_in: str) -> QuoteResult:
         """Fetch a direct token_in -> token_out quote via /v1/quote."""
@@ -61,15 +77,11 @@ class TokenPriceAggProvider:
             "chain_id": self.chain_id,
             "use_underlying": "true",
         }
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=self.timeout_seconds,
-            headers=self._headers,
-        ) as client:
-            payload = await call_with_retries(
-                lambda: self._get_price(client, "/v1/quote", params),
-                attempts=self.retry_attempts,
-            )
+        client = await self._client()
+        payload = await call_with_retries(
+            lambda: self._get_price(client, "/v1/quote", params),
+            attempts=self.retry_attempts,
+        )
 
         amount_out_raw = None
         token_out_decimals = None
@@ -104,15 +116,11 @@ class TokenPriceAggProvider:
             "chain_id": self.chain_id,
             "use_underlying": "true",
         }
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=self.timeout_seconds,
-            headers=self._headers,
-        ) as client:
-            payload = await call_with_retries(
-                lambda: self._get_price(client, path, params),
-                attempts=self.retry_attempts,
-            )
+        client = await self._client()
+        payload = await call_with_retries(
+            lambda: self._get_price(client, path, params),
+            attempts=self.retry_attempts,
+        )
 
         logo_url = self._extract_logo_url(payload)
         try:

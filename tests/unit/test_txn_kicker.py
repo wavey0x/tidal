@@ -141,7 +141,8 @@ async def test_kick_gas_price_too_high(session):
         result = await kicker.kick(candidate, "run-1")
 
     assert result.status == "ERROR"
-    assert "gas price too high" in result.error_message
+    assert "gas price" in result.error_message
+    assert "exceeds ceiling" in result.error_message
 
 
 @pytest.mark.asyncio

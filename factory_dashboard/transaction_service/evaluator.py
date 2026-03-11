@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from factory_dashboard.persistence import models
 from factory_dashboard.persistence.repositories import KickTxRepository
-from factory_dashboard.transaction_service.types import KickCandidate, KickDecision
+from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickDecision, SkipReason
 
 logger = structlog.get_logger(__name__)
 
@@ -110,7 +110,7 @@ def check_pre_send(
         )
         if last_kick is not None and last_kick["created_at"] >= min_cooldown_timestamp:
             decisions.append(
-                KickDecision(candidate=candidate, action="SKIP", skip_reason="COOLDOWN")
+                KickDecision(candidate=candidate, action=KickAction.SKIP, skip_reason=SkipReason.COOLDOWN)
             )
             logger.debug(
                 "txn_candidate_skip",
@@ -121,6 +121,6 @@ def check_pre_send(
             )
             continue
 
-        decisions.append(KickDecision(candidate=candidate, action="KICK"))
+        decisions.append(KickDecision(candidate=candidate, action=KickAction.KICK))
 
     return decisions

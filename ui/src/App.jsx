@@ -297,11 +297,7 @@ function KickRow({ kick, nowMs }) {
     <span className="kick-row-inner">
       <span className="kick-time mono">{formatRelativeTimestamp(kick.createdAt, nowMs)}</span>
       <span className="kick-separator mono">·</span>
-      {kick.txHash ? (
-        <EtherscanTxLink txHash={kick.txHash} />
-      ) : (
-        <span className="mono kick-status">{kick.status || "pending"}</span>
-      )}
+      <EtherscanTxLink txHash={kick.txHash} />
     </span>
   );
 }

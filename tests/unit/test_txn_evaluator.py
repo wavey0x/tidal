@@ -20,7 +20,7 @@ def session():
         yield s
 
 
-def _seed_data(session, *, auction_address="0xauction", want_address="0xwant1", price_status="SUCCESS", price_usd="2.5", scanned_at=None, price_fetched_at=None):
+def _seed_data(session, *, auction_address="0xauction", want_address="0xwant1", price_status="SUCCESS", price_usd="2.5", scanned_at=None, price_fetched_at=None, strategy_name="Test Strategy", token_symbol="TKN", want_symbol="USDC"):
     now = datetime.now(timezone.utc)
     scanned_at = scanned_at or now.isoformat()
     price_fetched_at = price_fetched_at or now.isoformat()
@@ -29,6 +29,7 @@ def _seed_data(session, *, auction_address="0xauction", want_address="0xwant1", 
         address="0xstrategy1",
         chain_id=1,
         vault_address="0xvault1",
+        name=strategy_name,
         adapter="yearn_curve_strategy",
         active=1,
         auction_address=auction_address,
@@ -39,6 +40,7 @@ def _seed_data(session, *, auction_address="0xauction", want_address="0xwant1", 
     session.execute(insert(models.tokens).values(
         address="0xtoken1",
         chain_id=1,
+        symbol=token_symbol,
         decimals=18,
         is_core_reward=1,
         price_usd=price_usd,
@@ -47,6 +49,17 @@ def _seed_data(session, *, auction_address="0xauction", want_address="0xwant1", 
         first_seen_at=now.isoformat(),
         last_seen_at=now.isoformat(),
     ))
+    # Seed want token row so LEFT JOIN picks up want_symbol.
+    if want_address is not None and want_symbol is not None:
+        session.execute(insert(models.tokens).values(
+            address=want_address,
+            chain_id=1,
+            symbol=want_symbol,
+            decimals=6,
+            is_core_reward=0,
+            first_seen_at=now.isoformat(),
+            last_seen_at=now.isoformat(),
+        ))
     session.execute(insert(models.strategy_token_balances_latest).values(
         strategy_address="0xstrategy1",
         token_address="0xtoken1",
@@ -65,6 +78,9 @@ def test_shortlist_returns_candidates_above_threshold(session):
     assert candidates[0].strategy_address == "0xstrategy1"
     assert candidates[0].usd_value == pytest.approx(2500.0)
     assert candidates[0].want_address == "0xwant1"
+    assert candidates[0].strategy_name == "Test Strategy"
+    assert candidates[0].token_symbol == "TKN"
+    assert candidates[0].want_symbol == "USDC"
 
 
 def test_shortlist_filters_below_threshold(session):

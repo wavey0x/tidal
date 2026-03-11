@@ -265,16 +265,21 @@ class AuctionKicker:
 
         # 7. Interactive confirmation gate.
         if self.confirm_fn is not None:
+            buffer_pct = self.start_price_buffer_bps / 100
+            want_sym = candidate.want_symbol or "want-token"
             summary = {
                 "strategy": candidate.strategy_address,
+                "strategy_name": candidate.strategy_name,
                 "token": candidate.token_address,
+                "token_symbol": candidate.token_symbol,
                 "auction": candidate.auction_address,
                 "sell_amount": normalized_balance,
                 "usd_value": usd_value_str,
                 "starting_price": starting_price_str,
-                "starting_price_display": f"{starting_price_raw} want-token units (lot value with {self.start_price_buffer_bps}bp buffer)",
+                "starting_price_display": f"{starting_price_raw:,} {want_sym} (incl. {buffer_pct:.0f}% buffer)",
                 "sell_price_usd": candidate.price_usd,
                 "want_address": candidate.want_address,
+                "want_symbol": candidate.want_symbol,
                 "buffer_bps": self.start_price_buffer_bps,
                 "gas_estimate": gas_estimate,
                 "gas_limit": gas_limit,

@@ -39,6 +39,9 @@ class KickCandidate:
     want_address: str
     usd_value: float
     decimals: int
+    strategy_name: str | None = None
+    token_symbol: str | None = None
+    want_symbol: str | None = None
 
 
 @dataclass(slots=True)

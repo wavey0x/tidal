@@ -13,6 +13,7 @@ from factory_dashboard.errors import ConfigurationError
 from factory_dashboard.health import run_healthcheck
 from factory_dashboard.logging import configure_logging
 from factory_dashboard.migrations import run_migrations
+from factory_dashboard.normalizers import short_address
 from factory_dashboard.persistence.db import Database
 from factory_dashboard.runtime import build_scanner_service, build_txn_service, build_web3_client
 
@@ -117,21 +118,35 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
     def _confirm_kick(summary: dict) -> bool:
         nonlocal counter
         counter += 1
-        buffer_pct = summary["buffer_bps"] / 100
 
-        lines = [
-            "\u2500" * 45,
+        strategy_name = summary.get("strategy_name") or "Unknown"
+        token_sym = summary.get("token_symbol") or "???"
+        want_sym = summary.get("want_symbol") or "???"
+
+        amount = float(summary["sell_amount"])
+        amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
+
+        content = [
             f"Kick #{counter}",
-            f"  Strategy:    {summary['strategy']}",
-            f"  Token:       {summary['token']}",
-            f"  Auction:     {summary['auction']}",
-            f"  Amount:      {summary['sell_amount']}",
-            f"  USD value:   ${float(summary['usd_value']):,.2f}",
-            f"  Want token:  {summary['want_address']}",
-            f"  Start price: {summary['starting_price']} want-token units (incl. {buffer_pct:.0f}% buffer)",
+            f"  Strategy:    {strategy_name} ({short_address(summary['strategy'])})",
+            f"  Sell token:  {token_sym} ({short_address(summary['token'])})",
+            f"  Sell amount: {amount_str} {token_sym} (~${float(summary['usd_value']):,.2f})",
+            f"  Want token:  {want_sym} ({short_address(summary['want_address'])})",
+            f"  Start price: {summary['starting_price_display']}",
             f"  Gas est:     {summary['gas_estimate']:,} (limit: {summary['gas_limit']:,})",
-            "\u2500" * 45,
         ]
+
+        width = max(len(line) for line in content)
+        border = typer.style
+        top = border(f"\u250c{'\u2500' * (width + 2)}\u2510", fg="cyan")
+        bottom = border(f"\u2514{'\u2500' * (width + 2)}\u2518", fg="cyan")
+        vl = border("\u2502", fg="cyan")
+
+        lines = [top]
+        for line in content:
+            lines.append(f"{vl} {line.ljust(width)} {vl}")
+        lines.append(bottom)
+
         typer.echo("\n".join(lines))
         return typer.confirm("Send this transaction?", default=False)
 

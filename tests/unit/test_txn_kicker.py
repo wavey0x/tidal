@@ -383,6 +383,10 @@ async def test_kick_confirm_fn_declined(session):
     confirm_fn.assert_called_once()
     summary = confirm_fn.call_args[0][0]
     assert "strategy" in summary
+    assert "strategy_name" in summary
+    assert "token_symbol" in summary
+    assert "want_symbol" in summary
+    assert "starting_price_display" in summary
     assert "gas_estimate" in summary
     assert "gas_limit" in summary
     assert "buffer_bps" in summary

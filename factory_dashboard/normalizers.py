@@ -37,3 +37,11 @@ def to_decimal_string(raw_balance: int, decimals: int) -> str:
         return "0"
 
     return normalized
+
+
+def short_address(address: str) -> str:
+    """Shorten an EVM address to 0x1234…5678 form."""
+
+    if len(address) < 10:
+        return address
+    return f"{address[:6]}\u2026{address[-4:]}"

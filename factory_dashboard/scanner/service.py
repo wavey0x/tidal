@@ -6,8 +6,10 @@ import uuid
 from dataclasses import dataclass
 
 import structlog
+from sqlalchemy import select
 
 from factory_dashboard.alerts.base import AlertSink
+from factory_dashboard.persistence import models
 from factory_dashboard.constants import ADDITIONAL_DISCOVERY_VAULTS, CORE_REWARD_TOKENS
 from factory_dashboard.normalizers import normalize_address, to_decimal_string
 from factory_dashboard.pricing.service import PriceToken
@@ -231,6 +233,39 @@ class ScannerService:
             stage_e_stats["strategies_unmapped"] = max(0, len(set(strategy_addresses)) - mapped_count)
             stage_e_stats["source"] = "cache"
 
+        # Ensure want tokens are in the tokens table so the evaluator can price them.
+        want_token_decimals: dict[str, int] = {}
+        want_addresses = set()
+        if stage_e_stats["source"] == "fresh":
+            want_addresses = {
+                addr for addr in mapping_result.strategy_to_want.values()
+                if addr is not None
+            }
+        else:
+            # Fallback: read from DB after cache-based mapping.
+            want_rows = self.session.execute(
+                select(models.strategies.c.want_address)
+                .where(models.strategies.c.want_address.isnot(None))
+                .distinct()
+            ).all()
+            want_addresses = {row[0] for row in want_rows}
+
+        for want_address in want_addresses:
+            try:
+                want_meta = await self.token_metadata_service.get_or_fetch(
+                    want_address, is_core_reward=False,
+                )
+                want_token_decimals[want_address] = want_meta.decimals
+            except Exception as exc:  # noqa: BLE001
+                errors.append(
+                    ScanItemError(
+                        stage="METADATA",
+                        error_code="want_token_metadata_failed",
+                        error_message=str(exc),
+                        token_address=want_address,
+                    )
+                )
+
         await self._hydrate_cached_names(vault_addresses=vault_addresses, strategy_addresses=strategy_addresses, errors=errors)
 
         try:
@@ -293,11 +328,13 @@ class ScannerService:
         block_number = await self.web3_client.get_block_number()
         scanned_at = utcnow()
 
+        price_token_map = {pair.token_address: pair.decimals for pair in pairs}
+        # Include want tokens so the evaluator can price auction lots.
+        for want_address, decimals in want_token_decimals.items():
+            price_token_map.setdefault(want_address, decimals)
         price_tokens = [
             PriceToken(address=token_address, decimals=decimals)
-            for token_address, decimals in {
-                pair.token_address: pair.decimals for pair in pairs
-            }.items()
+            for token_address, decimals in price_token_map.items()
         ]
         stage_d_stats, price_errors = await self.token_price_refresh_service.refresh_many(
             run_id=run_id,

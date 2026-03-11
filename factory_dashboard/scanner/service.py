@@ -314,20 +314,7 @@ class ScannerService:
         block_number = await self.web3_client.get_block_number()
         scanned_at = utcnow()
 
-        price_token_map = {pair.token_address: pair.decimals for pair in pairs}
-        price_tokens = [
-            PriceToken(address=token_address, decimals=decimals)
-            for token_address, decimals in price_token_map.items()
-        ]
-        _progress(6, "Refreshing prices")
-        stage_d_stats, price_errors = await self.token_price_refresh_service.refresh_many(
-            run_id=run_id,
-            tokens=price_tokens,
-        )
-        errors.extend(price_errors)
-        _progress(6, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens")
-
-        _progress(7, "Reading balances")
+        _progress(6, "Reading balances")
         balance_pairs = [
             BalancePair(
                 strategy_address=pair.strategy_address,
@@ -337,6 +324,7 @@ class ScannerService:
         ]
         balance_values, stage_c_stats = await self.balance_reader.read_many(balance_pairs)
 
+        tokens_with_balance: set[str] = set()
         for pair in pairs:
             key = BalancePair(strategy_address=pair.strategy_address, token_address=pair.token_address)
             raw_balance = balance_values.get(key)
@@ -353,6 +341,9 @@ class ScannerService:
                 pairs_failed += 1
                 continue
 
+            if raw_balance > 0:
+                tokens_with_balance.add(pair.token_address)
+
             normalized = to_decimal_string(raw_balance, pair.decimals)
             self.balance_repository.upsert(
                 BalanceResult(
@@ -366,7 +357,26 @@ class ScannerService:
             )
             pairs_succeeded += 1
 
-        _progress(7, "Reading balances", f"{pairs_succeeded} succeeded, {pairs_failed} failed")
+        _progress(6, "Reading balances", f"{pairs_succeeded} succeeded, {pairs_failed} failed")
+
+        price_token_map = {
+            pair.token_address: pair.decimals
+            for pair in pairs
+            if pair.token_address in tokens_with_balance
+        }
+        all_token_count = len({pair.token_address for pair in pairs})
+        price_tokens_skipped = all_token_count - len(price_token_map)
+        price_tokens = [
+            PriceToken(address=token_address, decimals=decimals)
+            for token_address, decimals in price_token_map.items()
+        ]
+        _progress(7, "Refreshing prices")
+        stage_d_stats, price_errors = await self.token_price_refresh_service.refresh_many(
+            run_id=run_id,
+            tokens=price_tokens,
+        )
+        errors.extend(price_errors)
+        _progress(7, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens, {price_tokens_skipped} skipped")
 
         status = determine_scan_status(pairs_seen=pairs_seen, pairs_failed=pairs_failed)
 
@@ -432,6 +442,7 @@ class ScannerService:
             price_tokens_succeeded=stage_d_stats["tokens_succeeded"],
             price_tokens_not_found=stage_d_stats["tokens_not_found"],
             price_tokens_failed=stage_d_stats["tokens_failed"],
+            price_tokens_skipped=price_tokens_skipped,
             auction_count=stage_e_stats["auction_count"],
             governance_allowed_auctions=stage_e_stats["governance_allowed_auction_count"],
             strategies_with_auction=stage_e_stats["strategies_mapped"],

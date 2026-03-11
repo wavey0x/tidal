@@ -89,11 +89,11 @@ class FakeBalanceReader:
     async def read(self, strategy_address: str, token_address: str) -> int:
         del strategy_address
         del token_address
-        return 0
+        return 1_000_000
 
     async def read_many(self, pairs: list[BalancePair]) -> tuple[dict[BalancePair, int | None], dict[str, int]]:
         return (
-            {pair: 0 for pair in pairs},
+            {pair: 1_000_000 for pair in pairs},
             {
                 "batch_count": 1,
                 "subcalls_total": len(pairs),
@@ -231,7 +231,7 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
 
         balance_rows = session.execute(select(models.strategy_token_balances_latest)).mappings().all()
         assert len(balance_rows) == 6
-        assert all(row["normalized_balance"] == "0" for row in balance_rows)
+        assert all(row["normalized_balance"] == "1" for row in balance_rows)
         assert all(row["strategy_address"] == row["strategy_address"].lower() for row in balance_rows)
         assert all(row["token_address"] == row["token_address"].lower() for row in balance_rows)
 

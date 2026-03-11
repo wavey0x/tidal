@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import structlog
@@ -13,6 +14,9 @@ from factory_dashboard.normalizers import normalize_address, to_decimal_string
 from factory_dashboard.pricing.service import PriceToken
 from factory_dashboard.time import utcnow, utcnow_iso
 from factory_dashboard.types import BalancePair, BalanceResult, ScanItemError, ScanRunResult
+
+# (step_number, total_steps, stage_label, detail_string)
+ProgressCallback = Callable[[int, int, str, str], None]
 
 logger = structlog.get_logger(__name__)
 
@@ -78,7 +82,13 @@ class ScannerService:
         self.scan_item_error_repository = scan_item_error_repository
         self.alert_sink = alert_sink
 
-    async def scan_once(self) -> ScanRunResult:
+    async def scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
+        _TOTAL_STEPS = 7
+
+        def _progress(step: int, label: str, detail: str = "") -> None:
+            if on_progress is not None:
+                on_progress(step, _TOTAL_STEPS, label, detail)
+
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
         self.scan_run_repository.create(
@@ -136,6 +146,7 @@ class ScannerService:
             "source": "none",
         }
 
+        _progress(1, "Discovering strategies")
         try:
             discovered, vaults_seen, stage_a_stats = await self.strategy_discovery_service.discover()
         except Exception as exc:  # noqa: BLE001
@@ -193,9 +204,11 @@ class ScannerService:
         self.strategy_repository.upsert_many(strategy_rows)
         strategies_seen = len(discovered)
         self.vault_repository.delete_strategy_address_rows_without_children()
+        _progress(1, "Discovering strategies", f"{strategies_seen} strategies, {vaults_seen} vaults")
 
         strategy_addresses = [normalize_address(item.strategy_address) for item in discovered]
         auction_updated_at = utcnow_iso()
+        _progress(2, "Mapping auctions")
         try:
             mapping_result = await self.strategy_auction_mapper.refresh_for_strategies(strategy_addresses)
             self.strategy_repository.set_auction_mappings(
@@ -230,9 +243,13 @@ class ScannerService:
             stage_e_stats["strategies_mapped"] = mapped_count
             stage_e_stats["strategies_unmapped"] = max(0, len(set(strategy_addresses)) - mapped_count)
             stage_e_stats["source"] = "cache"
+        _progress(2, "Mapping auctions", f"{stage_e_stats['strategies_mapped']} mapped, {stage_e_stats['strategies_unmapped']} unmapped")
 
+        _progress(3, "Hydrating names")
         await self._hydrate_cached_names(vault_addresses=vault_addresses, strategy_addresses=strategy_addresses, errors=errors)
+        _progress(3, "Hydrating names", "done")
 
+        _progress(4, "Resolving reward tokens")
         try:
             resolved_tokens_by_strategy, stage_b_stats = await self.reward_token_resolver.resolve_many(strategy_addresses)
         except Exception as exc:  # noqa: BLE001
@@ -250,6 +267,9 @@ class ScannerService:
                 ]
             )
 
+        _progress(4, "Resolving reward tokens", "done")
+
+        _progress(5, "Fetching token metadata")
         pairs: list[_Pair] = []
 
         for item in discovered:
@@ -290,6 +310,7 @@ class ScannerService:
                 )
 
         pairs_seen = len(pairs)
+        _progress(5, "Fetching token metadata", f"{pairs_seen} pairs")
         block_number = await self.web3_client.get_block_number()
         scanned_at = utcnow()
 
@@ -298,12 +319,15 @@ class ScannerService:
             PriceToken(address=token_address, decimals=decimals)
             for token_address, decimals in price_token_map.items()
         ]
+        _progress(6, "Refreshing prices")
         stage_d_stats, price_errors = await self.token_price_refresh_service.refresh_many(
             run_id=run_id,
             tokens=price_tokens,
         )
         errors.extend(price_errors)
+        _progress(6, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens")
 
+        _progress(7, "Reading balances")
         balance_pairs = [
             BalancePair(
                 strategy_address=pair.strategy_address,
@@ -341,6 +365,8 @@ class ScannerService:
                 )
             )
             pairs_succeeded += 1
+
+        _progress(7, "Reading balances", f"{pairs_succeeded} succeeded, {pairs_failed} failed")
 
         status = determine_scan_status(pairs_seen=pairs_seen, pairs_failed=pairs_failed)
 

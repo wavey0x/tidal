@@ -58,10 +58,19 @@ def scan_once(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
+    import sys
+
+    def _show_progress(step: int, total: int, label: str, detail: str) -> None:
+        if detail:
+            sys.stdout.write(f"\r  [{step}/{total}] {label:<28} {detail}\n")
+        else:
+            sys.stdout.write(f"\r  [{step}/{total}] {label}...")
+        sys.stdout.flush()
+
     db = Database(settings.database_url)
     with db.session() as session:
         scanner = build_scanner_service(settings, session)
-        result = asyncio.run(scanner.scan_once())
+        result = asyncio.run(scanner.scan_once(on_progress=_show_progress))
         typer.echo(
             (
                 f"scan_complete run_id={result.run_id} status={result.status} "

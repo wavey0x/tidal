@@ -167,7 +167,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         content = [
             f"Kick #{counter}",
             f"  Strategy:    {strategy_name} ({short_address(summary['strategy'])})",
-            f"  Auction:     {short_address(summary['auction'])}",
+            f"  Auction:     {summary['auction']}",
             f"  Sell amount: {amount_str} {token_sym} (~${usd_value:,.2f})",
             f"  Start quote: {summary['starting_price_display']} | {want_price_str}",
         ]

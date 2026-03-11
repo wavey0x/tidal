@@ -6,10 +6,8 @@ import uuid
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import select
 
 from factory_dashboard.alerts.base import AlertSink
-from factory_dashboard.persistence import models
 from factory_dashboard.constants import ADDITIONAL_DISCOVERY_VAULTS, CORE_REWARD_TOKENS
 from factory_dashboard.normalizers import normalize_address, to_decimal_string
 from factory_dashboard.pricing.service import PriceToken
@@ -232,37 +230,6 @@ class ScannerService:
             stage_e_stats["strategies_mapped"] = mapped_count
             stage_e_stats["strategies_unmapped"] = max(0, len(set(strategy_addresses)) - mapped_count)
             stage_e_stats["source"] = "cache"
-
-        # Ensure want tokens are in the tokens table for metadata (decimals/name/symbol).
-        want_addresses = set()
-        if stage_e_stats["source"] == "fresh":
-            want_addresses = {
-                addr for addr in mapping_result.strategy_to_want.values()
-                if addr is not None
-            }
-        else:
-            # Fallback: read from DB after cache-based mapping.
-            want_rows = self.session.execute(
-                select(models.strategies.c.want_address)
-                .where(models.strategies.c.want_address.isnot(None))
-                .distinct()
-            ).all()
-            want_addresses = {row[0] for row in want_rows}
-
-        for want_address in want_addresses:
-            try:
-                want_meta = await self.token_metadata_service.get_or_fetch(
-                    want_address, is_core_reward=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                errors.append(
-                    ScanItemError(
-                        stage="METADATA",
-                        error_code="want_token_metadata_failed",
-                        error_message=str(exc),
-                        token_address=want_address,
-                    )
-                )
 
         await self._hydrate_cached_names(vault_addresses=vault_addresses, strategy_addresses=strategy_addresses, errors=errors)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import uuid
 from pathlib import Path
@@ -12,7 +13,7 @@ from factory_dashboard.persistence.repositories import KickTxRepository, TxnRunR
 from factory_dashboard.time import utcnow_iso
 from factory_dashboard.transaction_service.evaluator import check_pre_send, shortlist_candidates
 from factory_dashboard.transaction_service.kicker import AuctionKicker
-from factory_dashboard.transaction_service.types import KickAction, KickStatus, TxnRunResult
+from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickResult, KickStatus, PreparedKick, TxnRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -103,6 +104,10 @@ class TxnService:
         kicks_succeeded = 0
         kicks_failed = 0
 
+        # Phase 1: Prepare all candidates.
+        prepared: list[PreparedKick] = []
+        candidates_to_prepare: list[KickCandidate] = []
+
         for decision in decisions:
             if decision.action == KickAction.SKIP:
                 logger.debug(
@@ -136,18 +141,33 @@ class TxnService:
                 kicks_attempted += 1
                 continue
 
-            # Live: call kicker.
-            kicks_attempted += 1
-            result = await self.kicker.kick(decision.candidate, run_id)
+            candidates_to_prepare.append(decision.candidate)
 
-            if result.status == KickStatus.CONFIRMED:
-                kicks_succeeded += 1
-            elif result.status == KickStatus.SKIP:
-                # Below threshold on live balance — not counted as failure.
-                kicks_attempted -= 1
-            elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                kicks_failed += 1
-            # SUBMITTED (receipt timeout) counts as attempted but neither succeeded nor failed yet.
+        # Prepare kicks concurrently (each does async balance read + quote).
+        if candidates_to_prepare:
+            kicks_attempted += len(candidates_to_prepare)
+            prepare_results = await asyncio.gather(
+                *(self.kicker.prepare_kick(c, run_id) for c in candidates_to_prepare)
+            )
+            for result in prepare_results:
+                if isinstance(result, KickResult):
+                    if result.status == KickStatus.SKIP:
+                        kicks_attempted -= 1
+                    elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                        kicks_failed += 1
+                else:
+                    prepared.append(result)
+
+        # Phase 2: Batch execute.
+        if prepared:
+            batch_results = await self.kicker.execute_batch(prepared, run_id)
+            for result in batch_results:
+                if result.status == KickStatus.CONFIRMED:
+                    kicks_succeeded += 1
+                elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                    kicks_failed += 1
+                elif result.status == KickStatus.USER_SKIPPED:
+                    kicks_attempted -= 1
 
         # 4. Finalize txn_runs.
         candidates_found = len([d for d in decisions if d.action == KickAction.KICK])

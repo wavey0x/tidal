@@ -36,6 +36,7 @@ price_delay_seconds: 0
 telegram_alerts_enabled: false
 
 # ── Transaction Service ──────────────────────────────
+auction_kicker_address: "0x2a76c6ad151af2edbe16755fc3bff67176f01071"
 txn_usd_threshold: 100
 txn_max_fee_per_gas_gwei: 50
 txn_max_base_fee_gwei: 0.5

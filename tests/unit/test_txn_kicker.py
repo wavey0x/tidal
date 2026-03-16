@@ -12,7 +12,7 @@ from factory_dashboard.persistence import models
 from factory_dashboard.persistence.repositories import KickTxRepository
 from factory_dashboard.pricing.token_price_agg import QuoteResult
 from factory_dashboard.transaction_service.kicker import AuctionKicker, _DEFAULT_PRIORITY_FEE_GWEI
-from factory_dashboard.transaction_service.types import KickCandidate
+from factory_dashboard.transaction_service.types import KickCandidate, KickResult, PreparedKick
 
 
 def _make_candidate(**overrides):
@@ -28,6 +28,25 @@ def _make_candidate(**overrides):
     }
     defaults.update(overrides)
     return KickCandidate(**defaults)
+
+
+def _make_prepared_kick(**overrides):
+    candidate = _make_candidate(**(overrides.pop("candidate_overrides", {})))
+    defaults = {
+        "candidate": candidate,
+        "sell_amount": 10**21,
+        "starting_price_raw": 2750,
+        "minimum_price_raw": 2375,
+        "sell_amount_str": str(10**21),
+        "starting_price_str": "2750",
+        "minimum_price_str": "2375",
+        "usd_value_str": "2500.0",
+        "live_balance_raw": 10**21,
+        "normalized_balance": "1000",
+        "quote_amount_str": "2500",
+    }
+    defaults.update(overrides)
+    return PreparedKick(**defaults)
 
 
 @pytest.fixture
@@ -71,6 +90,7 @@ def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None,
         "max_gas_limit": 500000,
         "start_price_buffer_bps": 1000,
         "min_price_buffer_bps": 500,
+        "auction_kicker_address": "0x2a76c6aD151AF2EDbe16755Fc3BFf67176f01071",
         "chain_id": 1,
     }
     defaults.update(overrides)
@@ -157,7 +177,7 @@ async def test_kick_estimate_failed(session):
     mock_contract = MagicMock()
     mock_kick_fn = MagicMock()
     mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
-    mock_contract.functions.kick = MagicMock(return_value=mock_kick_fn)
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
     web3_client.contract = MagicMock(return_value=mock_contract)
     web3_client.estimate_gas = AsyncMock(side_effect=RuntimeError("execution reverted"))
 
@@ -188,7 +208,7 @@ async def test_kick_gas_estimate_over_cap(session):
     mock_contract = MagicMock()
     mock_kick_fn = MagicMock()
     mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
-    mock_contract.functions.kick = MagicMock(return_value=mock_kick_fn)
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
     web3_client.contract = MagicMock(return_value=mock_contract)
     web3_client.estimate_gas = AsyncMock(return_value=600000)  # exceeds 500000 cap
 
@@ -227,7 +247,7 @@ async def test_kick_confirmed(session):
     mock_contract = MagicMock()
     mock_kick_fn = MagicMock()
     mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
-    mock_contract.functions.kick = MagicMock(return_value=mock_kick_fn)
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
     web3_client.contract = MagicMock(return_value=mock_contract)
 
     signer = MagicMock()
@@ -277,7 +297,7 @@ async def test_kick_reverted(session):
     mock_contract = MagicMock()
     mock_kick_fn = MagicMock()
     mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
-    mock_contract.functions.kick = MagicMock(return_value=mock_kick_fn)
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
     web3_client.contract = MagicMock(return_value=mock_contract)
 
     signer = MagicMock()
@@ -316,7 +336,7 @@ async def test_kick_receipt_timeout_stays_submitted(session):
     mock_contract = MagicMock()
     mock_kick_fn = MagicMock()
     mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
-    mock_contract.functions.kick = MagicMock(return_value=mock_kick_fn)
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
     web3_client.contract = MagicMock(return_value=mock_contract)
 
     signer = MagicMock()
@@ -354,7 +374,7 @@ def _make_web3_client_through_gas_estimate(gas_estimate=200000):
     mock_contract = MagicMock()
     mock_kick_fn = MagicMock()
     mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
-    mock_contract.functions.kick = MagicMock(return_value=mock_kick_fn)
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
     web3_client.contract = MagicMock(return_value=mock_contract)
     return web3_client
 
@@ -381,29 +401,34 @@ async def test_kick_confirm_fn_declined(session):
     assert result.sell_amount is not None
     assert result.usd_value is not None
 
-    # confirm_fn should have been called with a summary dict.
+    # confirm_fn should have been called with a batch summary dict.
     confirm_fn.assert_called_once()
     summary = confirm_fn.call_args[0][0]
-    assert "strategy" in summary
-    assert "strategy_name" in summary
-    assert "token_symbol" in summary
-    assert "want_symbol" in summary
-    assert "starting_price_display" in summary
-    assert "minimum_price" in summary
-    assert "minimum_price_display" in summary
+    assert "kicks" in summary
+    assert "batch_size" in summary
+    assert summary["batch_size"] == 1
     assert "gas_estimate" in summary
     assert "gas_limit" in summary
-    assert "buffer_bps" in summary
-    assert "min_buffer_bps" in summary
-    assert isinstance(summary["buffer_bps"], int)
-    assert isinstance(summary["min_buffer_bps"], int)
-    # New gas/quote fields.
-    assert "quote_amount" in summary
+
+    kick = summary["kicks"][0]
+    assert "strategy" in kick
+    assert "strategy_name" in kick
+    assert "token_symbol" in kick
+    assert "want_symbol" in kick
+    assert "starting_price_display" in kick
+    assert "minimum_price" in kick
+    assert "minimum_price_display" in kick
+    assert "buffer_bps" in kick
+    assert "min_buffer_bps" in kick
+    assert isinstance(kick["buffer_bps"], int)
+    assert isinstance(kick["min_buffer_bps"], int)
+    # quote_amount is per-kick, gas fields are top-level.
+    assert "quote_amount" in kick
+    assert float(kick["quote_amount"]) > 0
     assert "base_fee_gwei" in summary
     assert "priority_fee_gwei" in summary
     assert "max_fee_per_gas_gwei" in summary
     assert "gas_cost_eth" in summary
-    assert float(summary["quote_amount"]) > 0
     assert summary["base_fee_gwei"] == 0.1  # 0.1 gwei from mock
     assert summary["priority_fee_gwei"] == 0.05  # from mock
     assert summary["max_fee_per_gas_gwei"] == 50  # max_fee_per_gas_gwei default
@@ -1060,3 +1085,284 @@ async def test_minimum_price_clamps_to_zero(session):
 
     assert result.status == "CONFIRMED"
     assert result.minimum_price == "0"
+
+
+# ---------------------------------------------------------------------------
+# prepare_kick tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_success(session):
+    """prepare_kick returns PreparedKick with correct computed prices."""
+    web3_client = MagicMock()
+
+    with patch(
+        "factory_dashboard.transaction_service.kicker.ERC20Reader"
+    ) as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client)
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, PreparedKick)
+    assert result.sell_amount == 10**21
+    assert result.starting_price_str == "2750"
+    assert result.minimum_price_str == "2375"
+    assert result.candidate is candidate
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_below_threshold(session):
+    """prepare_kick returns KickResult(SKIP) when below threshold."""
+    web3_client = MagicMock()
+
+    with patch(
+        "factory_dashboard.transaction_service.kicker.ERC20Reader"
+    ) as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=1000)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client)
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, KickResult)
+    assert result.status == "SKIP"
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_balance_error(session):
+    """prepare_kick returns KickResult(ERROR) when balance read fails."""
+    web3_client = MagicMock()
+
+    with patch(
+        "factory_dashboard.transaction_service.kicker.ERC20Reader"
+    ) as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(side_effect=RuntimeError("rpc down"))
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client)
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, KickResult)
+    assert result.status == "ERROR"
+    assert "rpc down" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_quote_error(session):
+    """prepare_kick returns KickResult(ERROR) when quote fails."""
+    web3_client = MagicMock()
+
+    price_provider = AsyncMock()
+    price_provider.quote = AsyncMock(side_effect=RuntimeError("quote down"))
+
+    with patch(
+        "factory_dashboard.transaction_service.kicker.ERC20Reader"
+    ) as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client, price_provider=price_provider)
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, KickResult)
+    assert result.status == "ERROR"
+    assert "quote" in result.error_message
+
+
+# ---------------------------------------------------------------------------
+# execute_batch tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_confirmed(session):
+    """Multiple prepared kicks all get CONFIRMED with same tx_hash."""
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_batch")
+    web3_client.get_transaction_receipt = AsyncMock(return_value={
+        "status": 1,
+        "gasUsed": 500000,
+        "effectiveGasPrice": int(12 * 1e9),
+        "blockNumber": 90000,
+    })
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    kicker = _make_kicker(session, web3_client=web3_client, signer=signer)
+
+    pks = [
+        _make_prepared_kick(candidate_overrides={"strategy_address": f"0x{'1' * 39}{i}"})
+        for i in range(3)
+    ]
+    results = await kicker.execute_batch(pks, "run-batch")
+
+    assert len(results) == 3
+    for r in results:
+        assert r.status == "CONFIRMED"
+        assert r.tx_hash == "0xtxhash_batch"
+
+    rows = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(rows) == 3
+    assert all(row["tx_hash"] == "0xtxhash_batch" for row in rows)
+    assert all(row["status"] == "CONFIRMED" for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_reverted(session):
+    """All kicks in a reverted batch get REVERTED."""
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_rev")
+    web3_client.get_transaction_receipt = AsyncMock(return_value={
+        "status": 0,
+        "gasUsed": 300000,
+        "effectiveGasPrice": int(12 * 1e9),
+        "blockNumber": 90001,
+    })
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    kicker = _make_kicker(session, web3_client=web3_client, signer=signer)
+
+    pks = [_make_prepared_kick(), _make_prepared_kick()]
+    results = await kicker.execute_batch(pks, "run-rev")
+
+    assert len(results) == 2
+    assert all(r.status == "REVERTED" for r in results)
+    assert all(r.tx_hash == "0xtxhash_rev" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_single_item(session):
+    """Single-item batch works like the old single kick."""
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_single")
+    web3_client.get_transaction_receipt = AsyncMock(return_value={
+        "status": 1,
+        "gasUsed": 200000,
+        "effectiveGasPrice": int(12 * 1e9),
+        "blockNumber": 90002,
+    })
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    kicker = _make_kicker(session, web3_client=web3_client, signer=signer)
+
+    results = await kicker.execute_batch([_make_prepared_kick()], "run-single")
+
+    assert len(results) == 1
+    assert results[0].status == "CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_gas_over_cap(session):
+    """Gas estimate exceeding scaled cap returns ERROR for all kicks."""
+    web3_client = _make_web3_client_through_gas_estimate(gas_estimate=600000)
+
+    kicker = _make_kicker(session, web3_client=web3_client)
+
+    # Single kick → cap is 500000. Estimate 600000 > cap.
+    results = await kicker.execute_batch([_make_prepared_kick()], "run-gas")
+
+    assert len(results) == 1
+    assert results[0].status == "ERROR"
+    assert "gas estimate" in results[0].error_message
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_confirm_declined(session):
+    """Declining confirmation returns USER_SKIPPED for all kicks."""
+    web3_client = _make_web3_client_through_gas_estimate()
+
+    confirm_fn = MagicMock(return_value=False)
+
+    kicker = _make_kicker(session, web3_client=web3_client, confirm_fn=confirm_fn)
+
+    pks = [_make_prepared_kick(), _make_prepared_kick()]
+    results = await kicker.execute_batch(pks, "run-decline")
+
+    assert len(results) == 2
+    assert all(r.status == "USER_SKIPPED" for r in results)
+    confirm_fn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_receipt_timeout(session):
+    """Receipt timeout leaves all kicks as SUBMITTED."""
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_timeout")
+    web3_client.get_transaction_receipt = AsyncMock(side_effect=TimeoutError("timeout"))
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    kicker = _make_kicker(session, web3_client=web3_client, signer=signer)
+
+    pks = [_make_prepared_kick(), _make_prepared_kick()]
+    results = await kicker.execute_batch(pks, "run-timeout")
+
+    assert len(results) == 2
+    assert all(r.status == "SUBMITTED" for r in results)
+    assert all(r.tx_hash == "0xtxhash_timeout" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_confirm_summary_schema(session):
+    """Verify the batch summary dict passed to confirm_fn has the expected shape."""
+    web3_client = _make_web3_client_through_gas_estimate()
+    confirm_fn = MagicMock(return_value=False)
+
+    kicker = _make_kicker(session, web3_client=web3_client, confirm_fn=confirm_fn)
+
+    pks = [_make_prepared_kick(), _make_prepared_kick()]
+    await kicker.execute_batch(pks, "run-schema")
+
+    confirm_fn.assert_called_once()
+    summary = confirm_fn.call_args[0][0]
+
+    # Batch-level keys.
+    assert summary["batch_size"] == 2
+    assert "total_usd" in summary
+    assert "gas_estimate" in summary
+    assert "gas_limit" in summary
+    assert "base_fee_gwei" in summary
+    assert "priority_fee_gwei" in summary
+    assert "max_fee_per_gas_gwei" in summary
+    assert "gas_cost_eth" in summary
+
+    # Per-kick list.
+    assert len(summary["kicks"]) == 2
+    kick = summary["kicks"][0]
+    assert "strategy" in kick
+    assert "strategy_name" in kick
+    assert "token_symbol" in kick
+    assert "starting_price_display" in kick
+    assert "minimum_price_display" in kick
+    assert "quote_amount" in kick
+    assert "buffer_bps" in kick
+    assert "min_buffer_bps" in kick

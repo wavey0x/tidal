@@ -30,5 +30,3 @@ ADDITIONAL_DISCOVERY_VAULTS = frozenset(
 
 # Strategies that must be scanned even if they are absent from vault withdrawal queues.
 ADDITIONAL_DISCOVERY_STRATEGIES = frozenset()
-
-AUCTION_KICKER_ADDRESS = "0x2a76c6ad151af2edbe16755fc3bff67176f01071"

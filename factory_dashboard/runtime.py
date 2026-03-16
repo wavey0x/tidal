@@ -181,6 +181,7 @@ def build_txn_service(
         signer=signer,
         kick_tx_repository=kick_tx_repository,
         price_provider=price_provider,
+        auction_kicker_address=settings.auction_kicker_address,
         usd_threshold=settings.txn_usd_threshold,
         max_fee_per_gas_gwei=settings.txn_max_fee_per_gas_gwei,
         max_base_fee_gwei=None if skip_base_fee_check else settings.txn_max_base_fee_gwei,

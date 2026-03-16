@@ -180,6 +180,27 @@ AUCTION_KICKER_ABI = [
         "type": "function",
     },
     {
+        "inputs": [
+            {
+                "components": [
+                    {"internalType": "address", "name": "strategy", "type": "address"},
+                    {"internalType": "address", "name": "auction", "type": "address"},
+                    {"internalType": "address", "name": "sellToken", "type": "address"},
+                    {"internalType": "uint256", "name": "sellAmount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "startingPrice", "type": "uint256"},
+                    {"internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
+                ],
+                "internalType": "struct AuctionKicker.KickParams[]",
+                "name": "kicks",
+                "type": "tuple[]",
+            }
+        ],
+        "name": "batchKick",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
         "inputs": [],
         "name": "owner",
         "outputs": [{"internalType": "address", "name": "", "type": "address"}],

@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str | None = Field(default=None, alias="TELEGRAM_CHAT_ID")
 
+    auction_kicker_address: str = Field(
+        default="0x2a76c6ad151af2edbe16755fc3bff67176f01071",
+        alias="AUCTION_KICKER_ADDRESS",
+    )
     txn_usd_threshold: float = Field(default=100.0, alias="TXN_USD_THRESHOLD")
     txn_max_fee_per_gas_gwei: int = Field(default=50, alias="TXN_MAX_FEE_PER_GAS_GWEI")
     txn_max_base_fee_gwei: float = Field(default=0.5, alias="TXN_MAX_BASE_FEE_GWEI")

@@ -19,6 +19,15 @@ contract AuctionKicker {
         address indexed strategy, address indexed auction, address sellToken, uint256 sellAmount, uint256 startingPrice, uint256 minimumPrice
     );
 
+    struct KickParams {
+        address strategy;
+        address auction;
+        address sellToken;
+        uint256 sellAmount;
+        uint256 startingPrice;
+        uint256 minimumPrice;
+    }
+
     address public owner;
     mapping(address => bool) public keeper;
 
@@ -52,31 +61,41 @@ contract AuctionKicker {
         external
         onlyKeeperOrOwner
     {
-        require(startingPrice != 0, "starting price zero");
-        require(IAuction(auction).want() == IStrategy(strategy).want(), "want mismatch");
-        require(IAuction(auction).receiver() == strategy, "receiver mismatch");
+        _kick(KickParams(strategy, auction, sellToken, sellAmount, startingPrice, minimumPrice));
+    }
+
+    function batchKick(KickParams[] calldata kicks) external onlyKeeperOrOwner {
+        for (uint256 i = 0; i < kicks.length; i++) {
+            _kick(kicks[i]);
+        }
+    }
+
+    function _kick(KickParams memory p) internal {
+        require(p.startingPrice != 0, "starting price zero");
+        require(IAuction(p.auction).want() == IStrategy(p.strategy).want(), "want mismatch");
+        require(IAuction(p.auction).receiver() == p.strategy, "receiver mismatch");
 
         bytes[] memory state = new bytes[](6);
-        state[0] = abi.encode(strategy);
-        state[1] = abi.encode(auction);
-        state[2] = abi.encode(sellAmount);
-        state[3] = abi.encode(startingPrice);
-        state[4] = abi.encode(minimumPrice);
-        state[5] = abi.encode(sellToken);
+        state[0] = abi.encode(p.strategy);
+        state[1] = abi.encode(p.auction);
+        state[2] = abi.encode(p.sellAmount);
+        state[3] = abi.encode(p.startingPrice);
+        state[4] = abi.encode(p.minimumPrice);
+        state[5] = abi.encode(p.sellToken);
 
         bytes32[] memory commands = new bytes32[](4);
-        commands[0] = WeiRollCommandLib.cmdCall(TRANSFER_FROM_SELECTOR, 0, 1, 2, sellToken);
+        commands[0] = WeiRollCommandLib.cmdCall(TRANSFER_FROM_SELECTOR, 0, 1, 2, p.sellToken);
         commands[1] = WeiRollCommandLib.cmdCall(
-            SET_STARTING_PRICE_SELECTOR, 3, WeiRollCommandLib.ARG_UNUSED, WeiRollCommandLib.ARG_UNUSED, auction
+            SET_STARTING_PRICE_SELECTOR, 3, WeiRollCommandLib.ARG_UNUSED, WeiRollCommandLib.ARG_UNUSED, p.auction
         );
         commands[2] = WeiRollCommandLib.cmdCall(
-            SET_MINIMUM_PRICE_SELECTOR, 4, WeiRollCommandLib.ARG_UNUSED, WeiRollCommandLib.ARG_UNUSED, auction
+            SET_MINIMUM_PRICE_SELECTOR, 4, WeiRollCommandLib.ARG_UNUSED, WeiRollCommandLib.ARG_UNUSED, p.auction
         );
         commands[3] = WeiRollCommandLib.cmdCall(
-            KICK_SELECTOR, 5, WeiRollCommandLib.ARG_UNUSED, WeiRollCommandLib.ARG_UNUSED, auction
+            KICK_SELECTOR, 5, WeiRollCommandLib.ARG_UNUSED, WeiRollCommandLib.ARG_UNUSED, p.auction
         );
 
         ITradeHandler(tradeHandler).execute(commands, state);
-        emit Kicked(strategy, auction, sellToken, sellAmount, startingPrice, minimumPrice);
+        emit Kicked(p.strategy, p.auction, p.sellToken, p.sellAmount, p.startingPrice, p.minimumPrice);
     }
 }

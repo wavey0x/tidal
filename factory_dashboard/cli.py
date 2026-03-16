@@ -136,50 +136,66 @@ def _require_keystore(settings) -> None:
 
 
 def _make_confirm_fn() -> Callable[[dict], bool]:
-    """Return a confirm callback with its own kick counter."""
-    counter = 0
+    """Return a confirm callback that displays a batch summary."""
 
-    def _confirm_kick(summary: dict) -> bool:
-        nonlocal counter
-        counter += 1
-
-        strategy_name = summary.get("strategy_name") or "Unknown"
-        token_sym = summary.get("token_symbol") or "???"
-        want_sym = summary.get("want_symbol") or "???"
-
-        amount = float(summary["sell_amount"])
-        amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
-
-        # Implied want-token USD price from quote.
-        quote_amount = float(summary["quote_amount"])
-        usd_value = float(summary["usd_value"])
-        want_price_str = f"~${usd_value / quote_amount:,.2f}/{want_sym}" if quote_amount else ""
-
+    def _confirm_batch(summary: dict) -> bool:
+        kicks = summary["kicks"]
+        batch_size = summary["batch_size"]
         gas_cost_eth = summary.get("gas_cost_eth", 0)
         priority_fee = summary.get("priority_fee_gwei", 0)
         max_fee = summary.get("max_fee_per_gas_gwei", 0)
+        gas_estimate = summary.get("gas_estimate", 0)
 
-        # Detect when ceiling inflated startingPrice significantly.
-        starting_price = int(summary["starting_price"])
-        precision_line = None
-        if quote_amount > 0 and starting_price > quote_amount * 2:
-            precision_line = (
-                f"               \u21b3 ceiled lot based on {quote_amount:.4f} quote"
-            )
+        if batch_size == 1:
+            # Single-kick display (preserves old UX).
+            k = kicks[0]
+            strategy_name = k.get("strategy_name") or "Unknown"
+            token_sym = k.get("token_symbol") or "???"
+            want_sym = k.get("want_symbol") or "???"
+            amount = float(k["sell_amount"])
+            amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
+            quote_amount = float(k["quote_amount"])
+            usd_value = float(k["usd_value"])
+            want_price_str = f"~${usd_value / quote_amount:,.2f}/{want_sym}" if quote_amount else ""
 
-        content = [
-            f"Kick #{counter}",
-            f"  Strategy:    {strategy_name} ({short_address(summary['strategy'])})",
-            f"  Auction:     {summary['auction']}",
-            f"  Sell amount: {amount_str} {token_sym} (~${usd_value:,.2f})",
-            f"  Start quote: {summary['starting_price_display']} | {want_price_str}",
-        ]
-        if precision_line:
-            content.append(precision_line)
-        content.extend([
-            f"  Gas est:     {summary['gas_estimate']:,} (~{gas_cost_eth:.6f} ETH)",
-            f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",
-        ])
+            starting_price = int(k["starting_price"])
+            precision_line = None
+            if quote_amount > 0 and starting_price > quote_amount * 2:
+                precision_line = f"               \u21b3 ceiled lot based on {quote_amount:.4f} quote"
+
+            content = [
+                "Kick (1 of 1)",
+                f"  Strategy:    {strategy_name} ({short_address(k['strategy'])})",
+                f"  Auction:     {k['auction']}",
+                f"  Sell amount: {amount_str} {token_sym} (~${usd_value:,.2f})",
+                f"  Start quote: {k['starting_price_display']} | {want_price_str}",
+            ]
+            if precision_line:
+                content.append(precision_line)
+            content.extend([
+                f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
+                f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",
+            ])
+        else:
+            # Multi-kick batch display.
+            content = [f"Batch of {batch_size} kicks", ""]
+            for i, k in enumerate(kicks, 1):
+                strategy_name = k.get("strategy_name") or "Unknown"
+                token_sym = k.get("token_symbol") or "???"
+                amount = float(k["sell_amount"])
+                amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
+                usd_value = float(k["usd_value"])
+                content.append(
+                    f"  {i}. {strategy_name} | {amount_str} {token_sym} (~${usd_value:,.2f})"
+                )
+
+            total_usd = float(summary["total_usd"])
+            content.extend([
+                "",
+                f"  Total USD:   ~${total_usd:,.2f}",
+                f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
+                f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",
+            ])
 
         width = max(len(line) for line in content)
         border = typer.style
@@ -193,9 +209,10 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         lines.append(bottom)
 
         typer.echo("\n".join(lines))
-        return typer.confirm("Send this transaction?", default=False)
+        prompt = "Send this transaction?" if batch_size == 1 else f"Send batch of {batch_size} kicks?"
+        return typer.confirm(prompt, default=False)
 
-    return _confirm_kick
+    return _confirm_batch
 
 
 @txn_app.command("once")

@@ -11,13 +11,17 @@ from eth_utils import to_checksum_address
 from factory_dashboard.chain.contracts.abis import AUCTION_KICKER_ABI
 from factory_dashboard.chain.contracts.erc20 import ERC20Reader
 from factory_dashboard.chain.web3_client import Web3Client
-from factory_dashboard.constants import AUCTION_KICKER_ADDRESS
 from factory_dashboard.normalizers import normalize_address, to_decimal_string
 from factory_dashboard.persistence.repositories import KickTxRepository
 from factory_dashboard.pricing.token_price_agg import TokenPriceAggProvider
 from factory_dashboard.time import utcnow_iso
 from factory_dashboard.transaction_service.signer import TransactionSigner
-from factory_dashboard.transaction_service.types import KickCandidate, KickResult, KickStatus
+from factory_dashboard.transaction_service.types import (
+    KickCandidate,
+    KickResult,
+    KickStatus,
+    PreparedKick,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -38,6 +42,7 @@ class AuctionKicker:
         signer: TransactionSigner,
         kick_tx_repository: KickTxRepository,
         price_provider: TokenPriceAggProvider,
+        auction_kicker_address: str,
         usd_threshold: float,
         max_fee_per_gas_gwei: int,
         max_base_fee_gwei: float | None,
@@ -52,6 +57,7 @@ class AuctionKicker:
         self.signer = signer
         self.kick_tx_repository = kick_tx_repository
         self.price_provider = price_provider
+        self.auction_kicker_address = auction_kicker_address
         self.usd_threshold = usd_threshold
         self.max_fee_per_gas_gwei = max_fee_per_gas_gwei
         self.max_base_fee_gwei = max_base_fee_gwei
@@ -130,8 +136,35 @@ class AuctionKicker:
         )
         return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
 
-    async def kick(self, candidate: KickCandidate, run_id: str) -> KickResult:
-        """Execute the full kick flow for a single candidate."""
+    def _fail_batch(
+        self,
+        run_id: str,
+        prepared_kicks: list[PreparedKick],
+        now_iso: str,
+        *,
+        status: KickStatus,
+        error_message: str,
+    ) -> list[KickResult]:
+        """Fail all kicks in a batch with a shared error."""
+        return [
+            self._fail(
+                run_id, pk.candidate, now_iso,
+                status=status, error_message=error_message,
+                sell_amount=pk.sell_amount_str, starting_price=pk.starting_price_str,
+                minimum_price=pk.minimum_price_str, usd_value=pk.usd_value_str,
+            )
+            for pk in prepared_kicks
+        ]
+
+    # ------------------------------------------------------------------
+    # Phase 1: Prepare (per-candidate)
+    # ------------------------------------------------------------------
+
+    async def prepare_kick(
+        self, candidate: KickCandidate, run_id: str,
+    ) -> PreparedKick | KickResult:
+        """Validate a candidate and compute prices. Returns PreparedKick on
+        success or KickResult on failure/skip."""
 
         now_iso = utcnow_iso()
 
@@ -159,7 +192,6 @@ class AuctionKicker:
                 cached_usd=candidate.usd_value,
                 live_usd=live_usd_value,
             )
-            # Below threshold on live read — log only, no kick_txs row per spec.
             return KickResult(
                 kick_tx_id=0,
                 status=KickStatus.SKIP,
@@ -168,7 +200,7 @@ class AuctionKicker:
                 usd_value=str(live_usd_value),
             )
 
-        # 3. Fetch fresh sell→want quote for startingPrice.
+        # 3. Fetch fresh sell→want quote for startingPrice / minimumPrice.
         sell_amount = live_balance_raw
         try:
             quote_result = await self.price_provider.quote(
@@ -205,152 +237,162 @@ class AuctionKicker:
         min_buffer = Decimal(1) - Decimal(self.min_price_buffer_bps) / Decimal(10_000)
         minimum_price_raw = max(0, int((amount_out_normalized * min_buffer).to_integral_value(rounding=ROUND_FLOOR)))
 
-        sell_amount_str = str(sell_amount)
-        starting_price_str = str(starting_price_raw)
-        minimum_price_str = str(minimum_price_raw)
-        usd_value_str = str(live_usd_value)
+        return PreparedKick(
+            candidate=candidate,
+            sell_amount=sell_amount,
+            starting_price_raw=starting_price_raw,
+            minimum_price_raw=minimum_price_raw,
+            sell_amount_str=str(sell_amount),
+            starting_price_str=str(starting_price_raw),
+            minimum_price_str=str(minimum_price_raw),
+            usd_value_str=str(live_usd_value),
+            live_balance_raw=live_balance_raw,
+            normalized_balance=normalized_balance,
+            quote_amount_str=str(amount_out_normalized),
+        )
 
-        log_ctx = {
-            "strategy": candidate.strategy_address,
-            "token": candidate.token_address,
-            "auction": candidate.auction_address,
-            "sell_amount": sell_amount_str,
-            "starting_price": starting_price_str,
-            "minimum_price": minimum_price_str,
-            "usd_value": usd_value_str,
-        }
+    # ------------------------------------------------------------------
+    # Phase 2: Execute batch
+    # ------------------------------------------------------------------
 
-        # 4. Check base fee.
+    async def execute_batch(
+        self, prepared_kicks: list[PreparedKick], run_id: str,
+    ) -> list[KickResult]:
+        """Send a batch of prepared kicks in a single transaction."""
+
+        now_iso = utcnow_iso()
+        batch_size = len(prepared_kicks)
+
+        # 1. Check base fee (once for the batch).
         try:
             base_fee_wei = await self.web3_client.get_base_fee()
             base_fee_gwei = base_fee_wei / 1e9
         except Exception as exc:  # noqa: BLE001
-            return self._fail(
-                run_id, candidate, now_iso,
+            return self._fail_batch(
+                run_id, prepared_kicks, now_iso,
                 status=KickStatus.ERROR, error_message=f"base fee check failed: {exc}",
-                sell_amount=sell_amount_str, starting_price=starting_price_str,
-                minimum_price=minimum_price_str, usd_value=usd_value_str,
             )
 
         if self.max_base_fee_gwei is not None and base_fee_gwei > self.max_base_fee_gwei:
-            logger.warning("txn_safety_block", reason="base_fee_high", base_fee_gwei=base_fee_gwei, **log_ctx)
-            return self._fail(
-                run_id, candidate, now_iso,
+            return self._fail_batch(
+                run_id, prepared_kicks, now_iso,
                 status=KickStatus.ERROR,
                 error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds limit {self.max_base_fee_gwei}",
-                sell_amount=sell_amount_str, starting_price=starting_price_str,
-                minimum_price=minimum_price_str, usd_value=usd_value_str,
             )
 
-        # 5. Build transaction and estimateGas.
-        kicker_contract = self.web3_client.contract(AUCTION_KICKER_ADDRESS, AUCTION_KICKER_ABI)
-        kick_fn = kicker_contract.functions.kick(
-            to_checksum_address(candidate.strategy_address),
-            to_checksum_address(candidate.auction_address),
-            to_checksum_address(candidate.token_address),
-            sell_amount,
-            starting_price_raw,
-            minimum_price_raw,
-        )
-        tx_data = kick_fn._encode_transaction_data()
+        # 2. Build batchKick calldata.
+        kicker_address = to_checksum_address(self.auction_kicker_address)
+        kicker_contract = self.web3_client.contract(kicker_address, AUCTION_KICKER_ABI)
+
+        kick_tuples = [
+            (
+                to_checksum_address(pk.candidate.strategy_address),
+                to_checksum_address(pk.candidate.auction_address),
+                to_checksum_address(pk.candidate.token_address),
+                pk.sell_amount,
+                pk.starting_price_raw,
+                pk.minimum_price_raw,
+            )
+            for pk in prepared_kicks
+        ]
+
+        batch_fn = kicker_contract.functions.batchKick(kick_tuples)
+        tx_data = batch_fn._encode_transaction_data()
 
         tx_params = {
             "from": self.signer.checksum_address,
-            "to": to_checksum_address(AUCTION_KICKER_ADDRESS),
+            "to": kicker_address,
             "data": tx_data,
             "chainId": self.chain_id,
         }
 
+        # 3. Estimate gas (once on the batch).
         try:
             gas_estimate = await self.web3_client.estimate_gas(tx_params)
         except Exception as exc:  # noqa: BLE001
-            logger.info("txn_estimate_failed", error=str(exc), **log_ctx)
-            kick_tx_id = self._insert_kick_tx(
-                run_id, candidate, now_iso,
+            logger.info("txn_batch_estimate_failed", error=str(exc), batch_size=batch_size)
+            return self._fail_batch(
+                run_id, prepared_kicks, now_iso,
                 status=KickStatus.ESTIMATE_FAILED, error_message=str(exc),
-                sell_amount=sell_amount_str, starting_price=starting_price_str,
-                minimum_price=minimum_price_str, usd_value=usd_value_str,
-            )
-            return KickResult(
-                kick_tx_id=kick_tx_id,
-                status=KickStatus.ESTIMATE_FAILED,
-                error_message=str(exc),
-                sell_amount=sell_amount_str,
-                starting_price=starting_price_str,
-                minimum_price=minimum_price_str,
-                live_balance_raw=live_balance_raw,
-                usd_value=usd_value_str,
             )
 
-        # 6. Gas limit = min(estimate * 1.2, max_gas_limit).
-        gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
-        if gas_estimate > self.max_gas_limit:
-            error_msg = f"gas estimate {gas_estimate} exceeds cap {self.max_gas_limit}"
-            logger.warning("txn_safety_block", reason="gas_estimate_over_cap", **log_ctx)
-            return self._fail(
-                run_id, candidate, now_iso,
-                status=KickStatus.ERROR, error_message=error_msg,
-                sell_amount=sell_amount_str, starting_price=starting_price_str,
-                minimum_price=minimum_price_str, usd_value=usd_value_str,
+        batch_gas_cap = self.max_gas_limit * batch_size
+        gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), batch_gas_cap)
+        if gas_estimate > batch_gas_cap:
+            return self._fail_batch(
+                run_id, prepared_kicks, now_iso,
+                status=KickStatus.ERROR,
+                error_message=f"gas estimate {gas_estimate} exceeds batch cap {batch_gas_cap}",
             )
 
-        # 7. Resolve priority fee (needed for both confirmation display and signing).
+        # 4. Resolve priority fee.
         priority_fee_wei = await self._resolve_priority_fee_wei()
 
-        # 8. Interactive confirmation gate.
+        # 5. Interactive confirmation gate.
         if self.confirm_fn is not None:
-            buffer_pct = self.start_price_buffer_bps / 100
-            min_buffer_pct = self.min_price_buffer_bps / 100
-            want_sym = candidate.want_symbol or "want-token"
+            kick_summaries = []
+            for pk in prepared_kicks:
+                want_sym = pk.candidate.want_symbol or "want-token"
+                buffer_pct = self.start_price_buffer_bps / 100
+                min_buffer_pct = self.min_price_buffer_bps / 100
+                kick_summaries.append({
+                    "strategy": pk.candidate.strategy_address,
+                    "strategy_name": pk.candidate.strategy_name,
+                    "token": pk.candidate.token_address,
+                    "token_symbol": pk.candidate.token_symbol,
+                    "auction": pk.candidate.auction_address,
+                    "sell_amount": pk.normalized_balance,
+                    "usd_value": pk.usd_value_str,
+                    "starting_price": pk.starting_price_str,
+                    "starting_price_display": f"{pk.starting_price_raw:,} {want_sym} (incl. {buffer_pct:.0f}% buffer)",
+                    "minimum_price": pk.minimum_price_str,
+                    "minimum_price_display": f"{pk.minimum_price_raw:,} {want_sym} (minus {min_buffer_pct:.0f}% buffer)",
+                    "sell_price_usd": pk.candidate.price_usd,
+                    "want_address": pk.candidate.want_address,
+                    "want_symbol": pk.candidate.want_symbol,
+                    "buffer_bps": self.start_price_buffer_bps,
+                    "min_buffer_bps": self.min_price_buffer_bps,
+                    "quote_amount": pk.quote_amount_str,
+                })
+
             summary = {
-                "strategy": candidate.strategy_address,
-                "strategy_name": candidate.strategy_name,
-                "token": candidate.token_address,
-                "token_symbol": candidate.token_symbol,
-                "auction": candidate.auction_address,
-                "sell_amount": normalized_balance,
-                "usd_value": usd_value_str,
-                "starting_price": starting_price_str,
-                "starting_price_display": f"{starting_price_raw:,} {want_sym} (incl. {buffer_pct:.0f}% buffer)",
-                "minimum_price": minimum_price_str,
-                "minimum_price_display": f"{minimum_price_raw:,} {want_sym} (minus {min_buffer_pct:.0f}% buffer)",
-                "sell_price_usd": candidate.price_usd,
-                "want_address": candidate.want_address,
-                "want_symbol": candidate.want_symbol,
-                "buffer_bps": self.start_price_buffer_bps,
-                "min_buffer_bps": self.min_price_buffer_bps,
+                "kicks": kick_summaries,
+                "batch_size": batch_size,
+                "total_usd": str(sum(Decimal(pk.usd_value_str) for pk in prepared_kicks)),
                 "gas_estimate": gas_estimate,
                 "gas_limit": gas_limit,
-                "quote_amount": str(amount_out_normalized),
                 "base_fee_gwei": base_fee_gwei,
                 "priority_fee_gwei": priority_fee_wei / 1e9,
                 "max_fee_per_gas_gwei": self.max_fee_per_gas_gwei,
                 "gas_cost_eth": gas_estimate * base_fee_gwei / 1e9,
             }
+
             if not self.confirm_fn(summary):
-                kick_tx_id = self._insert_kick_tx(
-                    run_id, candidate, now_iso,
-                    status=KickStatus.USER_SKIPPED,
-                    sell_amount=sell_amount_str, starting_price=starting_price_str,
-                    minimum_price=minimum_price_str, usd_value=usd_value_str,
-                )
-                return KickResult(
-                    kick_tx_id=kick_tx_id,
-                    status=KickStatus.USER_SKIPPED,
-                    sell_amount=sell_amount_str,
-                    starting_price=starting_price_str,
-                    minimum_price=minimum_price_str,
-                    live_balance_raw=live_balance_raw,
-                    usd_value=usd_value_str,
-                )
+                results = []
+                for pk in prepared_kicks:
+                    kick_tx_id = self._insert_kick_tx(
+                        run_id, pk.candidate, now_iso,
+                        status=KickStatus.USER_SKIPPED,
+                        sell_amount=pk.sell_amount_str, starting_price=pk.starting_price_str,
+                        minimum_price=pk.minimum_price_str, usd_value=pk.usd_value_str,
+                    )
+                    results.append(KickResult(
+                        kick_tx_id=kick_tx_id,
+                        status=KickStatus.USER_SKIPPED,
+                        sell_amount=pk.sell_amount_str,
+                        starting_price=pk.starting_price_str,
+                        minimum_price=pk.minimum_price_str,
+                        live_balance_raw=pk.live_balance_raw,
+                        usd_value=pk.usd_value_str,
+                    ))
+                return results
 
-        # 9. Sign + send.
+        # 6. Sign + send.
         nonce = await self.web3_client.get_transaction_count(self.signer.address)
-
         max_fee_wei = self.max_fee_per_gas_gwei * 10**9
 
         full_tx = {
-            "to": to_checksum_address(AUCTION_KICKER_ADDRESS),
+            "to": kicker_address,
             "data": tx_data,
             "chainId": self.chain_id,
             "gas": gas_limit,
@@ -364,80 +406,91 @@ class AuctionKicker:
             signed_tx = self.signer.sign_transaction(full_tx)
             tx_hash = await self.web3_client.send_raw_transaction(signed_tx)
         except Exception as exc:  # noqa: BLE001
-            logger.error("txn_send_failed", error=str(exc), **log_ctx)
-            return self._fail(
-                run_id, candidate, now_iso,
+            logger.error("txn_batch_send_failed", error=str(exc), batch_size=batch_size)
+            return self._fail_batch(
+                run_id, prepared_kicks, now_iso,
                 status=KickStatus.ERROR, error_message=f"send failed: {exc}",
-                sell_amount=sell_amount_str, starting_price=starting_price_str,
-                minimum_price=minimum_price_str, usd_value=usd_value_str,
             )
 
-        # Persist SUBMITTED immediately after broadcast.
-        kick_tx_id = self._insert_kick_tx(
-            run_id, candidate, now_iso,
-            status=KickStatus.SUBMITTED, tx_hash=tx_hash,
-            sell_amount=sell_amount_str, starting_price=starting_price_str,
-            minimum_price=minimum_price_str, usd_value=usd_value_str,
-        )
+        # 7. Persist SUBMITTED rows (all share the same tx_hash).
+        kick_tx_ids = []
+        for pk in prepared_kicks:
+            kick_tx_id = self._insert_kick_tx(
+                run_id, pk.candidate, now_iso,
+                status=KickStatus.SUBMITTED, tx_hash=tx_hash,
+                sell_amount=pk.sell_amount_str, starting_price=pk.starting_price_str,
+                minimum_price=pk.minimum_price_str, usd_value=pk.usd_value_str,
+            )
+            kick_tx_ids.append(kick_tx_id)
 
-        logger.info("txn_kick_submitted", tx_hash=tx_hash, kick_tx_id=kick_tx_id, **log_ctx)
+        logger.info("txn_batch_submitted", tx_hash=tx_hash, batch_size=batch_size)
 
-        # 10. Wait for receipt.
+        # 8. Wait for receipt.
         try:
             receipt = await self.web3_client.get_transaction_receipt(tx_hash, timeout_seconds=120)
         except Exception as exc:  # noqa: BLE001
-            # Receipt timeout — row stays SUBMITTED, blocks future sends for this pair.
-            logger.warning("txn_receipt_timeout", tx_hash=tx_hash, error=str(exc), **log_ctx)
-            return KickResult(
-                kick_tx_id=kick_tx_id,
-                status=KickStatus.SUBMITTED,
-                tx_hash=tx_hash,
-                sell_amount=sell_amount_str,
-                starting_price=starting_price_str,
-                minimum_price=minimum_price_str,
-                live_balance_raw=live_balance_raw,
-                usd_value=usd_value_str,
-                error_message=f"receipt timeout: {exc}",
-            )
+            logger.warning("txn_batch_receipt_timeout", tx_hash=tx_hash, error=str(exc))
+            return [
+                KickResult(
+                    kick_tx_id=kick_tx_ids[i],
+                    status=KickStatus.SUBMITTED,
+                    tx_hash=tx_hash,
+                    sell_amount=pk.sell_amount_str,
+                    starting_price=pk.starting_price_str,
+                    minimum_price=pk.minimum_price_str,
+                    live_balance_raw=pk.live_balance_raw,
+                    usd_value=pk.usd_value_str,
+                    error_message=f"receipt timeout: {exc}",
+                )
+                for i, pk in enumerate(prepared_kicks)
+            ]
 
-        # 11. Update to CONFIRMED or REVERTED.
+        # 9. Update all rows to CONFIRMED or REVERTED.
         receipt_status = receipt.get("status", 0)
         receipt_gas_used = receipt.get("gasUsed")
         effective_gas_price = receipt.get("effectiveGasPrice")
         receipt_block = receipt.get("blockNumber")
         effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
 
-        if receipt_status == 1:
-            final_status = KickStatus.CONFIRMED
-            logger.info(
-                "txn_kick_confirmed",
-                tx_hash=tx_hash,
-                block_number=receipt_block,
-                gas_used=receipt_gas_used,
-                **log_ctx,
-            )
+        final_status = KickStatus.CONFIRMED if receipt_status == 1 else KickStatus.REVERTED
+
+        if final_status == KickStatus.CONFIRMED:
+            logger.info("txn_batch_confirmed", tx_hash=tx_hash, block_number=receipt_block, gas_used=receipt_gas_used, batch_size=batch_size)
         else:
-            final_status = KickStatus.REVERTED
-            logger.warning("txn_kick_reverted", tx_hash=tx_hash, block_number=receipt_block, **log_ctx)
+            logger.warning("txn_batch_reverted", tx_hash=tx_hash, block_number=receipt_block, batch_size=batch_size)
 
-        self.kick_tx_repository.update_status(
-            kick_tx_id,
-            status=final_status,
-            gas_used=receipt_gas_used,
-            gas_price_gwei=effective_gwei,
-            block_number=receipt_block,
-        )
+        results = []
+        for i, pk in enumerate(prepared_kicks):
+            self.kick_tx_repository.update_status(
+                kick_tx_ids[i],
+                status=final_status,
+                gas_used=receipt_gas_used,
+                gas_price_gwei=effective_gwei,
+                block_number=receipt_block,
+            )
+            results.append(KickResult(
+                kick_tx_id=kick_tx_ids[i],
+                status=final_status,
+                tx_hash=tx_hash,
+                gas_used=receipt_gas_used,
+                gas_price_gwei=effective_gwei,
+                block_number=receipt_block,
+                sell_amount=pk.sell_amount_str,
+                starting_price=pk.starting_price_str,
+                minimum_price=pk.minimum_price_str,
+                live_balance_raw=pk.live_balance_raw,
+                usd_value=pk.usd_value_str,
+            ))
+        return results
 
-        return KickResult(
-            kick_tx_id=kick_tx_id,
-            status=final_status,
-            tx_hash=tx_hash,
-            gas_used=receipt_gas_used,
-            gas_price_gwei=effective_gwei,
-            block_number=receipt_block,
-            sell_amount=sell_amount_str,
-            starting_price=starting_price_str,
-            minimum_price=minimum_price_str,
-            live_balance_raw=live_balance_raw,
-            usd_value=usd_value_str,
-        )
+    # ------------------------------------------------------------------
+    # Convenience wrapper (single-kick API)
+    # ------------------------------------------------------------------
+
+    async def kick(self, candidate: KickCandidate, run_id: str) -> KickResult:
+        """Execute the full kick flow for a single candidate."""
+        result = await self.prepare_kick(candidate, run_id)
+        if isinstance(result, KickResult):
+            return result
+        batch_results = await self.execute_batch([result], run_id)
+        return batch_results[0]

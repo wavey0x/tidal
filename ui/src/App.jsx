@@ -243,7 +243,7 @@ function EtherscanTxLink({ txHash }) {
       target="_blank"
       rel="noopener noreferrer"
     >
-      {shortenAddress(normalized)}
+      {`${normalized.slice(0, 6)}...${normalized.slice(-4)}`}
     </a>
   );
 }

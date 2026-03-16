@@ -45,6 +45,23 @@ class KickCandidate:
 
 
 @dataclass(slots=True)
+class PreparedKick:
+    """Output of the prepare phase — everything needed to include this kick in a batch."""
+
+    candidate: KickCandidate
+    sell_amount: int
+    starting_price_raw: int
+    minimum_price_raw: int
+    sell_amount_str: str
+    starting_price_str: str
+    minimum_price_str: str
+    usd_value_str: str
+    live_balance_raw: int
+    normalized_balance: str
+    quote_amount_str: str
+
+
+@dataclass(slots=True)
 class KickDecision:
     """Evaluator output — whether to kick and why."""
 

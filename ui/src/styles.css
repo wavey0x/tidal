@@ -730,13 +730,6 @@ tbody tr:hover td {
   text-decoration: underline;
 }
 
-tr.vault-group-multi:not(.vault-group-last) > td {
-  border-bottom: 1px dotted var(--divider-subtle);
-}
-
-td[rowspan] {
-  vertical-align: middle;
-}
 
 @media (max-width: 900px) {
   .meta {

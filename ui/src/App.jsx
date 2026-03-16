@@ -698,50 +698,6 @@ export default function App() {
     return filtered;
   }, [normalizedRows, searchTerm, selectedToken, auctionFilter, balanceSortDirection]);
 
-  const groupedRows = useMemo(() => {
-    const groupMap = new Map();
-    for (const row of filteredRows) {
-      const key = row.vaultAddress || row.strategyAddress;
-      if (!groupMap.has(key)) {
-        groupMap.set(key, {
-          vaultAddress: row.vaultAddress,
-          vaultName: row.vaultName,
-          vaultSymbol: row.vaultSymbol,
-          strategies: [],
-        });
-      }
-      groupMap.get(key).strategies.push(row);
-    }
-
-    const groups = Array.from(groupMap.values());
-
-    for (const group of groups) {
-      group.strategies.sort((a, b) => {
-        const totalA = parseBig(a.totalUsdValue);
-        const totalB = parseBig(b.totalUsdValue);
-        if (!totalA && !totalB) return 0;
-        if (!totalA) return 1;
-        if (!totalB) return -1;
-        return -totalA.cmp(totalB);
-      });
-      group.sortValue = group.strategies.reduce((max, row) => {
-        const v = parseBig(row.totalUsdValue);
-        if (!v) return max;
-        return max && max.gte(v) ? max : v;
-      }, null);
-    }
-
-    groups.sort((a, b) => {
-      if (!a.sortValue && !b.sortValue) return 0;
-      if (!a.sortValue) return 1;
-      if (!b.sortValue) return -1;
-      const cmp = a.sortValue.cmp(b.sortValue);
-      if (cmp === 0) return 0;
-      return balanceSortDirection === "desc" ? -cmp : cmp;
-    });
-
-    return groups;
-  }, [filteredRows, balanceSortDirection]);
 
   const latestVisibleScan = useMemo(() => {
     if (!filteredRows.length) {
@@ -941,57 +897,42 @@ export default function App() {
               </tr>
             ) : null}
             {!loadingRows
-              ? groupedRows.map((group) =>
-                  group.strategies.map((row, strategyIndex) => {
-                    const isMulti = group.strategies.length > 1;
-                    const isFirst = strategyIndex === 0;
-                    const isLast = strategyIndex === group.strategies.length - 1;
-                    const classes = [
-                      isMulti ? "vault-group-multi" : "",
-                      isMulti && isFirst ? "vault-group-first" : "",
-                      isMulti && isLast ? "vault-group-last" : "",
-                    ].filter(Boolean).join(" ");
-
-                    return (
-                      <tr key={row.strategyAddress} className={classes || undefined}>
-                        <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)}>
-                          {formatRelativeTimestamp(row.scannedAt, nowMs)}
-                        </td>
-                        {isFirst ? (
-                          <td rowSpan={group.strategies.length}>
-                            <EntityIdentity
-                              primary={row.vaultSymbol || row.vaultName || "Unknown Vault"}
-                              address={row.vaultAddress}
-                            />
-                          </td>
-                        ) : null}
-                        <td>
-                          <EntityIdentity
-                            primary={formatStrategyDisplayName(row.strategyName)}
-                            address={row.strategyAddress}
-                          />
-                        </td>
-                        <td className="auction-cell">
-                          <AuctionAddressCell
-                            address={row.auctionAddress}
-                            version={row.auctionVersion}
-                            kicks={row.kicks}
-                            nowMs={nowMs}
-                            isExpanded={expandedKickRows.has(row.strategyAddress)}
-                            onToggleExpand={() => toggleKickExpand(row.strategyAddress)}
-                          />
-                        </td>
-                        <td>
-                          <TokenBalances
-                            balances={row.balances}
-                            displayMode={displayMode}
-                            onToggleMode={toggleDisplayMode}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )
+              ? filteredRows.map((row) => (
+                  <tr key={row.strategyAddress}>
+                    <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)}>
+                      {formatRelativeTimestamp(row.scannedAt, nowMs)}
+                    </td>
+                    <td>
+                      <EntityIdentity
+                        primary={row.vaultSymbol || row.vaultName || "Unknown Vault"}
+                        address={row.vaultAddress}
+                      />
+                    </td>
+                    <td>
+                      <EntityIdentity
+                        primary={formatStrategyDisplayName(row.strategyName)}
+                        address={row.strategyAddress}
+                      />
+                    </td>
+                    <td className="auction-cell">
+                      <AuctionAddressCell
+                        address={row.auctionAddress}
+                        version={row.auctionVersion}
+                        kicks={row.kicks}
+                        nowMs={nowMs}
+                        isExpanded={expandedKickRows.has(row.strategyAddress)}
+                        onToggleExpand={() => toggleKickExpand(row.strategyAddress)}
+                      />
+                    </td>
+                    <td>
+                      <TokenBalances
+                        balances={row.balances}
+                        displayMode={displayMode}
+                        onToggleMode={toggleDisplayMode}
+                      />
+                    </td>
+                  </tr>
+                ))
               : null}
           </tbody>
         </table>

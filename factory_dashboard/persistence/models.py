@@ -23,6 +23,7 @@ vaults = Table(
     Column("name", String, nullable=True),
     Column("symbol", String, nullable=True),
     Column("active", Integer, nullable=False, server_default="1"),
+    Column("deposit_limit", Text, nullable=True),
     Column("first_seen_at", String, nullable=False),
     Column("last_seen_at", String, nullable=False),
 )
@@ -38,6 +39,7 @@ strategies = Table(
     Column("active", Integer, nullable=False, server_default="1"),
     Column("auction_address", String, nullable=True),
     Column("want_address", String, nullable=True),
+    Column("auction_version", String, nullable=True),
     Column("auction_updated_at", String, nullable=True),
     Column("auction_error_message", Text, nullable=True),
     Column("first_seen_at", String, nullable=False),

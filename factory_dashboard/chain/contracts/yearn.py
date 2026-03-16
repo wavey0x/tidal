@@ -181,6 +181,13 @@ class YearnNameReader:
             return None
         return str(value).strip() or None
 
+    async def read_vault_deposit_limit(self, vault_address: str) -> str | None:
+        contract = self.web3_client.contract(vault_address, VAULT_ABI)
+        value = await self.web3_client.call(contract.functions.depositLimit())
+        if value is None:
+            return None
+        return str(value)
+
     async def read_strategy_name(self, strategy_address: str) -> str | None:
         contract = self.web3_client.contract(strategy_address, STRATEGY_ABI)
         value = await self.web3_client.call(contract.functions.name())

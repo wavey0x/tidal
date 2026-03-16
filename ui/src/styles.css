@@ -169,7 +169,7 @@ body {
 
 .controls {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: end;
   border-bottom: 1px solid var(--divider-subtle);
@@ -194,6 +194,25 @@ body {
   padding: 8px;
   border-radius: 4px;
   font-size: 12px;
+}
+
+.zero-balance-toggle {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding-bottom: 8px;
+}
+
+.zero-balance-toggle input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
 }
 
 .controls select:focus,
@@ -381,6 +400,22 @@ tbody tr:hover td {
   flex-direction: column;
   width: 160px;
   min-width: 160px;
+}
+
+.auction-address-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.auction-version-badge {
+  font-size: 9px;
+  color: var(--text-faint);
+  border: 1px solid var(--divider-strong);
+  border-radius: 3px;
+  padding: 1px 4px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .last-scan-col {
@@ -693,6 +728,14 @@ tbody tr:hover td {
 .etherscan-link:hover {
   color: var(--text-primary);
   text-decoration: underline;
+}
+
+tr.vault-group-multi:not(.vault-group-last) > td {
+  border-bottom: 1px dotted var(--divider-subtle);
+}
+
+td[rowspan] {
+  vertical-align: middle;
 }
 
 @media (max-width: 900px) {

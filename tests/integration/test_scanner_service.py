@@ -152,6 +152,10 @@ class FakeStrategyAuctionMapper:
             "0x1111111111111111111111111111111111111111": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "0x2222222222222222222222222222222222222222": None,
         }
+        self.cached_versions = {
+            "0x1111111111111111111111111111111111111111": "1.0.0",
+            "0x2222222222222222222222222222222222222222": None,
+        }
 
     async def refresh_for_strategies(self, strategy_addresses: list[str]) -> AuctionMappingRefreshResult:
         self.refresh_calls += 1
@@ -163,8 +167,10 @@ class FakeStrategyAuctionMapper:
         return AuctionMappingRefreshResult(
             strategy_to_auction={strategy: self.cached_mapping.get(strategy) for strategy in strategy_set},
             strategy_to_want={strategy: None for strategy in strategy_set},
+            strategy_to_auction_version={strategy: self.cached_versions.get(strategy) for strategy in strategy_set},
             auction_count=4,
-            governance_allowed_auction_count=2,
+            valid_auction_count=2,
+            receiver_filtered_count=0,
             mapped_count=mapped_count,
             unmapped_count=len(strategy_set) - mapped_count,
             source="fresh",
@@ -263,7 +269,9 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
         assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_address"] == (
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
+        assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_version"] == "1.0.0"
         assert strategy_rows_by_address["0x2222222222222222222222222222222222222222"]["auction_address"] is None
+        assert strategy_rows_by_address["0x2222222222222222222222222222222222222222"]["auction_version"] is None
 
 
 @pytest.mark.asyncio
@@ -349,6 +357,7 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
         assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_address"] == (
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
+        assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_version"] == "1.0.0"
         assert strategy_rows_by_address["0x1111111111111111111111111111111111111111"]["auction_error_message"] == (
             "auction mapping rpc failed"
         )

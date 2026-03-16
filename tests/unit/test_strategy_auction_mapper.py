@@ -29,6 +29,12 @@ class FakeAuctionFunctions:
     def governance(self) -> FakeCall:
         return FakeCall("auction.governance", self.address)
 
+    def receiver(self) -> FakeCall:
+        return FakeCall("auction.receiver", self.address)
+
+    def version(self) -> FakeCall:
+        return FakeCall("auction.version", self.address)
+
 
 class FakeStrategyFunctions:
     def __init__(self, address: str):
@@ -59,12 +65,16 @@ class FakeWeb3Client:
         auctions: list[str],
         auction_wants: dict[str, str],
         auction_governance: dict[str, str],
+        auction_receivers: dict[str, str],
+        auction_versions: dict[str, str] | None = None,
         strategy_wants: dict[str, str],
     ):
         self.factory_address = factory_address.lower()
         self.auctions = auctions
         self.auction_wants = {key.lower(): value for key, value in auction_wants.items()}
         self.auction_governance = {key.lower(): value for key, value in auction_governance.items()}
+        self.auction_receivers = {key.lower(): value for key, value in auction_receivers.items()}
+        self.auction_versions = {key.lower(): value for key, value in (auction_versions or {}).items()}
         self.strategy_wants = {key.lower(): value for key, value in strategy_wants.items()}
 
     def contract(self, address: str, abi):  # noqa: ANN001
@@ -83,6 +93,12 @@ class FakeWeb3Client:
             return self.auction_wants[call_fn.address]
         if call_fn.method == "auction.governance":
             return self.auction_governance[call_fn.address]
+        if call_fn.method == "auction.receiver":
+            return self.auction_receivers[call_fn.address]
+        if call_fn.method == "auction.version":
+            if call_fn.address not in self.auction_versions:
+                raise RuntimeError("version not available")
+            return self.auction_versions[call_fn.address]
         if call_fn.method == "strategy.want":
             return self.strategy_wants[call_fn.address]
         raise RuntimeError(f"unknown call: {call_fn.method}")
@@ -109,7 +125,7 @@ class FakeMulticallClient:
 
 
 @pytest.mark.asyncio
-async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance_filter() -> None:
+async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance_and_receiver() -> None:
     factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
     required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
     other_governance = "0x1111111111111111111111111111111111111111"
@@ -139,6 +155,15 @@ async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance
                 auction_wrong_governance: other_governance,
                 auction_new: required_governance,
             },
+            auction_receivers={
+                auction_old: strategy_a,
+                auction_wrong_governance: strategy_b,
+                auction_new: strategy_a,
+            },
+            auction_versions={
+                auction_old: "1.0.0",
+                auction_new: "1.0.1",
+            },
             strategy_wants={
                 strategy_a: token_a,
                 strategy_b: token_b,
@@ -154,7 +179,8 @@ async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance
 
     assert result.source == "fresh"
     assert result.auction_count == 3
-    assert result.governance_allowed_auction_count == 2
+    assert result.valid_auction_count == 2
+    assert result.receiver_filtered_count == 0
     assert result.mapped_count == 1
     assert result.unmapped_count == 2
     assert result.strategy_to_auction == {
@@ -162,6 +188,116 @@ async def test_strategy_auction_mapper_uses_latest_factory_order_with_governance
         strategy_b.lower(): None,
         strategy_c.lower(): None,
     }
+    assert result.strategy_to_auction_version == {
+        strategy_a.lower(): "1.0.1",
+        strategy_b.lower(): None,
+        strategy_c.lower(): None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_strategy_auction_mapper_requires_receiver_match() -> None:
+    """Auction with correct governance and want but mismatched receiver is not mapped."""
+    factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
+    required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
+    token_a = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+
+    auction = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    other_receiver = "0x9999999999999999999999999999999999999999"
+    strategy = "0x1111111111111111111111111111111111111111"
+
+    mapper = StrategyAuctionMapper(
+        web3_client=FakeWeb3Client(
+            factory_address=factory,
+            auctions=[auction],
+            auction_wants={auction: token_a},
+            auction_governance={auction: required_governance},
+            auction_receivers={auction: other_receiver},
+            auction_versions={auction: "1.0.0"},
+            strategy_wants={strategy: token_a},
+        ),
+        chain_id=1,
+        auction_factory_address=factory,
+        required_governance_address=required_governance,
+    )
+
+    result = await mapper.refresh_for_strategies([strategy])
+
+    assert result.valid_auction_count == 1
+    assert result.receiver_filtered_count == 0
+    assert result.mapped_count == 0
+    assert result.strategy_to_auction[strategy.lower()] is None
+    assert result.strategy_to_auction_version[strategy.lower()] is None
+
+
+@pytest.mark.asyncio
+async def test_strategy_auction_mapper_version_failure_still_maps() -> None:
+    """version() failure does not prevent auction matching."""
+    factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
+    required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
+    token_a = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+
+    auction = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    strategy = "0x1111111111111111111111111111111111111111"
+
+    mapper = StrategyAuctionMapper(
+        web3_client=FakeWeb3Client(
+            factory_address=factory,
+            auctions=[auction],
+            auction_wants={auction: token_a},
+            auction_governance={auction: required_governance},
+            auction_receivers={auction: strategy},
+            # No auction_versions — version() will raise
+            strategy_wants={strategy: token_a},
+        ),
+        chain_id=1,
+        auction_factory_address=factory,
+        required_governance_address=required_governance,
+    )
+
+    result = await mapper.refresh_for_strategies([strategy])
+
+    assert result.mapped_count == 1
+    assert result.strategy_to_auction[strategy.lower()] == auction.lower()
+    assert result.strategy_to_auction_version[strategy.lower()] is None
+
+
+@pytest.mark.asyncio
+async def test_strategy_auction_mapper_receiver_filtered_count() -> None:
+    """Auctions with None/zero receiver are counted as receiver-filtered."""
+    factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
+    required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
+    token_a = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+
+    auction_no_receiver = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    auction_zero_receiver = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    strategy = "0x1111111111111111111111111111111111111111"
+
+    mapper = StrategyAuctionMapper(
+        web3_client=FakeWeb3Client(
+            factory_address=factory,
+            auctions=[auction_no_receiver, auction_zero_receiver],
+            auction_wants={auction_no_receiver: token_a, auction_zero_receiver: token_a},
+            auction_governance={
+                auction_no_receiver: required_governance,
+                auction_zero_receiver: required_governance,
+            },
+            auction_receivers={
+                auction_no_receiver: "0x0000000000000000000000000000000000000000",
+                auction_zero_receiver: "0x0000000000000000000000000000000000000000",
+            },
+            strategy_wants={strategy: token_a},
+        ),
+        chain_id=1,
+        auction_factory_address=factory,
+        required_governance_address=required_governance,
+    )
+
+    result = await mapper.refresh_for_strategies([strategy])
+
+    assert result.valid_auction_count == 0
+    assert result.receiver_filtered_count == 2
+    assert result.mapped_count == 0
 
 
 @pytest.mark.asyncio
@@ -178,8 +314,12 @@ async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_r
         responses={
             (auction_old.lower(), "governance"): (True, abi_encode(["address"], [required_governance])),
             (auction_old.lower(), "want"): (True, abi_encode(["address"], [token_a])),
+            (auction_old.lower(), "receiver"): (True, abi_encode(["address"], [strategy])),
+            (auction_old.lower(), "version"): (True, abi_encode(["string"], ["1.0.0"])),
             (auction_new.lower(), "governance"): (True, abi_encode(["address"], [required_governance])),
             (auction_new.lower(), "want"): (True, abi_encode(["address"], [token_a])),
+            (auction_new.lower(), "receiver"): (True, abi_encode(["address"], [strategy])),
+            (auction_new.lower(), "version"): (True, abi_encode(["string"], ["1.0.1"])),
             (strategy.lower(),): (True, abi_encode(["address"], [token_a])),
         }
     )
@@ -190,6 +330,7 @@ async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_r
             auctions=[auction_old, auction_new],
             auction_wants={auction_old: token_a, auction_new: token_a},
             auction_governance={auction_old: required_governance, auction_new: required_governance},
+            auction_receivers={auction_old: strategy, auction_new: strategy},
             strategy_wants={strategy: token_a},
         ),
         chain_id=1,
@@ -205,4 +346,7 @@ async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_r
     assert multicall.calls == 2
     assert result.strategy_to_auction == {
         strategy.lower(): auction_new.lower(),
+    }
+    assert result.strategy_to_auction_version == {
+        strategy.lower(): "1.0.1",
     }

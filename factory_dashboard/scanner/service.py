@@ -140,7 +140,8 @@ class ScannerService:
         }
         stage_e_stats = {
             "auction_count": 0,
-            "governance_allowed_auction_count": 0,
+            "valid_auction_count": 0,
+            "receiver_filtered_count": 0,
             "strategies_mapped": 0,
             "strategies_unmapped": 0,
             "source": "none",
@@ -215,9 +216,11 @@ class ScannerService:
                 mapping_result.strategy_to_auction,
                 updated_at=auction_updated_at,
                 strategy_to_want=mapping_result.strategy_to_want,
+                strategy_to_auction_version=mapping_result.strategy_to_auction_version,
             )
             stage_e_stats["auction_count"] = mapping_result.auction_count
-            stage_e_stats["governance_allowed_auction_count"] = mapping_result.governance_allowed_auction_count
+            stage_e_stats["valid_auction_count"] = mapping_result.valid_auction_count
+            stage_e_stats["receiver_filtered_count"] = mapping_result.receiver_filtered_count
             stage_e_stats["strategies_mapped"] = mapping_result.mapped_count
             stage_e_stats["strategies_unmapped"] = mapping_result.unmapped_count
             stage_e_stats["source"] = mapping_result.source
@@ -444,7 +447,8 @@ class ScannerService:
             price_tokens_failed=stage_d_stats["tokens_failed"],
             price_tokens_skipped=price_tokens_skipped,
             auction_count=stage_e_stats["auction_count"],
-            governance_allowed_auctions=stage_e_stats["governance_allowed_auction_count"],
+            valid_auctions=stage_e_stats["valid_auction_count"],
+            receiver_filtered_auctions=stage_e_stats["receiver_filtered_count"],
             strategies_with_auction=stage_e_stats["strategies_mapped"],
             strategies_without_auction=stage_e_stats["strategies_unmapped"],
             auction_mapping_source=stage_e_stats["source"],
@@ -530,6 +534,21 @@ class ScannerService:
                 continue
             if vault_symbol:
                 self.vault_repository.set_symbol(vault_address, vault_symbol)
+
+        for vault_address in vault_addresses:
+            try:
+                deposit_limit = await self.name_reader.read_vault_deposit_limit(vault_address)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(
+                    ScanItemError(
+                        stage="METADATA",
+                        error_code="vault_deposit_limit_lookup_failed",
+                        error_message=str(exc),
+                    )
+                )
+                continue
+            if deposit_limit is not None:
+                self.vault_repository.set_deposit_limit(vault_address, deposit_limit)
 
         missing_strategy_names = self.strategy_repository.addresses_missing_name(strategy_addresses)
         for strategy_address in missing_strategy_names:

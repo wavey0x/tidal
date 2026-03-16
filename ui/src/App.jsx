@@ -247,7 +247,7 @@ function EtherscanTxLink({ txHash }) {
   );
 }
 
-function AuctionAddressCell({ address, kicks, nowMs, isExpanded, onToggleExpand }) {
+function AuctionAddressCell({ address, version, kicks, nowMs, isExpanded, onToggleExpand }) {
   const hasKicks = kicks && kicks.length > 0;
   const hasChevron = kicks && kicks.length > 1;
 
@@ -261,7 +261,10 @@ function AuctionAddressCell({ address, kicks, nowMs, isExpanded, onToggleExpand 
 
   return (
     <div className="auction-value-slot">
-      <AddressCopy address={address} />
+      <span className="auction-address-row">
+        <AddressCopy address={address} />
+        {version ? <span className="auction-version-badge mono">{version}</span> : null}
+      </span>
       {hasKicks ? (
         <div className="kick-history">
           <div className="kick-summary">
@@ -386,6 +389,8 @@ export default function App() {
   const [balanceSortDirection, setBalanceSortDirection] = useState("desc");
   const [themePreference, setThemePreference] = useState(getStoredThemePreference);
   const [systemTheme, setSystemTheme] = useState(resolveSystemTheme);
+  const [showZeroBalance, setShowZeroBalance] = useState(false);
+  const [showClosedVaults, setShowClosedVaults] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [tokens, setTokens] = useState([]);
   const [rows, setRows] = useState([]);
@@ -622,8 +627,9 @@ export default function App() {
           totalUsdValue,
         };
       })
-      .filter((row) => row.balances.length > 0);
-  }, [rows]);
+      .filter((row) => showZeroBalance || row.balances.length > 0)
+      .filter((row) => showClosedVaults || row.depositLimit !== "0");
+  }, [rows, showZeroBalance, showClosedVaults]);
 
   const filteredRows = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -692,6 +698,51 @@ export default function App() {
 
     return filtered;
   }, [normalizedRows, searchTerm, selectedToken, auctionFilter, balanceSortDirection]);
+
+  const groupedRows = useMemo(() => {
+    const groupMap = new Map();
+    for (const row of filteredRows) {
+      const key = row.vaultAddress || row.strategyAddress;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          vaultAddress: row.vaultAddress,
+          vaultName: row.vaultName,
+          vaultSymbol: row.vaultSymbol,
+          strategies: [],
+        });
+      }
+      groupMap.get(key).strategies.push(row);
+    }
+
+    const groups = Array.from(groupMap.values());
+
+    for (const group of groups) {
+      group.strategies.sort((a, b) => {
+        const totalA = parseBig(a.totalUsdValue);
+        const totalB = parseBig(b.totalUsdValue);
+        if (!totalA && !totalB) return 0;
+        if (!totalA) return 1;
+        if (!totalB) return -1;
+        return -totalA.cmp(totalB);
+      });
+      group.sortValue = group.strategies.reduce((max, row) => {
+        const v = parseBig(row.totalUsdValue);
+        if (!v) return max;
+        return max && max.gte(v) ? max : v;
+      }, null);
+    }
+
+    groups.sort((a, b) => {
+      if (!a.sortValue && !b.sortValue) return 0;
+      if (!a.sortValue) return 1;
+      if (!b.sortValue) return -1;
+      const cmp = a.sortValue.cmp(b.sortValue);
+      if (cmp === 0) return 0;
+      return balanceSortDirection === "desc" ? -cmp : cmp;
+    });
+
+    return groups;
+  }, [filteredRows, balanceSortDirection]);
 
   const latestVisibleScan = useMemo(() => {
     if (!filteredRows.length) {
@@ -788,6 +839,24 @@ export default function App() {
             placeholder="strategy, vault, auction, token symbol, address"
           />
         </label>
+
+        <label className="zero-balance-toggle">
+          <input
+            type="checkbox"
+            checked={showZeroBalance}
+            onChange={(e) => setShowZeroBalance(e.target.checked)}
+          />
+          <span>Show strategies with 0 reward balances</span>
+        </label>
+
+        <label className="zero-balance-toggle">
+          <input
+            type="checkbox"
+            checked={showClosedVaults}
+            onChange={(e) => setShowClosedVaults(e.target.checked)}
+          />
+          <span>Show vaults with 0 deposit limit</span>
+        </label>
       </section>
 
       {error ? <p className="error">{error}</p> : null}
@@ -797,8 +866,8 @@ export default function App() {
           <thead>
             <tr>
               <th className="last-scan-col">Last Scan</th>
-              <th>Strategy</th>
               <th>Vault</th>
+              <th>Strategy</th>
               <th className="auction-col">
                 <span className="th-header-inline">
                   <span>Auction</span>
@@ -873,41 +942,57 @@ export default function App() {
               </tr>
             ) : null}
             {!loadingRows
-              ? filteredRows.map((row) => (
-                  <tr key={row.strategyAddress}>
-                    <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)}>
-                      {formatRelativeTimestamp(row.scannedAt, nowMs)}
-                    </td>
-                    <td>
-                      <EntityIdentity
-                        primary={formatStrategyDisplayName(row.strategyName)}
-                        address={row.strategyAddress}
-                      />
-                    </td>
-                    <td>
-                      <EntityIdentity
-                        primary={row.vaultSymbol || row.vaultName || "Unknown Vault"}
-                        address={row.vaultAddress}
-                      />
-                    </td>
-                    <td className="auction-cell">
-                      <AuctionAddressCell
-                        address={row.auctionAddress}
-                        kicks={row.kicks}
-                        nowMs={nowMs}
-                        isExpanded={expandedKickRows.has(row.strategyAddress)}
-                        onToggleExpand={() => toggleKickExpand(row.strategyAddress)}
-                      />
-                    </td>
-                    <td>
-                      <TokenBalances
-                        balances={row.balances}
-                        displayMode={displayMode}
-                        onToggleMode={toggleDisplayMode}
-                      />
-                    </td>
-                  </tr>
-                ))
+              ? groupedRows.map((group) =>
+                  group.strategies.map((row, strategyIndex) => {
+                    const isMulti = group.strategies.length > 1;
+                    const isFirst = strategyIndex === 0;
+                    const isLast = strategyIndex === group.strategies.length - 1;
+                    const classes = [
+                      isMulti ? "vault-group-multi" : "",
+                      isMulti && isFirst ? "vault-group-first" : "",
+                      isMulti && isLast ? "vault-group-last" : "",
+                    ].filter(Boolean).join(" ");
+
+                    return (
+                      <tr key={row.strategyAddress} className={classes || undefined}>
+                        <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)}>
+                          {formatRelativeTimestamp(row.scannedAt, nowMs)}
+                        </td>
+                        {isFirst ? (
+                          <td rowSpan={group.strategies.length}>
+                            <EntityIdentity
+                              primary={row.vaultSymbol || row.vaultName || "Unknown Vault"}
+                              address={row.vaultAddress}
+                            />
+                          </td>
+                        ) : null}
+                        <td>
+                          <EntityIdentity
+                            primary={formatStrategyDisplayName(row.strategyName)}
+                            address={row.strategyAddress}
+                          />
+                        </td>
+                        <td className="auction-cell">
+                          <AuctionAddressCell
+                            address={row.auctionAddress}
+                            version={row.auctionVersion}
+                            kicks={row.kicks}
+                            nowMs={nowMs}
+                            isExpanded={expandedKickRows.has(row.strategyAddress)}
+                            onToggleExpand={() => toggleKickExpand(row.strategyAddress)}
+                          />
+                        </td>
+                        <td>
+                          <TokenBalances
+                            balances={row.balances}
+                            displayMode={displayMode}
+                            onToggleMode={toggleDisplayMode}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })
+                )
               : null}
           </tbody>
         </table>

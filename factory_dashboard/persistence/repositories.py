@@ -55,6 +55,7 @@ class StrategyRepository:
         *,
         updated_at: str,
         strategy_to_want: dict[str, str | None] | None = None,
+        strategy_to_auction_version: dict[str, str | None] | None = None,
     ) -> None:
         for strategy_address, auction_address in strategy_to_auction.items():
             values: dict[str, object] = {
@@ -64,6 +65,8 @@ class StrategyRepository:
             }
             if strategy_to_want is not None:
                 values["want_address"] = strategy_to_want.get(strategy_address)
+            if strategy_to_auction_version is not None:
+                values["auction_version"] = strategy_to_auction_version.get(strategy_address)
             self.session.execute(
                 update(models.strategies)
                 .where(models.strategies.c.address == strategy_address)
@@ -144,6 +147,13 @@ class VaultRepository:
             update(models.vaults)
             .where(models.vaults.c.address == address)
             .values(symbol=symbol)
+        )
+
+    def set_deposit_limit(self, address: str, deposit_limit: str) -> None:
+        self.session.execute(
+            update(models.vaults)
+            .where(models.vaults.c.address == address)
+            .values(deposit_limit=deposit_limit)
         )
 
     def delete_addresses_if_orphaned(self, addresses: list[str]) -> None:

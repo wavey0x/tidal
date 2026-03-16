@@ -12,13 +12,26 @@ from factory_dashboard.chain.contracts.multicall import MulticallClient, Multica
 from factory_dashboard.constants import ZERO_ADDRESS
 from factory_dashboard.normalizers import normalize_address
 
+_AUCTION_METADATA_FIELDS = ("governance", "want", "receiver", "version")
+_AUCTION_ADDRESS_FIELDS = frozenset({"governance", "want", "receiver"})
+
+
+@dataclass(slots=True)
+class AuctionMetadata:
+    governance: str | None = None
+    want: str | None = None
+    receiver: str | None = None
+    version: str | None = None
+
 
 @dataclass(slots=True)
 class AuctionMappingRefreshResult:
     strategy_to_auction: dict[str, str | None]
     strategy_to_want: dict[str, str | None]
+    strategy_to_auction_version: dict[str, str | None]
     auction_count: int
-    governance_allowed_auction_count: int
+    valid_auction_count: int
+    receiver_filtered_count: int
     mapped_count: int
     unmapped_count: int
     source: str
@@ -49,28 +62,43 @@ class StrategyAuctionMapper:
     async def refresh_for_strategies(self, strategy_addresses: list[str]) -> AuctionMappingRefreshResult:
         normalized_strategies = sorted({normalize_address(address) for address in strategy_addresses})
 
-        want_to_auction: dict[str, str] = {}
         auction_addresses = await self._read_auction_addresses()
         auction_metadata = await self._read_auction_metadata_many(auction_addresses)
 
-        governance_allowed_auction_count = 0
+        # Build lookup keyed by (want, receiver) — latest by factory order wins.
+        want_receiver_to_auction: dict[tuple[str, str], tuple[str, AuctionMetadata]] = {}
+        valid_auction_count = 0
+        receiver_filtered_count = 0
+
         for auction_address in auction_addresses:
-            entry = auction_metadata.get(auction_address, {})
-            governance_address = entry.get("governance")
-            want_address = entry.get("want")
-            if governance_address != self.required_governance_address:
+            meta = auction_metadata.get(auction_address)
+            if meta is None:
                 continue
-            if want_address is None or want_address == ZERO_ADDRESS:
+            if meta.governance != self.required_governance_address:
                 continue
-            governance_allowed_auction_count += 1
-            # Last address wins to match the "newest by factory order" rule.
-            want_to_auction[want_address] = auction_address
+            if meta.want is None or meta.want == ZERO_ADDRESS:
+                continue
+            if meta.receiver is None or meta.receiver == ZERO_ADDRESS:
+                receiver_filtered_count += 1
+                continue
+            valid_auction_count += 1
+            want_receiver_to_auction[(meta.want, meta.receiver)] = (auction_address, meta)
 
         strategy_to_auction: dict[str, str | None] = {}
+        strategy_to_auction_version: dict[str, str | None] = {}
         strategy_wants = await self._read_strategy_wants_many(normalized_strategies)
+
         for strategy_address in normalized_strategies:
             strategy_want = strategy_wants.get(strategy_address)
-            strategy_to_auction[strategy_address] = want_to_auction.get(strategy_want)
+            match = None
+            if strategy_want is not None:
+                match = want_receiver_to_auction.get((strategy_want, strategy_address))
+            if match is not None:
+                strategy_to_auction[strategy_address] = match[0]
+                strategy_to_auction_version[strategy_address] = match[1].version
+            else:
+                strategy_to_auction[strategy_address] = None
+                strategy_to_auction_version[strategy_address] = None
 
         mapped_count = sum(1 for auction_address in strategy_to_auction.values() if auction_address)
         unmapped_count = len(strategy_to_auction) - mapped_count
@@ -78,8 +106,10 @@ class StrategyAuctionMapper:
         return AuctionMappingRefreshResult(
             strategy_to_auction=strategy_to_auction,
             strategy_to_want=strategy_wants,
+            strategy_to_auction_version=strategy_to_auction_version,
             auction_count=len(auction_addresses),
-            governance_allowed_auction_count=governance_allowed_auction_count,
+            valid_auction_count=valid_auction_count,
+            receiver_filtered_count=receiver_filtered_count,
             mapped_count=mapped_count,
             unmapped_count=unmapped_count,
             source="fresh",
@@ -90,12 +120,9 @@ class StrategyAuctionMapper:
         result = await self.web3_client.call(factory.functions.getAllAuctions())
         return [normalize_address(address) for address in result]
 
-    async def _read_auction_metadata_many(self, auction_addresses: list[str]) -> dict[str, dict[str, str | None]]:
-        output = {
-            auction_address: {
-                "governance": None,
-                "want": None,
-            }
+    async def _read_auction_metadata_many(self, auction_addresses: list[str]) -> dict[str, AuctionMetadata]:
+        output: dict[str, AuctionMetadata] = {
+            auction_address: AuctionMetadata()
             for auction_address in auction_addresses
         }
         if not auction_addresses:
@@ -104,40 +131,45 @@ class StrategyAuctionMapper:
         if not self.multicall_enabled or self.multicall_client is None:
             for auction_address in auction_addresses:
                 auction_contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+                meta = output[auction_address]
                 try:
-                    output[auction_address]["governance"] = normalize_address(
+                    meta.governance = normalize_address(
                         await self.web3_client.call(auction_contract.functions.governance())
                     )
                 except Exception:  # noqa: BLE001
-                    output[auction_address]["governance"] = None
-
+                    pass
                 try:
-                    output[auction_address]["want"] = normalize_address(
+                    meta.want = normalize_address(
                         await self.web3_client.call(auction_contract.functions.want())
                     )
                 except Exception:  # noqa: BLE001
-                    output[auction_address]["want"] = None
+                    pass
+                try:
+                    meta.receiver = normalize_address(
+                        await self.web3_client.call(auction_contract.functions.receiver())
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    meta.version = await self.web3_client.call(
+                        auction_contract.functions.version()
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             return output
 
         requests: list[MulticallRequest] = []
         for auction_address in auction_addresses:
             auction_contract = self.web3_client.contract(auction_address, AUCTION_ABI)
-            governance_fn = auction_contract.functions.governance()
-            want_fn = auction_contract.functions.want()
-            requests.append(
-                MulticallRequest(
-                    target=auction_address,
-                    call_data=bytes(HexBytes(governance_fn._encode_transaction_data())),
-                    logical_key=(auction_address, "governance"),
+            for field_name in _AUCTION_METADATA_FIELDS:
+                fn = getattr(auction_contract.functions, field_name)()
+                requests.append(
+                    MulticallRequest(
+                        target=auction_address,
+                        call_data=bytes(HexBytes(fn._encode_transaction_data())),
+                        logical_key=(auction_address, field_name),
+                    )
                 )
-            )
-            requests.append(
-                MulticallRequest(
-                    target=auction_address,
-                    call_data=bytes(HexBytes(want_fn._encode_transaction_data())),
-                    logical_key=(auction_address, "want"),
-                )
-            )
 
         multicall_results = await self.multicall_client.execute(
             requests,
@@ -151,10 +183,13 @@ class StrategyAuctionMapper:
             if not result.success:
                 continue
             try:
-                decoded = normalize_address(abi_decode(["address"], result.return_data)[0])
+                if field in _AUCTION_ADDRESS_FIELDS:
+                    decoded = normalize_address(abi_decode(["address"], result.return_data)[0])
+                else:
+                    decoded = abi_decode(["string"], result.return_data)[0]
             except Exception:  # noqa: BLE001
                 continue
-            output[auction_address][field] = decoded
+            setattr(output[auction_address], field, decoded)
 
         return output
 

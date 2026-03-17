@@ -38,7 +38,6 @@ telegram_alerts_enabled: false
 # ── Transaction Service ──────────────────────────────
 auction_kicker_address: "0x41ED19012d6A571543d64581acB7fb84061de819"
 txn_usd_threshold: 100
-txn_max_fee_per_gas_gwei: 50
 txn_max_base_fee_gwei: 0.5
 txn_max_priority_fee_gwei: 2
 txn_max_gas_limit: 500000

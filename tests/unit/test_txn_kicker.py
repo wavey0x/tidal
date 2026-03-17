@@ -84,7 +84,6 @@ def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None,
         "kick_tx_repository": kick_tx_repo,
         "price_provider": price_provider,
         "usd_threshold": 100.0,
-        "max_fee_per_gas_gwei": 50,
         "max_base_fee_gwei": 0.5,
         "max_priority_fee_gwei": 2,
         "max_gas_limit": 500000,
@@ -431,7 +430,7 @@ async def test_kick_confirm_fn_declined(session):
     assert "gas_cost_eth" in summary
     assert summary["base_fee_gwei"] == 0.1  # 0.1 gwei from mock
     assert summary["priority_fee_gwei"] == 0.05  # from mock
-    assert summary["max_fee_per_gas_gwei"] == 50  # max_fee_per_gas_gwei default
+    assert summary["max_fee_per_gas_gwei"] == 2.5  # max(0.5, 0.1) + 2
     assert summary["gas_cost_eth"] == pytest.approx(200000 * 0.1 / 1e9)
 
     # Should NOT have tried to send.

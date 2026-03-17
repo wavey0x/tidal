@@ -44,9 +44,9 @@ class AuctionKicker:
         price_provider: TokenPriceAggProvider,
         auction_kicker_address: str,
         usd_threshold: float,
-        max_fee_per_gas_gwei: int,
-        max_base_fee_gwei: float | None,
+        max_base_fee_gwei: float,
         max_priority_fee_gwei: int,
+        skip_base_fee_check: bool = False,
         max_gas_limit: int,
         start_price_buffer_bps: int,
         min_price_buffer_bps: int,
@@ -59,9 +59,9 @@ class AuctionKicker:
         self.price_provider = price_provider
         self.auction_kicker_address = auction_kicker_address
         self.usd_threshold = usd_threshold
-        self.max_fee_per_gas_gwei = max_fee_per_gas_gwei
         self.max_base_fee_gwei = max_base_fee_gwei
         self.max_priority_fee_gwei = max_priority_fee_gwei
+        self.skip_base_fee_check = skip_base_fee_check
         self.max_gas_limit = max_gas_limit
         self.start_price_buffer_bps = start_price_buffer_bps
         self.min_price_buffer_bps = min_price_buffer_bps
@@ -278,7 +278,7 @@ class AuctionKicker:
                 status=KickStatus.ERROR, error_message=f"base fee check failed: {exc}",
             )
 
-        if self.max_base_fee_gwei is not None and base_fee_gwei > self.max_base_fee_gwei:
+        if not self.skip_base_fee_check and base_fee_gwei > self.max_base_fee_gwei:
             return self._fail_batch(
                 run_id, prepared_kicks, now_iso,
                 status=KickStatus.ERROR,
@@ -349,7 +349,7 @@ class AuctionKicker:
                 "gas_limit": gas_limit,
                 "base_fee_gwei": base_fee_gwei,
                 "priority_fee_gwei": priority_fee_wei / 1e9,
-                "max_fee_per_gas_gwei": self.max_fee_per_gas_gwei,
+                "max_fee_per_gas_gwei": max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei,
                 "gas_cost_eth": gas_estimate * base_fee_gwei / 1e9,
             }
 
@@ -375,7 +375,7 @@ class AuctionKicker:
 
         # 5. Sign + send.
         nonce = await self.web3_client.get_transaction_count(self.signer.address)
-        max_fee_wei = self.max_fee_per_gas_gwei * 10**9
+        max_fee_wei = int((max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei) * 10**9)
 
         full_tx = {
             "to": kicker_address,

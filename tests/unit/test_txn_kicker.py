@@ -75,7 +75,7 @@ def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None,
         price_provider = AsyncMock()
         # Default: 2500 USDC (6 decimals) → with 10% buffer → startingPrice = 2750.
         price_provider.quote = AsyncMock(
-            return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": None})
+            return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 2_500_000_000})
         )
 
     kick_tx_repo = KickTxRepository(session)
@@ -650,7 +650,7 @@ async def test_starting_price_usd_want_token(session):
     # Quote returns 2500 USDC (6 decimals) → with 10% buffer → 2750.
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 2_500_000_000})
     )
 
     with patch(
@@ -698,7 +698,7 @@ async def test_starting_price_non_usd_want_token(session):
     # Quote returns ~0.0797 WETH (18 decimals) → with 10% buffer → ceil = 1.
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=79_666_666_666_666_667, token_out_decimals=18, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=79_666_666_666_666_667, token_out_decimals=18, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 79_666_666_666_666_667})
     )
 
     with patch(
@@ -744,7 +744,7 @@ async def test_starting_price_ceil_ensures_nonzero(session):
     # Quote returns 10 raw USDC (6 decimals) = 0.00001 USDC → with 10% buffer → ceil = 1.
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=10, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=10, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 10})
     )
 
     with patch(
@@ -793,7 +793,7 @@ async def test_starting_price_ceiling_logs_precision_loss(session):
     # 1 is >2x of 0.0715, so the warning should fire.
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=65_000_000_000_000_000, token_out_decimals=18, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=65_000_000_000_000_000, token_out_decimals=18, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 65_000_000_000_000_000})
     )
 
     with patch(
@@ -849,7 +849,7 @@ async def test_starting_price_no_precision_loss_warning_when_normal(session):
     # Quote returns 2500 USDC → ceil(2500 * 1.1) = 2750. Not inflated.
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 2_500_000_000})
     )
 
     with patch(
@@ -901,7 +901,7 @@ async def test_starting_price_real_tx_scenario(session):
     # Quote returns 239 USDC (6 decimals) → with 10% buffer → ceil(262.9) = 263.
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=239_000_000, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=239_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 239_000_000})
     )
 
     with patch(
@@ -966,7 +966,7 @@ async def test_kick_quote_no_amount_out(session):
 
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=None, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=None, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 0})
     )
 
     with patch(
@@ -1015,7 +1015,7 @@ async def test_minimum_price_derived_from_quote(session):
     # minimumPrice  = floor(2500 * 0.95) = 2375
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 2_500_000_000})
     )
 
     with patch(
@@ -1065,7 +1065,7 @@ async def test_minimum_price_clamps_to_zero(session):
     # floor(0.00001 * 0.95) = floor(0.0000095) = 0
     price_provider = AsyncMock()
     price_provider.quote = AsyncMock(
-        return_value=QuoteResult(amount_out_raw=10, token_out_decimals=6, provider_statuses={"curve": None})
+        return_value=QuoteResult(amount_out_raw=10, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 10})
     )
 
     with patch(
@@ -1385,7 +1385,8 @@ async def test_prepare_kick_curve_unavailable_skips(session):
         return_value=QuoteResult(
             amount_out_raw=2_500_000_000,
             token_out_decimals=6,
-            provider_statuses={"curve": "timeout", "defillama": None},
+            provider_statuses={"curve": "timeout", "defillama": "ok"},
+            provider_amounts={"defillama": 2_500_000_000},
         )
     )
 
@@ -1418,7 +1419,8 @@ async def test_prepare_kick_curve_available_proceeds(session):
         return_value=QuoteResult(
             amount_out_raw=2_500_000_000,
             token_out_decimals=6,
-            provider_statuses={"curve": None, "defillama": None},
+            provider_statuses={"curve": "ok", "defillama": "ok"},
+            provider_amounts={"curve": 2_500_000_000, "defillama": 2_400_000_000},
         )
     )
 
@@ -1450,6 +1452,7 @@ async def test_prepare_kick_curve_not_required_proceeds(session):
             amount_out_raw=2_500_000_000,
             token_out_decimals=6,
             provider_statuses={"curve": "timeout"},
+            provider_amounts={},
         )
     )
 
@@ -1495,7 +1498,10 @@ async def test_confirmed_kick_persists_audit_columns(session):
 
     fake_response = {
         "summary": {"high_amount_out": "2500000000"},
-        "providers": {"curve": {"status": None}, "defillama": {"status": None}},
+        "providers": {
+            "curve": {"status": "ok", "amount_out": 2_500_000_000},
+            "defillama": {"status": "ok", "amount_out": 2_400_000_000},
+        },
         "token_out": {"decimals": 6},
     }
     price_provider = AsyncMock()
@@ -1503,8 +1509,9 @@ async def test_confirmed_kick_persists_audit_columns(session):
         return_value=QuoteResult(
             amount_out_raw=2_500_000_000,
             token_out_decimals=6,
-            provider_statuses={"curve": None},
+            provider_statuses={"curve": "ok", "defillama": "ok"},
             raw_response=fake_response,
+            provider_amounts={"curve": 2_500_000_000, "defillama": 2_400_000_000},
         )
     )
 

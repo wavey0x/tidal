@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from factory_dashboard.pricing.token_price_agg import TokenPriceAggProvider, TokenPriceNotFoundError
+from factory_dashboard.pricing.token_price_agg import QuoteResult, TokenPriceAggProvider, TokenPriceNotFoundError
 
 
 def _provider(api_key: str | None = None) -> TokenPriceAggProvider:
@@ -36,9 +36,9 @@ def test_extract_price_usd_not_found_when_high_price_missing() -> None:
             "high_price": None,
         },
         "providers": {
-            "curve": {"status": "unsupported_token"},
-            "defillama": {"status": "invalid_request"},
-            "enso": {"status": "timeout"},
+            "curve": {"status": "no_route"},
+            "defillama": {"status": "bad_request"},
+            "enso": {"status": "error"},
         },
     }
 
@@ -54,8 +54,8 @@ def test_extract_price_usd_missing_high_price_with_transient_errors() -> None:
             "high_price": None,
         },
         "providers": {
-            "curve": {"status": "timeout"},
-            "defillama": {"status": "timeout"},
+            "curve": {"status": "error"},
+            "defillama": {"status": "error"},
         },
     }
 
@@ -136,7 +136,7 @@ async def test_quote_usd_returns_logo_url_when_price_not_found() -> None:
                 "high_price": None,
             },
             "providers": {
-                "curve": {"status": "unsupported_token"},
+                "curve": {"status": "no_route"},
             },
         }
 
@@ -164,3 +164,55 @@ async def test_quote_usd_treats_http_404_payload_without_summary_as_not_found() 
 
     assert quote.price_usd is None
     assert quote.logo_url is None
+
+
+# ---------------------------------------------------------------------------
+# curve_quote_available tests
+# ---------------------------------------------------------------------------
+
+
+def test_curve_quote_available_with_positive_amount() -> None:
+    result = QuoteResult(amount_out_raw=100, token_out_decimals=6, provider_amounts={"curve": 742100})
+    assert result.curve_quote_available() is True
+
+
+def test_curve_quote_available_with_zero_amount() -> None:
+    result = QuoteResult(amount_out_raw=100, token_out_decimals=6, provider_amounts={"curve": 0})
+    assert result.curve_quote_available() is False
+
+
+def test_curve_quote_available_missing_curve() -> None:
+    result = QuoteResult(amount_out_raw=100, token_out_decimals=6, provider_amounts={"defillama": 742100})
+    assert result.curve_quote_available() is False
+
+
+def test_curve_quote_available_empty_amounts() -> None:
+    result = QuoteResult(amount_out_raw=100, token_out_decimals=6)
+    assert result.curve_quote_available() is False
+
+
+@pytest.mark.asyncio
+async def test_quote_parses_per_provider_amounts() -> None:
+    provider = _provider()
+
+    async def fake_get_price(client, path, params):  # noqa: ANN001
+        del client, path, params
+        return {
+            "summary": {"high_amount_out": "742100"},
+            "token_out": {"decimals": 6},
+            "providers": {
+                "curve": {"status": "ok", "amount_out": 742100},
+                "defillama": {"status": "ok", "amount_out": 740000},
+                "enso": {"status": "error", "amount_out": None},
+            },
+        }
+
+    provider._get_price = fake_get_price  # type: ignore[method-assign]  # noqa: SLF001
+    result = await provider.quote(
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "1000000000000000000",
+    )
+
+    assert result.provider_amounts == {"curve": 742100, "defillama": 740000}
+    assert result.curve_quote_available() is True

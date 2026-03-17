@@ -25,10 +25,11 @@ class QuoteResult:
     token_out_decimals: int | None
     provider_statuses: dict[str, str | None] = field(default_factory=dict)
     raw_response: dict | None = None
+    provider_amounts: dict[str, int] = field(default_factory=dict)
 
     def curve_quote_available(self) -> bool:
-        """True if the Curve provider contributed to this quote."""
-        return "curve" in self.provider_statuses and self.provider_statuses["curve"] is None
+        """True if the Curve provider returned a positive amount."""
+        return self.provider_amounts.get("curve", 0) > 0
 
 
 class TokenPriceNotFoundError(Exception):
@@ -111,17 +112,26 @@ class TokenPriceAggProvider:
                         pass
 
         provider_statuses = {}
-        providers = payload.get("providers")
-        if isinstance(providers, dict):
-            for name, entry in providers.items():
-                if isinstance(entry, dict):
-                    provider_statuses[name] = entry.get("status")
+        provider_amounts: dict[str, int] = {}
+        if isinstance(payload, dict):
+            providers = payload.get("providers")
+            if isinstance(providers, dict):
+                for name, entry in providers.items():
+                    if isinstance(entry, dict):
+                        provider_statuses[name] = entry.get("status")
+                        raw_amount = entry.get("amount_out")
+                        if raw_amount is not None:
+                            try:
+                                provider_amounts[name] = int(raw_amount)
+                            except (ValueError, TypeError):
+                                pass
 
         return QuoteResult(
             amount_out_raw=amount_out_raw,
             token_out_decimals=token_out_decimals,
             provider_statuses=provider_statuses,
             raw_response=payload if isinstance(payload, dict) else None,
+            provider_amounts=provider_amounts,
         )
 
     async def quote_usd(self, token_address: str, token_decimals: int) -> TokenPriceQuote:
@@ -242,9 +252,9 @@ def _looks_like_not_found_payload(payload: Any) -> bool:
     if not statuses:
         return True
 
-    has_not_found_signal = any(status in {"unsupported_token", "invalid_request"} for status in statuses)
+    has_not_found_signal = any(status in {"no_route", "bad_request"} for status in statuses)
     has_other_signal = any(
-        status not in {"unsupported_token", "invalid_request", "timeout"}
+        status not in {"no_route", "bad_request", "error"}
         for status in statuses
     )
     return has_not_found_signal and not has_other_signal

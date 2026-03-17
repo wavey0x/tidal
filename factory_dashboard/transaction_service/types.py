@@ -99,3 +99,4 @@ class TxnRunResult:
     kicks_attempted: int
     kicks_succeeded: int
     kicks_failed: int
+    failure_summary: dict[str, int] | None = None

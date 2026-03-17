@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import uuid
+from collections import Counter
 from pathlib import Path
 
 import structlog
@@ -107,6 +108,7 @@ class TxnService:
         # Phase 1: Prepare all candidates.
         prepared: list[PreparedKick] = []
         candidates_to_prepare: list[KickCandidate] = []
+        failed_messages: list[str] = []
 
         for decision in decisions:
             if decision.action == KickAction.SKIP:
@@ -155,6 +157,8 @@ class TxnService:
                         kicks_attempted -= 1
                     elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
                         kicks_failed += 1
+                        if result.error_message:
+                            failed_messages.append(result.error_message)
                 else:
                     prepared.append(result)
 
@@ -172,6 +176,8 @@ class TxnService:
                     kicks_succeeded += 1
                 elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
                     kicks_failed += 1
+                    if result.error_message:
+                        failed_messages.append(result.error_message)
                 elif result.status == KickStatus.USER_SKIPPED:
                     kicks_attempted -= 1
 
@@ -208,6 +214,10 @@ class TxnService:
             failed=kicks_failed,
         )
 
+        failure_summary = None
+        if failed_messages:
+            failure_summary = dict(Counter(failed_messages))
+
         return TxnRunResult(
             run_id=run_id,
             status=status,
@@ -215,6 +225,7 @@ class TxnService:
             kicks_attempted=kicks_attempted,
             kicks_succeeded=kicks_succeeded,
             kicks_failed=kicks_failed,
+            failure_summary=failure_summary,
         )
 
     def _acquire_lock(self):

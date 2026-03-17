@@ -7,12 +7,13 @@ import logging
 import structlog
 
 
-def configure_logging() -> None:
+def configure_logging(*, verbose: bool = False) -> None:
     """Configure stdlib + structlog for consistent scanner logs."""
 
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         format="%(message)s",
-        level=logging.INFO,
+        level=level,
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)

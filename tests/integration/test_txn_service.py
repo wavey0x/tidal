@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from factory_dashboard.persistence import models
 from factory_dashboard.persistence.repositories import KickTxRepository, TxnRunRepository
 from factory_dashboard.transaction_service.service import TxnService
-from factory_dashboard.transaction_service.types import KickResult
+from factory_dashboard.transaction_service.types import KickCandidate, KickResult, KickStatus, PreparedKick
 
 
 @pytest.fixture
@@ -65,6 +65,23 @@ def _seed_candidate(session, *, strategy_address="0xstrategy1", token_address="0
         scanned_at=now,
     ))
     session.commit()
+
+
+def _make_prepared_kick(candidate: KickCandidate) -> PreparedKick:
+    """Build a PreparedKick from a KickCandidate for test mocks."""
+    return PreparedKick(
+        candidate=candidate,
+        sell_amount=1000000000000000000000,
+        starting_price_raw=1000,
+        minimum_price_raw=900,
+        sell_amount_str="1000000000000000000000",
+        starting_price_str="1000",
+        minimum_price_str="900",
+        usd_value_str=str(candidate.usd_value),
+        live_balance_raw=1000000000000000000000,
+        normalized_balance=candidate.normalized_balance,
+        quote_amount_str="1000",
+    )
 
 
 def _build_txn_service(session, *, kicker=None, lock_path=None):
@@ -145,13 +162,14 @@ async def test_live_kick_confirmed(session):
     _seed_candidate(session)
 
     kicker = MagicMock()
-    kicker.kick = AsyncMock(return_value=KickResult(
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id: _make_prepared_kick(c))
+    kicker.execute_batch = AsyncMock(return_value=[KickResult(
         kick_tx_id=1,
-        status="CONFIRMED",
+        status=KickStatus.CONFIRMED,
         tx_hash="0xabc",
         gas_used=180000,
         block_number=12345,
-    ))
+    )])
 
     service = _build_txn_service(session, kicker=kicker)
     result = await service.run_once(live=True)
@@ -171,11 +189,12 @@ async def test_live_kick_reverted(session):
     _seed_candidate(session)
 
     kicker = MagicMock()
-    kicker.kick = AsyncMock(return_value=KickResult(
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id: _make_prepared_kick(c))
+    kicker.execute_batch = AsyncMock(return_value=[KickResult(
         kick_tx_id=1,
-        status="REVERTED",
+        status=KickStatus.REVERTED,
         tx_hash="0xdef",
-    ))
+    )])
 
     service = _build_txn_service(session, kicker=kicker)
     result = await service.run_once(live=True)
@@ -186,13 +205,13 @@ async def test_live_kick_reverted(session):
 
 @pytest.mark.asyncio
 async def test_live_skip_below_threshold_not_counted(session):
-    """Live kicker returning SKIP should decrement kicks_attempted."""
+    """Live kicker returning SKIP from prepare should decrement kicks_attempted."""
     _seed_candidate(session)
 
     kicker = MagicMock()
-    kicker.kick = AsyncMock(return_value=KickResult(
+    kicker.prepare_kick = AsyncMock(return_value=KickResult(
         kick_tx_id=0,
-        status="SKIP",
+        status=KickStatus.SKIP,
         error_message="below threshold on live balance",
     ))
 
@@ -210,11 +229,12 @@ async def test_submitted_blocks_resend(session):
 
     # First run: kick returns SUBMITTED (receipt timeout).
     kicker = MagicMock()
-    kicker.kick = AsyncMock(return_value=KickResult(
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id: _make_prepared_kick(c))
+    kicker.execute_batch = AsyncMock(return_value=[KickResult(
         kick_tx_id=1,
-        status="SUBMITTED",
+        status=KickStatus.SUBMITTED,
         tx_hash="0xpending",
-    ))
+    )])
 
     service = _build_txn_service(session, kicker=kicker)
     result1 = await service.run_once(live=True)

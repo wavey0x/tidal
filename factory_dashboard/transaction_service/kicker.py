@@ -164,7 +164,32 @@ class AuctionKicker:
             min_price_buffer_bps=min_price_buffer_bps,
             normalized_balance=normalized_balance,
         )
+        logger.debug(
+            "txn_candidate_failed",
+            run_id=run_id,
+            strategy=candidate.strategy_address,
+            token=candidate.token_address,
+            token_symbol=candidate.token_symbol,
+            want_symbol=candidate.want_symbol,
+            auction=candidate.auction_address,
+            status=status.value,
+            error_message=error_message,
+        )
         return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
+
+    def _pk_audit_kwargs(self, pk: PreparedKick) -> dict[str, object]:
+        """Extract common audit + pricing kwargs from a PreparedKick."""
+        return {
+            "sell_amount": pk.sell_amount_str,
+            "starting_price": pk.starting_price_str,
+            "minimum_price": pk.minimum_price_str,
+            "usd_value": pk.usd_value_str,
+            "quote_amount": pk.quote_amount_str,
+            "quote_response_json": pk.quote_response_json,
+            "start_price_buffer_bps": self.start_price_buffer_bps,
+            "min_price_buffer_bps": self.min_price_buffer_bps,
+            "normalized_balance": pk.normalized_balance,
+        }
 
     def _fail_batch(
         self,
@@ -180,13 +205,7 @@ class AuctionKicker:
             self._fail(
                 run_id, pk.candidate, now_iso,
                 status=status, error_message=error_message,
-                sell_amount=pk.sell_amount_str, starting_price=pk.starting_price_str,
-                minimum_price=pk.minimum_price_str, usd_value=pk.usd_value_str,
-                quote_amount=pk.quote_amount_str,
-                quote_response_json=pk.quote_response_json,
-                start_price_buffer_bps=self.start_price_buffer_bps,
-                min_price_buffer_bps=self.min_price_buffer_bps,
-                normalized_balance=pk.normalized_balance,
+                **self._pk_audit_kwargs(pk),
             )
             for pk in prepared_kicks
         ]
@@ -410,13 +429,7 @@ class AuctionKicker:
                     kick_tx_id = self._insert_kick_tx(
                         run_id, pk.candidate, now_iso,
                         status=KickStatus.USER_SKIPPED,
-                        sell_amount=pk.sell_amount_str, starting_price=pk.starting_price_str,
-                        minimum_price=pk.minimum_price_str, usd_value=pk.usd_value_str,
-                        quote_amount=pk.quote_amount_str,
-                        quote_response_json=pk.quote_response_json,
-                        start_price_buffer_bps=self.start_price_buffer_bps,
-                        min_price_buffer_bps=self.min_price_buffer_bps,
-                        normalized_balance=pk.normalized_balance,
+                        **self._pk_audit_kwargs(pk),
                     )
                     results.append(KickResult(
                         kick_tx_id=kick_tx_id,
@@ -460,13 +473,7 @@ class AuctionKicker:
             kick_tx_id = self._insert_kick_tx(
                 run_id, pk.candidate, now_iso,
                 status=KickStatus.SUBMITTED, tx_hash=tx_hash,
-                sell_amount=pk.sell_amount_str, starting_price=pk.starting_price_str,
-                minimum_price=pk.minimum_price_str, usd_value=pk.usd_value_str,
-                quote_amount=pk.quote_amount_str,
-                quote_response_json=pk.quote_response_json,
-                start_price_buffer_bps=self.start_price_buffer_bps,
-                min_price_buffer_bps=self.min_price_buffer_bps,
-                normalized_balance=pk.normalized_balance,
+                **self._pk_audit_kwargs(pk),
             )
             kick_tx_ids.append(kick_tx_id)
 

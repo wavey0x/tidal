@@ -226,13 +226,13 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
     return _confirm_batch
 
 
-def _run_txn_once(*, live: bool, confirm: bool, config: Path | None, batch: bool) -> None:
+def _run_txn_once(*, live: bool, confirm: bool, config: Path | None, batch: bool, verbose: bool = False) -> None:
     """Execute a single transaction evaluation cycle."""
 
     if confirm:
         live = True
 
-    configure_logging()
+    configure_logging(verbose=verbose)
     settings = load_settings(config)
     try:
         _require_rpc_url(settings)
@@ -272,6 +272,11 @@ def _run_txn_once(*, live: bool, confirm: bool, config: Path | None, batch: bool
                 f"succeeded={result.kicks_succeeded} failed={result.kicks_failed}"
             )
         )
+        if verbose and result.failure_summary:
+            typer.echo(
+                f"txn_failure_summary run_id={result.run_id} "
+                + " ".join(f"{k}={v}" for k, v in result.failure_summary.items())
+            )
 
 
 @txn_app.callback()
@@ -281,11 +286,12 @@ def txn(
     confirm: bool = typer.Option(default=False, help="Interactive confirmation before each kick (implies --live)"),
     batch: bool = typer.Option(default=False, help="Send a single batchKick() instead of individual kick() per candidate"),
     config: Path | None = typer.Option(default=None, exists=True, file_okay=True, dir_okay=False),
+    verbose: bool = typer.Option(default=False, help="Show per-candidate failure details and grouped summary"),
 ) -> None:
     """Evaluate kick candidates and send transactions."""
     if ctx.invoked_subcommand is not None:
         return
-    _run_txn_once(live=live, confirm=confirm, config=config, batch=batch)
+    _run_txn_once(live=live, confirm=confirm, config=config, batch=batch, verbose=verbose)
 
 
 @txn_app.command("daemon")
@@ -294,10 +300,11 @@ def txn_daemon(
     batch: bool = typer.Option(default=True, help="Use batchKick (default) or individual kick() per candidate"),
     interval_seconds: int | None = typer.Option(default=None, min=1),
     config: Path | None = typer.Option(default=None, exists=True, file_okay=True, dir_okay=False),
+    verbose: bool = typer.Option(default=False, help="Show per-candidate failure details and grouped summary"),
 ) -> None:
     """Run the transaction service continuously."""
 
-    configure_logging()
+    configure_logging(verbose=verbose)
     settings = load_settings(config)
     try:
         _require_rpc_url(settings)
@@ -338,6 +345,11 @@ def txn_daemon(
                         f"succeeded={result.kicks_succeeded} failed={result.kicks_failed}"
                     )
                 )
+                if verbose and result.failure_summary:
+                    typer.echo(
+                        f"txn_failure_summary run_id={result.run_id} "
+                        + " ".join(f"{k}={v}" for k, v in result.failure_summary.items())
+                    )
             await asyncio.sleep(sleep_seconds)
 
     asyncio.run(_run())

@@ -7,6 +7,7 @@ const THEME_SEQUENCE = ["light", "dark"];
 const API_BASE_URL = (import.meta.env.VITE_FACTORY_DASHBOARD_API_BASE_URL || "/api").replace(/\/$/, "");
 const ETHERSCAN_TX_URL = "https://etherscan.io/tx/";
 const ETHERSCAN_ADDRESS_URL = "https://etherscan.io/address/";
+const COW_EXPLORER_URL = "https://explorer.cow.fi/address/";
 const FAILED_STATUSES = new Set(["REVERTED", "ERROR", "ESTIMATE_FAILED"]);
 const FAINT_STATUSES = new Set(["DRY_RUN", "SUBMITTED", "USER_SKIPPED", "SKIP"]);
 
@@ -372,18 +373,34 @@ function StatusBadge({ status }) {
   return <span className={className}>{status}</span>;
 }
 
+function formatProviderAmount(amountOut, decimals, status) {
+  if (amountOut == null) return status || "—";
+  if (decimals != null) {
+    try {
+      return formatBalance(new Big(String(amountOut)).div(new Big(10).pow(decimals)).toString());
+    } catch { /* fall through */ }
+  }
+  return String(amountOut);
+}
+
 function KickDetailPanel({ kick }) {
   let quoteProviders = null;
+  let quoteSummary = null;
+  let tokenOutDecimals = null;
+
   if (kick.quoteResponseJson) {
     try {
       const parsed = JSON.parse(kick.quoteResponseJson);
-      if (Array.isArray(parsed)) {
-        quoteProviders = parsed;
-      } else if (parsed && typeof parsed === "object") {
-        quoteProviders = Object.entries(parsed).map(([name, data]) => ({
+      if (parsed.providers && typeof parsed.providers === "object") {
+        tokenOutDecimals = parsed.tokenOutDecimals ?? parsed.token_out?.decimals ?? null;
+        quoteProviders = Object.entries(parsed.providers).map(([name, entry]) => ({
           name,
-          ...(typeof data === "object" ? data : { amount: data }),
+          status: entry?.status ?? null,
+          amountOut: entry?.amount_out ?? null,
         }));
+      }
+      if (parsed.summary && typeof parsed.summary === "object") {
+        quoteSummary = parsed.summary;
       }
     } catch {
       // ignore parse errors
@@ -435,13 +452,26 @@ function KickDetailPanel({ kick }) {
             <div className="kick-detail-item">
               <div className="kick-detail-label">Quote Providers</div>
               <div className="kick-detail-value">
-                {quoteProviders.map((provider, i) => (
-                  <div key={i}>
-                    {provider.name || provider.provider || `Provider ${i + 1}`}
-                    {provider.status ? ` — ${provider.status}` : ""}
-                    {provider.amount ? ` — ${provider.amount}` : ""}
+                {quoteProviders.map((p) => (
+                  <div key={p.name}>
+                    {p.name}: {formatProviderAmount(p.amountOut, tokenOutDecimals, p.status)}
                   </div>
                 ))}
+              </div>
+            </div>
+          ) : null}
+          {quoteSummary ? (
+            <div className="kick-detail-item">
+              <div className="kick-detail-label">Quote Summary</div>
+              <div className="kick-detail-value">
+                {quoteSummary.high_amount_out != null && tokenOutDecimals != null ? (
+                  <div>Best: {formatProviderAmount(quoteSummary.high_amount_out, tokenOutDecimals)}</div>
+                ) : quoteSummary.high_amount_out != null ? (
+                  <div>Best: {String(quoteSummary.high_amount_out)}</div>
+                ) : null}
+                {quoteSummary.successful_providers != null ? (
+                  <div>Successful providers: {quoteSummary.successful_providers}</div>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -455,6 +485,21 @@ function KickDetailPanel({ kick }) {
             <div className="kick-detail-label">Run ID</div>
             <div className="kick-detail-value">{kick.runId || "—"}</div>
           </div>
+          {kick.auctionAddress ? (
+            <div className="kick-detail-item">
+              <div className="kick-detail-label">CoW Protocol</div>
+              <div className="kick-detail-value">
+                <a
+                  href={`${COW_EXPLORER_URL}${kick.auctionAddress}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cow-explorer-link"
+                >
+                  view on 🐮 explorer
+                </a>
+              </div>
+            </div>
+          ) : null}
         </div>
       </td>
     </tr>

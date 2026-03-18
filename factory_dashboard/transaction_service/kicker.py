@@ -33,6 +33,19 @@ _GAS_ESTIMATE_BUFFER = 1.2
 _DEFAULT_PRIORITY_FEE_GWEI = 0.1
 
 
+def _clean_quote_response(raw: dict) -> dict:
+    """Keep only the fields useful for the kick log UI."""
+    cleaned = {}
+    if "summary" in raw:
+        cleaned["summary"] = raw["summary"]
+    if "providers" in raw:
+        cleaned["providers"] = raw["providers"]
+    token_out = raw.get("token_out")
+    if isinstance(token_out, dict) and "decimals" in token_out:
+        cleaned["tokenOutDecimals"] = token_out["decimals"]
+    return cleaned
+
+
 class AuctionKicker:
     """Builds, signs, and sends kick transactions."""
 
@@ -268,10 +281,18 @@ class AuctionKicker:
                 status=KickStatus.ERROR, error_message=f"quote API failed: {exc}",
             )
 
+        _quote_json = None
+        if quote_result.raw_response is not None:
+            try:
+                _quote_json = json.dumps(_clean_quote_response(quote_result.raw_response))
+            except (TypeError, ValueError):
+                pass
+
         if quote_result.amount_out_raw is None:
             return self._fail(
                 run_id, candidate, now_iso,
                 status=KickStatus.ERROR, error_message="no quote available for this pair",
+                quote_response_json=_quote_json,
             )
 
         if self.require_curve_quote and not quote_result.curve_quote_available():
@@ -280,6 +301,7 @@ class AuctionKicker:
                 run_id, candidate, now_iso,
                 status=KickStatus.ERROR,
                 error_message=f"curve quote unavailable (status: {curve_status})",
+                quote_response_json=_quote_json,
             )
 
         amount_out_normalized = Decimal(to_decimal_string(quote_result.amount_out_raw, quote_result.token_out_decimals))
@@ -302,7 +324,8 @@ class AuctionKicker:
         quote_response_json = None
         if quote_result.raw_response is not None:
             try:
-                quote_response_json = json.dumps(quote_result.raw_response)
+                cleaned = _clean_quote_response(quote_result.raw_response)
+                quote_response_json = json.dumps(cleaned)
             except (TypeError, ValueError):
                 pass
 

@@ -1546,6 +1546,9 @@ async def test_confirmed_kick_persists_audit_columns(session):
     parsed = json.loads(row["quote_response_json"])
     assert parsed["summary"]["high_amount_out"] == "2500000000"
     assert "curve" in parsed["providers"]
+    assert parsed["tokenOutDecimals"] == 6
+    assert "token_out" not in parsed
+    assert "request_id" not in parsed
 
     assert row["start_price_buffer_bps"] == 1000
     assert row["min_price_buffer_bps"] == 500

@@ -929,6 +929,17 @@ tbody tr:hover td {
   color: var(--error);
 }
 
+.cow-explorer-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.cow-explorer-link:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
 .kick-log-empty {
   text-align: center;
   color: var(--text-faint);

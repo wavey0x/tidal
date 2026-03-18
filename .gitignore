@@ -6,6 +6,9 @@ __pycache__/
 *.pyo
 *.pyd
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 .env
 ui/node_modules/
 ui/dist/

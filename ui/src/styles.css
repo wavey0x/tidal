@@ -98,6 +98,7 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
+  position: relative;
 }
 
 .theme-switch {
@@ -760,6 +761,9 @@ tbody tr:hover td {
   background: var(--divider-subtle);
   border-radius: 8px;
   flex-shrink: 0;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .tab-item {

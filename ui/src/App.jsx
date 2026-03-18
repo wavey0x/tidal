@@ -15,6 +15,20 @@ function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
 }
 
+function parseHash() {
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  const [path, query] = raw.split("?");
+  const params = new URLSearchParams(query || "");
+  const page = path === "kicklog" ? "kicks" : "strategies";
+  return { page, runId: params.get("run_id") || null };
+}
+
+function setHash(page, params) {
+  const slug = page === "kicks" ? "kicklog" : "strategies";
+  const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
+  window.history.pushState(null, "", `#/${slug}${qs}`);
+}
+
 function getTokenFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get("token") || ALL_TOKENS;
@@ -569,10 +583,10 @@ function KickDetailPanel({ kick }) {
   );
 }
 
-function KickLogRow({ kick, nowMs, isExpanded, onToggle }) {
+function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef }) {
   return (
     <>
-      <tr className={`kick-log-row ${isExpanded ? "is-expanded" : ""}`} onClick={onToggle}>
+      <tr ref={rowRef} className={`kick-log-row ${isExpanded ? "is-expanded" : ""}`} onClick={onToggle}>
         <td className="mono muted" title={kick.createdAt}>
           {formatRelativeTimestamp(kick.createdAt, nowMs)}
         </td>
@@ -635,7 +649,7 @@ function KickLogSkeletonRows() {
   ));
 }
 
-function KickLogPage({ nowMs }) {
+function KickLogPage({ nowMs, initialRunId }) {
   const [kicks, setKicks] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -644,6 +658,7 @@ function KickLogPage({ nowMs }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedRows, setExpandedRows] = useState(() => new Set());
   const hasFetchedRef = useRef(false);
+  const highlightedRowRef = useRef(null);
 
   useEffect(() => {
     if (hasFetchedRef.current) return;
@@ -679,6 +694,17 @@ function KickLogPage({ nowMs }) {
       controller.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (loading || !initialRunId || !kicks.length) return;
+    const match = kicks.find((k) => k.runId === initialRunId);
+    if (match) {
+      setExpandedRows(new Set([match.id]));
+      requestAnimationFrame(() => {
+        highlightedRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
+  }, [loading, initialRunId, kicks]);
 
   const filteredKicks = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -767,6 +793,7 @@ function KickLogPage({ nowMs }) {
                     nowMs={nowMs}
                     isExpanded={expandedRows.has(kick.id)}
                     onToggle={() => toggleRow(kick.id)}
+                    rowRef={kick.runId === initialRunId ? highlightedRowRef : undefined}
                   />
                 ))
               : null}
@@ -826,7 +853,8 @@ function TokenBalances({
 }
 
 export default function App() {
-  const [activePage, setActivePage] = useState("strategies");
+  const [activePage, setActivePage] = useState(() => parseHash().page);
+  const [initialRunId] = useState(() => parseHash().runId);
   const [selectedToken, setSelectedToken] = useState(getTokenFromUrl);
   const [auctionFilter, setAuctionFilter] = useState("all");
   const [isAuctionFilterMenuOpen, setIsAuctionFilterMenuOpen] = useState(false);
@@ -845,6 +873,26 @@ export default function App() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
   const auctionFilterMenuRef = useRef(null);
+
+  const handlePageChange = (page) => {
+    setActivePage(page);
+    setHash(page);
+  };
+
+  useEffect(() => {
+    if (!window.location.hash) {
+      window.history.replaceState(null, "", "#/strategies");
+    }
+    const onPopState = () => {
+      setActivePage(parseHash().page);
+    };
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("hashchange", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("hashchange", onPopState);
+    };
+  }, []);
 
   const resolvedTheme = themePreference || systemTheme;
   const headerLogoSrc = resolvedTheme === "dark" ? "/factory-dashboard-logo-dark.svg" : "/factory-dashboard-logo-light.svg";
@@ -1208,9 +1256,9 @@ export default function App() {
         </div>
       </header>
 
-      <TabBar activePage={activePage} onChangePage={setActivePage} />
+      <TabBar activePage={activePage} onChangePage={handlePageChange} />
 
-      {activePage === "kicks" ? <KickLogPage nowMs={nowMs} /> : null}
+      {activePage === "kicks" ? <KickLogPage nowMs={nowMs} initialRunId={initialRunId} /> : null}
 
       {activePage === "strategies" ? (
       <>

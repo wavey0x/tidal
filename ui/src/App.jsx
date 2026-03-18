@@ -387,6 +387,7 @@ function KickDetailPanel({ kick }) {
   let quoteProviders = null;
   let quoteSummary = null;
   let tokenOutDecimals = null;
+  let quoteRequestUrl = null;
 
   if (kick.quoteResponseJson) {
     try {
@@ -401,6 +402,9 @@ function KickDetailPanel({ kick }) {
       }
       if (parsed.summary && typeof parsed.summary === "object") {
         quoteSummary = parsed.summary;
+      }
+      if (parsed.requestUrl) {
+        quoteRequestUrl = parsed.requestUrl;
       }
     } catch {
       // ignore parse errors
@@ -485,17 +489,33 @@ function KickDetailPanel({ kick }) {
             <div className="kick-detail-label">Run ID</div>
             <div className="kick-detail-value">{kick.runId || "—"}</div>
           </div>
-          {kick.auctionAddress ? (
+          {(kick.auctionAddress || quoteRequestUrl) ? (
             <div className="kick-detail-item">
               <div className="kick-detail-value">
-                <a
-                  href={`${COW_EXPLORER_URL}${kick.auctionAddress}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="cow-explorer-link"
-                >
-                  view on 🐮 explorer
-                </a>
+                {kick.auctionAddress ? (
+                  <div>
+                    <a
+                      href={`${COW_EXPLORER_URL}${kick.auctionAddress}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cow-explorer-link"
+                    >
+                      view on 🐮 explorer
+                    </a>
+                  </div>
+                ) : null}
+                {quoteRequestUrl ? (
+                  <div>
+                    <a
+                      href={quoteRequestUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cow-explorer-link"
+                    >
+                      view new quote via 🌊 api
+                    </a>
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : null}

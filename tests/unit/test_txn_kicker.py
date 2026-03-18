@@ -1512,6 +1512,7 @@ async def test_confirmed_kick_persists_audit_columns(session):
             provider_statuses={"curve": "ok", "defillama": "ok"},
             raw_response=fake_response,
             provider_amounts={"curve": 2_500_000_000, "defillama": 2_400_000_000},
+            request_url="https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true",
         )
     )
 
@@ -1547,6 +1548,7 @@ async def test_confirmed_kick_persists_audit_columns(session):
     assert parsed["summary"]["high_amount_out"] == "2500000000"
     assert "curve" in parsed["providers"]
     assert parsed["tokenOutDecimals"] == 6
+    assert parsed["requestUrl"] == "https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true"
     assert "token_out" not in parsed
     assert "request_id" not in parsed
 

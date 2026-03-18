@@ -26,6 +26,7 @@ class QuoteResult:
     provider_statuses: dict[str, str | None] = field(default_factory=dict)
     raw_response: dict | None = None
     provider_amounts: dict[str, int] = field(default_factory=dict)
+    request_url: str | None = None
 
     def curve_quote_available(self) -> bool:
         """True if the Curve provider returned a positive amount."""
@@ -85,6 +86,8 @@ class TokenPriceAggProvider:
             "use_underlying": "true",
         }
         client = await self._client()
+        query_string = "&".join(f"{k}={v}" for k, v in params.items())
+        request_url = f"{self.base_url}/v1/quote?{query_string}"
         payload = await call_with_retries(
             lambda: self._get_price(client, "/v1/quote", params),
             attempts=self.retry_attempts,
@@ -132,6 +135,7 @@ class TokenPriceAggProvider:
             provider_statuses=provider_statuses,
             raw_response=payload if isinstance(payload, dict) else None,
             provider_amounts=provider_amounts,
+            request_url=request_url,
         )
 
     async def quote_usd(self, token_address: str, token_decimals: int) -> TokenPriceQuote:

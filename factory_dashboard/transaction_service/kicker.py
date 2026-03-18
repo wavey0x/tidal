@@ -33,7 +33,7 @@ _GAS_ESTIMATE_BUFFER = 1.2
 _DEFAULT_PRIORITY_FEE_GWEI = 0.1
 
 
-def _clean_quote_response(raw: dict) -> dict:
+def _clean_quote_response(raw: dict, *, request_url: str | None = None) -> dict:
     """Keep only the fields useful for the kick log UI."""
     cleaned = {}
     if "summary" in raw:
@@ -43,6 +43,8 @@ def _clean_quote_response(raw: dict) -> dict:
     token_out = raw.get("token_out")
     if isinstance(token_out, dict) and "decimals" in token_out:
         cleaned["tokenOutDecimals"] = token_out["decimals"]
+    if request_url:
+        cleaned["requestUrl"] = request_url
     return cleaned
 
 
@@ -284,7 +286,7 @@ class AuctionKicker:
         _quote_json = None
         if quote_result.raw_response is not None:
             try:
-                _quote_json = json.dumps(_clean_quote_response(quote_result.raw_response))
+                _quote_json = json.dumps(_clean_quote_response(quote_result.raw_response, request_url=quote_result.request_url))
             except (TypeError, ValueError):
                 pass
 
@@ -324,7 +326,7 @@ class AuctionKicker:
         quote_response_json = None
         if quote_result.raw_response is not None:
             try:
-                cleaned = _clean_quote_response(quote_result.raw_response)
+                cleaned = _clean_quote_response(quote_result.raw_response, request_url=quote_result.request_url)
                 quote_response_json = json.dumps(cleaned)
             except (TypeError, ValueError):
                 pass

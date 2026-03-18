@@ -2,6 +2,6 @@
   "rewrites": [
     { "source": "/api", "destination": "https://api.wavey.info/factory-dashboard" },
     { "source": "/api/:path*", "destination": "https://api.wavey.info/factory-dashboard/:path*" },
-    { "source": "/(strategies|kicklog)", "destination": "/index.html" }
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

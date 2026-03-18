@@ -354,9 +354,11 @@ function ThemeSwitch({ themePreference, resolvedTheme, onCycle }) {
 
 function TabBar({ activePage, onChangePage }) {
   return (
-    <nav className="tab-bar">
+    <nav className="tab-bar" role="tablist">
       <button
         type="button"
+        role="tab"
+        aria-selected={activePage === "strategies"}
         className={`tab-item ${activePage === "strategies" ? "is-active" : ""}`}
         onClick={() => onChangePage("strategies")}
       >
@@ -364,6 +366,8 @@ function TabBar({ activePage, onChangePage }) {
       </button>
       <button
         type="button"
+        role="tab"
+        aria-selected={activePage === "kicks"}
         className={`tab-item ${activePage === "kicks" ? "is-active" : ""}`}
         onClick={() => onChangePage("kicks")}
       >
@@ -1246,6 +1250,7 @@ export default function App() {
             <img src={headerLogoSrc} alt="" className="brand-logo" aria-hidden="true" />
             <span>Factory Dashboard</span>
           </h1>
+          <TabBar activePage={activePage} onChangePage={handlePageChange} />
           <ThemeSwitch
             themePreference={themePreference}
             resolvedTheme={resolvedTheme}
@@ -1254,60 +1259,60 @@ export default function App() {
         </div>
       </header>
 
-      <TabBar activePage={activePage} onChangePage={handlePageChange} />
-
       {activePage === "kicks" ? <KickLogPage nowMs={nowMs} initialRunId={initialRunId} /> : null}
 
       {activePage === "strategies" ? (
       <>
-      <section className="meta">
-        <div>Strategies: <strong>{(summary?.strategyCount || 0).toLocaleString()}</strong></div>
-        <div>Tokens: <strong>{tokenOptions.length.toLocaleString()}</strong></div>
-        <div>Latest scan: <strong>{formatTimestamp(latestVisibleScan)}</strong></div>
-      </section>
+      <section className="toolbar">
+        <div className="toolbar-controls">
+          <label className="control control-search">
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search strategies, vaults, tokens, addresses..."
+            />
+          </label>
 
-      <section className="controls">
-        <label className="control control-search">
-          <span>Search</span>
-          <input
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="strategy, vault, auction, token symbol, address"
-          />
-        </label>
+          <label className="control control-token">
+            <select
+              value={selectedToken}
+              onChange={(event) => setSelectedToken(event.target.value)}
+            >
+              <option value={ALL_TOKENS}>All tokens</option>
+              {tokenOptions.map((token) => (
+                <option key={token.tokenAddress} value={token.tokenAddress}>
+                  {token.tokenSymbol} ({token.strategyCount})
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label className="control control-token">
-          <span>Token</span>
-          <select
-            value={selectedToken}
-            onChange={(event) => setSelectedToken(event.target.value)}
-          >
-            <option value={ALL_TOKENS}>All tokens</option>
-            {tokenOptions.map((token) => (
-              <option key={token.tokenAddress} value={token.tokenAddress}>
-                {token.tokenSymbol} ({token.strategyCount})
-              </option>
-            ))}
-          </select>
-        </label>
+          <label className="toggle-filter">
+            <input
+              type="checkbox"
+              checked={showZeroBalance}
+              onChange={(e) => setShowZeroBalance(e.target.checked)}
+            />
+            <span>0 rewards</span>
+          </label>
 
-        <label className="zero-balance-toggle">
-          <input
-            type="checkbox"
-            checked={showZeroBalance}
-            onChange={(e) => setShowZeroBalance(e.target.checked)}
-          />
-          <span>Show strats with 0 rewards</span>
-        </label>
+          <label className="toggle-filter">
+            <input
+              type="checkbox"
+              checked={showClosedVaults}
+              onChange={(e) => setShowClosedVaults(e.target.checked)}
+            />
+            <span>Retired</span>
+          </label>
+        </div>
 
-        <label className="zero-balance-toggle">
-          <input
-            type="checkbox"
-            checked={showClosedVaults}
-            onChange={(e) => setShowClosedVaults(e.target.checked)}
-          />
-          <span>Show retired vaults</span>
-        </label>
+        <div className="toolbar-meta">
+          <span>{(summary?.strategyCount || 0).toLocaleString()} strategies</span>
+          <span className="meta-sep" aria-hidden="true">&middot;</span>
+          <span>{tokenOptions.length.toLocaleString()} tokens</span>
+          <span className="meta-sep" aria-hidden="true">&middot;</span>
+          <span>Scanned {formatTimestamp(latestVisibleScan)}</span>
+        </div>
       </section>
 
       {error ? <p className="error">{error}</p> : null}

@@ -1417,7 +1417,7 @@ export default function App() {
               checked={showZeroBalance}
               onChange={(e) => setShowZeroBalance(e.target.checked)}
             />
-            <span>0 rewards</span>
+            <span>Show strats with no rewards</span>
           </label>
 
           <label className="toggle-filter">
@@ -1426,7 +1426,7 @@ export default function App() {
               checked={showClosedVaults}
               onChange={(e) => setShowClosedVaults(e.target.checked)}
             />
-            <span>Retired</span>
+            <span>Show retired</span>
           </label>
         </div>
 

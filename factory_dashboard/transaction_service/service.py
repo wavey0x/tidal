@@ -149,16 +149,40 @@ class TxnService:
 
             candidates_to_prepare.append(decision.candidate)
 
-        # Prepare kicks in batches to avoid rate-limiting the quote API.
         if candidates_to_prepare:
+            candidates_to_prepare.sort(key=lambda c: c.usd_value, reverse=True)
             kicks_attempted += len(candidates_to_prepare)
+
+        if not batch and candidates_to_prepare:
+            # Non-batch: prepare and execute one candidate at a time (highest USD first).
+            for candidate in candidates_to_prepare:
+                result = await self.kicker.prepare_kick(candidate, run_id)
+                if isinstance(result, KickResult):
+                    if result.status == KickStatus.SKIP:
+                        kicks_attempted -= 1
+                    elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                        kicks_failed += 1
+                        if result.error_message:
+                            failed_messages.append(result.error_message)
+                    continue
+                exec_result = await self.kicker.execute_single(result, run_id)
+                if exec_result.status == KickStatus.CONFIRMED:
+                    kicks_succeeded += 1
+                elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                    kicks_failed += 1
+                    if exec_result.error_message:
+                        failed_messages.append(exec_result.error_message)
+                elif exec_result.status == KickStatus.USER_SKIPPED:
+                    kicks_attempted -= 1
+        elif candidates_to_prepare:
+            # Batch: prepare all in groups, then execute as one batch transaction.
             prepare_results: list[PreparedKick | KickResult] = []
             for batch_start in range(0, len(candidates_to_prepare), self.max_batch_kick_size):
                 if batch_start > 0:
                     await asyncio.sleep(self.batch_kick_delay_seconds)
-                batch = candidates_to_prepare[batch_start:batch_start + self.max_batch_kick_size]
+                group = candidates_to_prepare[batch_start:batch_start + self.max_batch_kick_size]
                 batch_results = await asyncio.gather(
-                    *(self.kicker.prepare_kick(c, run_id) for c in batch)
+                    *(self.kicker.prepare_kick(c, run_id) for c in group)
                 )
                 prepare_results.extend(batch_results)
             for result in prepare_results:
@@ -172,24 +196,17 @@ class TxnService:
                 else:
                     prepared.append(result)
 
-        # Phase 2: Execute.
-        if prepared:
-            if batch:
+            if prepared:
                 exec_results = await self.kicker.execute_batch(prepared, run_id)
-            else:
-                exec_results = []
-                for pk in prepared:
-                    exec_results.append(await self.kicker.execute_single(pk, run_id))
-
-            for result in exec_results:
-                if result.status == KickStatus.CONFIRMED:
-                    kicks_succeeded += 1
-                elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                    kicks_failed += 1
-                    if result.error_message:
-                        failed_messages.append(result.error_message)
-                elif result.status == KickStatus.USER_SKIPPED:
-                    kicks_attempted -= 1
+                for result in exec_results:
+                    if result.status == KickStatus.CONFIRMED:
+                        kicks_succeeded += 1
+                    elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                        kicks_failed += 1
+                        if result.error_message:
+                            failed_messages.append(result.error_message)
+                    elif result.status == KickStatus.USER_SKIPPED:
+                        kicks_attempted -= 1
 
         # 4. Finalize txn_runs.
         candidates_found = len([d for d in decisions if d.action == KickAction.KICK])

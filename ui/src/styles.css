@@ -8,6 +8,7 @@
   --divider-subtle: #e6e7eb;
   --hover: rgba(0, 0, 0, 0.04);
   --success: #217f46;
+  --error: #C62828;
   --token-icon-size: calc(14px * 1.1);
   --token-summary-icon-size: calc(16px * 1.1);
 }
@@ -22,6 +23,7 @@
   --divider-subtle: #2a2a2a;
   --hover: rgba(255, 255, 255, 0.04);
   --success: #5bc47d;
+  --error: #EF5350;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -35,6 +37,7 @@
     --divider-subtle: #2a2a2a;
     --hover: rgba(255, 255, 255, 0.04);
     --success: #5bc47d;
+    --error: #EF5350;
   }
 }
 
@@ -748,6 +751,194 @@ tbody tr:hover td {
 }
 
 
+/* Tab bar */
+
+.tab-bar {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--divider-subtle);
+  padding: 0;
+}
+
+.tab-item {
+  border: 0;
+  background: transparent;
+  padding: 12px 0;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  position: relative;
+  line-height: 1;
+}
+
+.tab-item:hover {
+  color: var(--text-primary);
+}
+
+.tab-item.is-active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.tab-item.is-active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--text-primary);
+}
+
+/* Kick log */
+
+.kick-log-controls {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  border-bottom: 1px solid var(--divider-subtle);
+  padding: 12px 0;
+}
+
+.kick-log-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.kick-log-controls select,
+.kick-log-controls input {
+  border: 1px solid var(--divider-strong);
+  background: transparent;
+  color: var(--text-primary);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.kick-log-controls select:focus,
+.kick-log-controls input:focus {
+  outline: none;
+  border-color: var(--text-primary);
+}
+
+.kick-log-controls .control-search {
+  flex: 1;
+  min-width: 200px;
+}
+
+.kick-log-controls .control-status {
+  min-width: 140px;
+}
+
+.kick-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.kick-log-table thead th {
+  border-bottom: 1px solid var(--divider-strong);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 8px;
+}
+
+.kick-log-table thead th.align-right {
+  text-align: right;
+}
+
+.kick-log-table tbody td {
+  border-bottom: 1px solid var(--divider-subtle);
+  padding: 8px;
+  vertical-align: top;
+}
+
+.kick-log-row {
+  cursor: pointer;
+}
+
+.kick-log-row:hover td {
+  background: var(--hover);
+}
+
+.kick-log-row.is-expanded td {
+  border-bottom-color: transparent;
+}
+
+.status-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+}
+
+.status-badge.status-confirmed {
+  color: var(--success);
+}
+
+.status-badge.status-error {
+  color: var(--error);
+}
+
+.status-badge.status-faint {
+  color: var(--text-faint);
+}
+
+.kick-detail {
+  background: var(--hover);
+}
+
+.kick-detail td {
+  padding: 0 8px 12px;
+}
+
+.kick-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 24px;
+  padding: 8px 0;
+}
+
+.kick-detail-item {
+  min-width: 0;
+}
+
+.kick-detail-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+}
+
+.kick-detail-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.kick-detail-value.error-text {
+  color: var(--error);
+}
+
+.kick-log-empty {
+  text-align: center;
+  color: var(--text-faint);
+  padding: 32px 8px;
+}
+
+.kick-log-skeleton td {
+  padding: 8px;
+}
+
 @media (max-width: 900px) {
   .meta {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -759,5 +950,19 @@ tbody tr:hover td {
 
   .token-cell {
     width: 198px;
+  }
+
+  .kick-log-controls {
+    flex-wrap: wrap;
+  }
+
+  .kick-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .kick-detail-grid {
+    grid-template-columns: 1fr;
   }
 }

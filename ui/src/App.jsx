@@ -6,6 +6,9 @@ const MIN_USD_VISIBLE = new Big("0.01");
 const THEME_SEQUENCE = ["light", "dark"];
 const API_BASE_URL = (import.meta.env.VITE_FACTORY_DASHBOARD_API_BASE_URL || "/api").replace(/\/$/, "");
 const ETHERSCAN_TX_URL = "https://etherscan.io/tx/";
+const ETHERSCAN_ADDRESS_URL = "https://etherscan.io/address/";
+const FAILED_STATUSES = new Set(["REVERTED", "ERROR", "ESTIMATE_FAILED"]);
+const FAINT_STATUSES = new Set(["DRY_RUN", "SUBMITTED", "USER_SKIPPED", "SKIP"]);
 
 function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
@@ -335,6 +338,337 @@ function ThemeSwitch({ themePreference, resolvedTheme, onCycle }) {
   );
 }
 
+function TabBar({ activePage, onChangePage }) {
+  return (
+    <nav className="tab-bar">
+      <button
+        type="button"
+        className={`tab-item ${activePage === "strategies" ? "is-active" : ""}`}
+        onClick={() => onChangePage("strategies")}
+      >
+        Strategies
+      </button>
+      <button
+        type="button"
+        className={`tab-item ${activePage === "kicks" ? "is-active" : ""}`}
+        onClick={() => onChangePage("kicks")}
+      >
+        Kick Log
+      </button>
+    </nav>
+  );
+}
+
+function StatusBadge({ status }) {
+  let className = "status-badge";
+  if (status === "CONFIRMED") {
+    className += " status-confirmed";
+  } else if (FAILED_STATUSES.has(status)) {
+    className += " status-error";
+  } else if (FAINT_STATUSES.has(status)) {
+    className += " status-faint";
+  }
+
+  return <span className={className}>{status}</span>;
+}
+
+function KickDetailPanel({ kick }) {
+  let quoteProviders = null;
+  if (kick.quoteResponseJson) {
+    try {
+      const parsed = JSON.parse(kick.quoteResponseJson);
+      if (Array.isArray(parsed)) {
+        quoteProviders = parsed;
+      } else if (parsed && typeof parsed === "object") {
+        quoteProviders = Object.entries(parsed).map(([name, data]) => ({
+          name,
+          ...(typeof data === "object" ? data : { amount: data }),
+        }));
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  const bpsToPercent = (bps) => {
+    if (bps == null) return null;
+    return `${bps} bps / ${(Number(bps) / 100).toFixed(1)}%`;
+  };
+
+  return (
+    <tr className="kick-detail">
+      <td colSpan={7}>
+        <div className="kick-detail-grid">
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Strategy</div>
+            <div className="kick-detail-value"><AddressCopy address={kick.strategyAddress} /></div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Token Address</div>
+            <div className="kick-detail-value"><AddressCopy address={kick.tokenAddress} /></div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Normalized Balance</div>
+            <div className="kick-detail-value">
+              {kick.normalizedBalance ? `${formatBalance(kick.normalizedBalance)} ${kick.tokenSymbol || ""}` : "—"}
+            </div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Start Price</div>
+            <div className="kick-detail-value">
+              {kick.startingPrice || "—"}
+              {kick.startPriceBufferBps != null ? ` (${bpsToPercent(kick.startPriceBufferBps)})` : ""}
+            </div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Min Price</div>
+            <div className="kick-detail-value">
+              {kick.minimumPrice || "—"}
+              {kick.minPriceBufferBps != null ? ` (${bpsToPercent(kick.minPriceBufferBps)})` : ""}
+            </div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Quote Amount</div>
+            <div className="kick-detail-value">{kick.quoteAmount || "—"}</div>
+          </div>
+          {quoteProviders ? (
+            <div className="kick-detail-item">
+              <div className="kick-detail-label">Quote Providers</div>
+              <div className="kick-detail-value">
+                {quoteProviders.map((provider, i) => (
+                  <div key={i}>
+                    {provider.name || provider.provider || `Provider ${i + 1}`}
+                    {provider.status ? ` — ${provider.status}` : ""}
+                    {provider.amount ? ` — ${provider.amount}` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {kick.errorMessage ? (
+            <div className="kick-detail-item">
+              <div className="kick-detail-label">Error</div>
+              <div className="kick-detail-value error-text">{kick.errorMessage}</div>
+            </div>
+          ) : null}
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Run ID</div>
+            <div className="kick-detail-value">{kick.runId || "—"}</div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function KickLogRow({ kick, nowMs, isExpanded, onToggle }) {
+  return (
+    <>
+      <tr className={`kick-log-row ${isExpanded ? "is-expanded" : ""}`} onClick={onToggle}>
+        <td className="mono muted" title={kick.createdAt}>
+          {formatRelativeTimestamp(kick.createdAt, nowMs)}
+        </td>
+        <td className="mono">
+          {kick.tokenSymbol || "?"} → {kick.wantSymbol || "?"}
+        </td>
+        <td className="mono align-right">
+          {kick.usdValue ? `$${formatBalance(kick.usdValue)}` : "—"}
+        </td>
+        <td>
+          <StatusBadge status={kick.status} />
+        </td>
+        <td>
+          {kick.auctionAddress ? (
+            <span className="address-copy" title={kick.auctionAddress}>
+              <a
+                className="mono address-value"
+                href={`${ETHERSCAN_ADDRESS_URL}${kick.auctionAddress}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {shortenAddress(kick.auctionAddress)}
+              </a>
+              <CopyIconButton
+                valueToCopy={kick.auctionAddress}
+                title={`Copy ${kick.auctionAddress}`}
+                ariaLabel={`Copy auction address ${kick.auctionAddress}`}
+              />
+            </span>
+          ) : "—"}
+        </td>
+        <td>
+          {kick.txHash ? (
+            <span onClick={(e) => e.stopPropagation()}>
+              <EtherscanTxLink txHash={kick.txHash} />
+            </span>
+          ) : "—"}
+        </td>
+        <td className="mono align-right">
+          {kick.gasUsed ? `${withGrouping(String(kick.gasUsed))} @ ${kick.gasPriceGwei || "?"} gwei` : "—"}
+        </td>
+      </tr>
+      {isExpanded ? <KickDetailPanel kick={kick} /> : null}
+    </>
+  );
+}
+
+function KickLogSkeletonRows() {
+  return [...Array(10)].map((_, index) => (
+    <tr key={`kick-skeleton-${index}`} className="kick-log-skeleton">
+      <td><span className="skeleton" /></td>
+      <td><span className="skeleton" /></td>
+      <td><span className="skeleton" /></td>
+      <td><span className="skeleton" /></td>
+      <td><span className="skeleton" /></td>
+      <td><span className="skeleton" /></td>
+      <td><span className="skeleton" /></td>
+    </tr>
+  ));
+}
+
+function KickLogPage({ nowMs }) {
+  const [kicks, setKicks] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [expandedRows, setExpandedRows] = useState(() => new Set());
+  const hasFetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
+    let isMounted = true;
+    const controller = new AbortController();
+
+    async function loadKicks() {
+      setLoading(true);
+      setError("");
+      try {
+        const response = await fetch(apiUrl("/kicks?limit=500"), {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Unable to load kicks");
+        const payload = await response.json();
+        if (!isMounted) return;
+        setKicks(payload.kicks || []);
+        setTotal(payload.total || 0);
+      } catch (err) {
+        if (isMounted && err.name !== "AbortError") {
+          setError(err.message || "Unable to load kicks");
+        }
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    loadKicks();
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, []);
+
+  const filteredKicks = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return kicks.filter((kick) => {
+      if (statusFilter === "confirmed" && kick.status !== "CONFIRMED") return false;
+      if (statusFilter === "failed" && !FAILED_STATUSES.has(kick.status)) return false;
+
+      if (term) {
+        const searchable = [
+          kick.tokenSymbol,
+          kick.wantSymbol,
+          kick.auctionAddress,
+          kick.txHash,
+          kick.strategyAddress,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!searchable.includes(term)) return false;
+      }
+
+      return true;
+    });
+  }, [kicks, statusFilter, searchTerm]);
+
+  function toggleRow(id) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  return (
+    <>
+      <section className="kick-log-controls">
+        <label className="control control-search">
+          <span>Search</span>
+          <input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="token symbol, auction address, tx hash"
+          />
+        </label>
+        <label className="control control-status">
+          <span>Status</span>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">All ({total})</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="failed">Failed</option>
+          </select>
+        </label>
+      </section>
+
+      {error ? <p className="error">{error}</p> : null}
+
+      <div className="table-shell">
+        <table className="kick-log-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Pair</th>
+              <th className="align-right">USD Value</th>
+              <th>Status</th>
+              <th>Auction</th>
+              <th>Tx</th>
+              <th className="align-right">Gas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? <KickLogSkeletonRows /> : null}
+            {!loading && !filteredKicks.length ? (
+              <tr>
+                <td colSpan={7} className="kick-log-empty">No kicks found</td>
+              </tr>
+            ) : null}
+            {!loading
+              ? filteredKicks.map((kick) => (
+                  <KickLogRow
+                    key={kick.id}
+                    kick={kick}
+                    nowMs={nowMs}
+                    isExpanded={expandedRows.has(kick.id)}
+                    onToggle={() => toggleRow(kick.id)}
+                  />
+                ))
+              : null}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 function TokenBalances({
   balances,
   displayMode,
@@ -384,6 +718,7 @@ function TokenBalances({
 }
 
 export default function App() {
+  const [activePage, setActivePage] = useState("strategies");
   const [selectedToken, setSelectedToken] = useState(getTokenFromUrl);
   const [auctionFilter, setAuctionFilter] = useState("all");
   const [isAuctionFilterMenuOpen, setIsAuctionFilterMenuOpen] = useState(false);
@@ -765,6 +1100,12 @@ export default function App() {
         </div>
       </header>
 
+      <TabBar activePage={activePage} onChangePage={setActivePage} />
+
+      {activePage === "kicks" ? <KickLogPage nowMs={nowMs} /> : null}
+
+      {activePage === "strategies" ? (
+      <>
       <section className="meta">
         <div>Strategies: <strong>{(summary?.strategyCount || 0).toLocaleString()}</strong></div>
         <div>Tokens: <strong>{tokenOptions.length.toLocaleString()}</strong></div>
@@ -938,6 +1279,8 @@ export default function App() {
           </tbody>
         </table>
       </div>
+      </>
+      ) : null}
     </main>
   );
 }

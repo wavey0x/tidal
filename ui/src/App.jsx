@@ -384,7 +384,7 @@ function formatProviderAmount(amountOut, decimals, status) {
 }
 
 function KickDetailPanel({ kick }) {
-  const [showRelativeTimestamp, setShowRelativeTimestamp] = React.useState(false);
+  const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
   let quoteProviders = null;
   let quoteSummary = null;
   let tokenOutDecimals = null;

@@ -504,21 +504,35 @@ function KickDetailPanel({ kick }) {
               </div>
             </div>
           ) : null}
-          {quoteSummary ? (
-            <div className="kick-detail-item" style={{ gridColumn: 2, gridRow: 5 }}>
-              <div className="kick-detail-label">Quote Summary</div>
-              <div className="kick-detail-value">
-                {quoteSummary.high_amount_out != null && tokenOutDecimals != null ? (
-                  <div>Best: {formatProviderAmount(quoteSummary.high_amount_out, tokenOutDecimals)}</div>
-                ) : quoteSummary.high_amount_out != null ? (
-                  <div>Best: {String(quoteSummary.high_amount_out)}</div>
-                ) : null}
-                {quoteSummary.successful_providers != null ? (
-                  <div>Successful providers: {quoteSummary.successful_providers}</div>
-                ) : null}
+          {quoteSummary || quoteProviders ? (() => {
+            const amounts = (quoteProviders || [])
+              .filter(p => p.amountOut != null)
+              .map(p => new Big(String(p.amountOut)))
+              .sort((a, b) => a.cmp(b));
+            const total = (quoteProviders || []).length;
+            const successful = amounts.length;
+            const fmt = (v) => tokenOutDecimals != null
+              ? formatBalance(v.div(new Big(10).pow(tokenOutDecimals)).toString())
+              : v.toString();
+            const high = amounts.length ? fmt(amounts[amounts.length - 1]) : null;
+            const low = amounts.length ? fmt(amounts[0]) : null;
+            const median = amounts.length ? fmt(
+              amounts.length % 2 === 1
+                ? amounts[Math.floor(amounts.length / 2)]
+                : amounts[amounts.length / 2 - 1].plus(amounts[amounts.length / 2]).div(2)
+            ) : null;
+            return (
+              <div className="kick-detail-item" style={{ gridColumn: 2, gridRow: 5 }}>
+                <div className="kick-detail-label">Quote Summary</div>
+                <div className="kick-detail-value">
+                  {total > 0 ? <div>Providers: {successful}/{total}</div> : null}
+                  {high != null ? <div>High: {high}</div> : null}
+                  {low != null ? <div>Low: {low}</div> : null}
+                  {median != null ? <div>Median: {median}</div> : null}
+                </div>
               </div>
-            </div>
-          ) : null}
+            );
+          })() : null}
           {kick.errorMessage ? (
             <div className="kick-detail-item" style={{ gridColumn: 1, gridRow: 6 }}>
               <div className="kick-detail-label">Error</div>

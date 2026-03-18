@@ -468,31 +468,32 @@ function KickDetailContent({ kick }) {
         <div className="kick-detail-value"><AddressCopy address={kick.strategyAddress} /></div>
       </div>
       <div className="kick-detail-item">
-        <div className="kick-detail-label">Sell Token</div>
-        <div className="kick-detail-value">
-          <span className="address-copy" title={kick.tokenAddress}>
-            <span className="mono address-value">{kick.tokenSymbol || shortenAddress(kick.tokenAddress)}</span>
-            <CopyIconButton
-              valueToCopy={kick.tokenAddress}
-              title={`Copy address ${kick.tokenAddress}`}
-              ariaLabel={`Copy address ${kick.tokenAddress}`}
-            />
-          </span>
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Buy Token</div>
-        <div className="kick-detail-value">
-          {kick.wantAddress ? (
-            <span className="address-copy" title={kick.wantAddress}>
-              <span className="mono address-value">{kick.wantSymbol || shortenAddress(kick.wantAddress)}</span>
+        <div className="kick-detail-label">Tokens</div>
+        <div className="kick-detail-value kick-detail-tokens">
+          <span>
+            <span className="kick-detail-token-direction">Sell</span>
+            <span className="address-copy" title={kick.tokenAddress}>
+              <span className="mono address-value">{kick.tokenSymbol || shortenAddress(kick.tokenAddress)}</span>
               <CopyIconButton
-                valueToCopy={kick.wantAddress}
-                title={`Copy address ${kick.wantAddress}`}
-                ariaLabel={`Copy address ${kick.wantAddress}`}
+                valueToCopy={kick.tokenAddress}
+                title={`Copy address ${kick.tokenAddress}`}
+                ariaLabel={`Copy address ${kick.tokenAddress}`}
               />
             </span>
-          ) : "—"}
+          </span>
+          <span>
+            <span className="kick-detail-token-direction">Buy</span>
+            {kick.wantAddress ? (
+              <span className="address-copy" title={kick.wantAddress}>
+                <span className="mono address-value">{kick.wantSymbol || shortenAddress(kick.wantAddress)}</span>
+                <CopyIconButton
+                  valueToCopy={kick.wantAddress}
+                  title={`Copy address ${kick.wantAddress}`}
+                  ariaLabel={`Copy address ${kick.wantAddress}`}
+                />
+              </span>
+            ) : "—"}
+          </span>
         </div>
       </div>
       <div className="kick-detail-item">
@@ -605,6 +606,11 @@ function KickDetailPanel({ kick }) {
 }
 
 function KickDetailModal({ kick, onClose }) {
+  const sheetRef = useRef(null);
+  const bodyRef = useRef(null);
+  const backdropRef = useRef(null);
+  const dragRef = useRef({ startY: 0, startTime: 0, dy: 0, dragging: false, dismissed: false });
+
   useEffect(() => {
     const onKeyDown = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKeyDown);
@@ -615,13 +621,61 @@ function KickDetailModal({ kick, onClose }) {
     };
   }, [onClose]);
 
+  function onTouchStart(e) {
+    const d = dragRef.current;
+    d.startY = e.touches[0].clientY;
+    d.startTime = Date.now();
+    d.dy = 0;
+    d.dragging = false;
+    d.dismissed = false;
+  }
+
+  function onTouchMove(e) {
+    const d = dragRef.current;
+    if (d.dismissed) return;
+    const dy = e.touches[0].clientY - d.startY;
+    if ((bodyRef.current.scrollTop <= 0 && dy > 0) || d.dragging) {
+      d.dragging = true;
+      d.dy = Math.max(0, dy);
+      sheetRef.current.style.transition = "none";
+      sheetRef.current.style.transform = `translateY(${d.dy}px)`;
+      backdropRef.current.style.opacity = Math.max(0, 1 - d.dy / (window.innerHeight * 0.5));
+    }
+  }
+
+  function onTouchEnd() {
+    const d = dragRef.current;
+    if (!d.dragging) return;
+    const velocity = d.dy / Math.max(1, Date.now() - d.startTime);
+    const dismiss = d.dy > 80 || velocity > 0.5;
+    sheetRef.current.style.transition = "transform 200ms ease-out";
+    backdropRef.current.style.transition = "opacity 200ms ease-out";
+    if (dismiss) {
+      d.dismissed = true;
+      sheetRef.current.style.transform = "translateY(100%)";
+      backdropRef.current.style.opacity = "0";
+      setTimeout(onClose, 200);
+    } else {
+      sheetRef.current.style.transform = "translateY(0)";
+      backdropRef.current.style.opacity = "1";
+    }
+    d.dragging = false;
+  }
+
   return createPortal(
-    <div className="kick-modal-backdrop" onMouseDown={onClose}>
-      <div className="kick-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <button type="button" className="kick-modal-close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
-        <KickDetailContent kick={kick} />
+    <div ref={backdropRef} className="kick-modal-backdrop" onMouseDown={onClose}>
+      <div
+        ref={sheetRef}
+        className="kick-modal"
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        <div className="kick-modal-handle" />
+        <div ref={bodyRef} className="kick-modal-body">
+          <KickDetailContent kick={kick} />
+        </div>
       </div>
     </div>,
     document.body

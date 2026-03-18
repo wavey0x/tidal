@@ -933,6 +933,20 @@ tbody tr:hover td {
   color: var(--error);
 }
 
+.kick-detail-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kick-detail-token-direction {
+  display: inline-block;
+  width: 28px;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
 .cow-explorer-link {
   color: var(--text-secondary);
   text-decoration: none;
@@ -954,51 +968,45 @@ tbody tr:hover td {
   padding: 8px;
 }
 
-/* ── Kick detail modal (mobile) ── */
+/* ── Kick detail drawer (mobile) ── */
 
 .kick-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 100;
   background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-end;
   animation: modal-fade-in 150ms ease-out;
 }
 
 .kick-modal {
-  position: relative;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   border-radius: 12px 12px 0 0;
-  width: 100%;
   max-height: 85vh;
+  padding-bottom: env(safe-area-inset-bottom, 24px);
+  animation: modal-slide-in 250ms ease-out;
+}
+
+.kick-modal-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--divider-strong);
+  margin: 10px auto 4px;
+  flex-shrink: 0;
+}
+
+.kick-modal-body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 16px 16px 24px;
-  animation: modal-slide-in 150ms ease-out;
-}
-
-.kick-modal-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 20px;
-  line-height: 1;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 6px;
-}
-
-.kick-modal-close:hover {
-  color: var(--text-primary);
-  background: var(--hover);
+  overscroll-behavior-y: none;
+  padding: 0 16px 16px;
 }
 
 @keyframes modal-fade-in {
@@ -1007,8 +1015,8 @@ tbody tr:hover td {
 }
 
 @keyframes modal-slide-in {
-  from { transform: translateY(16px); opacity: 0.8; }
-  to { transform: translateY(0); opacity: 1; }
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
 }
 
 @media (max-width: 900px) {
@@ -1035,6 +1043,10 @@ tbody tr:hover td {
 }
 
 @media (max-width: 600px) {
+  .table-shell {
+    overflow-x: visible;
+  }
+
   .header-row {
     flex-wrap: wrap;
   }
@@ -1112,6 +1124,7 @@ tbody tr:hover td {
     padding: 2px 0;
     border: none;
     border-bottom: 1px solid var(--divider-row);
+    cursor: pointer;
   }
 
   .kick-log-table .kick-log-row td:last-child {

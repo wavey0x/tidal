@@ -19,7 +19,8 @@ from factory_dashboard.transaction_service.types import KickCandidate, KickResul
 
 def _make_candidate(**overrides):
     defaults = {
-        "strategy_address": "0x1111111111111111111111111111111111111111",
+        "source_type": "strategy",
+        "source_address": "0x1111111111111111111111111111111111111111",
         "token_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "auction_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "normalized_balance": "1000",
@@ -821,7 +822,7 @@ async def test_starting_price_ceiling_logs_precision_loss(session):
     # Verify the precision loss warning was logged.
     mock_logger.warning.assert_any_call(
         "txn_starting_price_precision_loss",
-        strategy=candidate.strategy_address,
+        source=candidate.source_address,
         token=candidate.token_address,
         exact_want_value=mock_logger.warning.call_args_list[0][1]["exact_want_value"],
         ceiled_value=1,
@@ -1208,7 +1209,7 @@ async def test_execute_batch_confirmed(session):
     kicker = _make_kicker(session, web3_client=web3_client, signer=signer)
 
     pks = [
-        _make_prepared_kick(candidate_overrides={"strategy_address": f"0x{'1' * 39}{i}"})
+        _make_prepared_kick(candidate_overrides={"source_address": f"0x{'1' * 39}{i}"})
         for i in range(3)
     ]
     results = await kicker.execute_batch(pks, "run-batch")

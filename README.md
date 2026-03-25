@@ -4,9 +4,9 @@ Monorepo for the Yearn factory dashboard. It contains the scanner that builds th
 
 ## Monorepo Layout
 
-- `factory_dashboard/scanner/`: discovers Yearn vaults and strategies, resolves reward tokens, reads balances, refreshes token prices and auction mappings, and writes the latest dashboard state into SQLite.
-- `factory_dashboard/transaction_service/`: reads the scanner's cached state, selects kick candidates, estimates and submits auction kick transactions, and records transaction runs back into SQLite.
-- `ui/`: React dashboard that renders the cached strategy, token, vault, and auction data from the read-only API.
+- `factory_dashboard/scanner/`: discovers Yearn vaults and strategies, reads configured fee burners, resolves sell tokens, reads balances, refreshes token prices and auction mappings, and writes the latest dashboard state into SQLite.
+- `factory_dashboard/transaction_service/`: reads the scanner's cached state, selects kick candidates across strategies and fee burners, estimates and submits auction kick transactions, and records transaction runs back into SQLite.
+- `ui/`: React dashboard that renders the cached strategy, fee burner, token, vault, and auction data from the read-only API.
 - `contracts/`: Foundry project for the on-chain `AuctionKicker` helper contract and its deployment/test scripts.
 - `factory_dashboard/persistence/` and `alembic/`: shared database models, repositories, and migrations used by the scanner and transaction service.
 - `factory_dashboard/chain/`, `factory_dashboard/pricing/`, and `factory_dashboard/runtime.py`: shared chain readers, pricing integrations, and service wiring used across the backend components.
@@ -103,8 +103,13 @@ Each scan also backfills validated token logo URLs into `tokens.logo_url` using 
 
 ## Strategy Auction Mapping
 
-Each scan refreshes strategy-to-auction mappings directly into the `strategies` table.
-Auctions are fetched via `getAllAuctions()` on the `auction_factory_address` configured in `config.yaml`. Matches are resolved by comparing each auction's `receiver` with the strategy address, and the `auction_version` field tracks the factory that produced each auction.
+Each scan refreshes strategy and fee burner auction mappings directly into persistence.
+Auctions are fetched via `getAllAuctions()` on the `auction_factory_address` configured in `config.yaml`.
+
+- Strategy matches are resolved by comparing each auction's `receiver` with the strategy address.
+- Fee burner matches are resolved by comparing `(auction.receiver, auction.want)` with the configured `(fee burner address, want_address)` pair from `monitored_fee_burners` in `config.yaml`.
+
+The `auction_version` field tracks the factory that produced each auction.
 
 Tuning knobs: `auction_factory_address` and `multicall_auction_batch_calls` in `config.yaml`.
 
@@ -120,8 +125,10 @@ Key tables the API reads:
 |-------|---------|
 | `vaults` | Vault name and symbol |
 | `strategies` | Strategy name, vault FK, `auction_address` |
+| `fee_burners` | Fee burner name, `want_address`, `auction_address` |
 | `tokens` | Symbol, name, `price_usd`, `logo_url` |
 | `strategy_token_balances_latest` | Latest normalized balances per strategy-token pair |
+| `fee_burner_token_balances_latest` | Latest normalized balances per fee burner-token pair |
 | `scan_runs` | Scan metadata for diagnostics |
 
 SQLite concurrency:

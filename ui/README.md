@@ -4,8 +4,9 @@ React dashboard for viewing scan results from an external read-only dashboard AP
 
 ## What it shows
 
-- One row per strategy with stacked token balances
-- Per-strategy auction column
+- A `Strategies` tab with one row per strategy and stacked token balances
+- A dedicated `Fee Burner` tab with fee burner identity, auction, want token, and approved token balances
+- A shared `Kick Log` tab keyed by source
 - Token filter + address/symbol search
 - Balances formatted to 2 decimals
 - Token logos rendered directly from validated `tokenLogoUrl` values in the dashboard payload

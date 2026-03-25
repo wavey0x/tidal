@@ -128,6 +128,8 @@ async def test_dry_run_persists_dry_run_rows(session):
     kick_txs = session.execute(select(models.kick_txs)).mappings().all()
     assert len(kick_txs) == 1
     assert kick_txs[0]["status"] == "DRY_RUN"
+    assert kick_txs[0]["source_type"] == "strategy"
+    assert kick_txs[0]["source_address"] == "0xstrategy1"
     assert kick_txs[0]["strategy_address"] == "0xstrategy1"
     assert kick_txs[0]["token_address"] == "0xtoken1"
 
@@ -245,6 +247,8 @@ async def test_submitted_blocks_resend(session):
     kick_tx_repo = KickTxRepository(session)
     kick_tx_repo.insert({
         "run_id": result1.run_id,
+        "source_type": "strategy",
+        "source_address": "0xstrategy1",
         "strategy_address": "0xstrategy1",
         "token_address": "0xtoken1",
         "auction_address": "0xauction1",

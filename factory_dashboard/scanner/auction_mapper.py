@@ -37,8 +37,22 @@ class AuctionMappingRefreshResult:
     source: str
 
 
+@dataclass(slots=True)
+class FeeBurnerAuctionRefreshResult:
+    fee_burner_to_auction: dict[str, str | None]
+    fee_burner_to_want: dict[str, str | None]
+    fee_burner_to_auction_version: dict[str, str | None]
+    fee_burner_to_error: dict[str, str]
+    auction_count: int
+    valid_auction_count: int
+    receiver_filtered_count: int
+    mapped_count: int
+    unmapped_count: int
+    source: str
+
+
 class StrategyAuctionMapper:
-    """Builds strategy->auction mappings."""
+    """Builds source->auction mappings from the auction factory snapshot."""
 
     def __init__(
         self,
@@ -62,26 +76,11 @@ class StrategyAuctionMapper:
     async def refresh_for_strategies(self, strategy_addresses: list[str]) -> AuctionMappingRefreshResult:
         normalized_strategies = sorted({normalize_address(address) for address in strategy_addresses})
 
-        auction_addresses = await self._read_auction_addresses()
-        auction_metadata = await self._read_auction_metadata_many(auction_addresses)
+        auction_addresses, valid_auctions, receiver_filtered_count = await self._load_valid_auctions()
 
         # Build lookup keyed by (want, receiver) — latest by factory order wins.
         want_receiver_to_auction: dict[tuple[str, str], tuple[str, AuctionMetadata]] = {}
-        valid_auction_count = 0
-        receiver_filtered_count = 0
-
-        for auction_address in auction_addresses:
-            meta = auction_metadata.get(auction_address)
-            if meta is None:
-                continue
-            if meta.governance != self.required_governance_address:
-                continue
-            if meta.want is None or meta.want == ZERO_ADDRESS:
-                continue
-            if meta.receiver is None or meta.receiver == ZERO_ADDRESS:
-                receiver_filtered_count += 1
-                continue
-            valid_auction_count += 1
+        for auction_address, meta in valid_auctions:
             want_receiver_to_auction[(meta.want, meta.receiver)] = (auction_address, meta)
 
         strategy_to_auction: dict[str, str | None] = {}
@@ -108,12 +107,79 @@ class StrategyAuctionMapper:
             strategy_to_want=strategy_wants,
             strategy_to_auction_version=strategy_to_auction_version,
             auction_count=len(auction_addresses),
-            valid_auction_count=valid_auction_count,
+            valid_auction_count=len(valid_auctions),
             receiver_filtered_count=receiver_filtered_count,
             mapped_count=mapped_count,
             unmapped_count=unmapped_count,
             source="fresh",
         )
+
+    async def refresh_for_fee_burners(self, fee_burner_to_want: dict[str, str]) -> FeeBurnerAuctionRefreshResult:
+        normalized_fee_burners = {
+            normalize_address(address): normalize_address(want_address)
+            for address, want_address in fee_burner_to_want.items()
+        }
+
+        auction_addresses, valid_auctions, receiver_filtered_count = await self._load_valid_auctions()
+        matches_by_key: dict[tuple[str, str], list[tuple[str, AuctionMetadata]]] = {}
+        for auction_address, meta in valid_auctions:
+            key = (meta.want, meta.receiver)
+            matches_by_key.setdefault(key, []).append((auction_address, meta))
+
+        fee_burner_to_auction: dict[str, str | None] = {}
+        fee_burner_to_auction_version: dict[str, str | None] = {}
+        fee_burner_to_error: dict[str, str] = {}
+
+        for fee_burner_address, want_address in normalized_fee_burners.items():
+            matches = matches_by_key.get((want_address, fee_burner_address), [])
+            if len(matches) == 1:
+                fee_burner_to_auction[fee_burner_address] = matches[0][0]
+                fee_burner_to_auction_version[fee_burner_address] = matches[0][1].version
+                continue
+            fee_burner_to_auction[fee_burner_address] = None
+            fee_burner_to_auction_version[fee_burner_address] = None
+            if not matches:
+                fee_burner_to_error[fee_burner_address] = "no matching auction found for configured want/receiver"
+            else:
+                fee_burner_to_error[fee_burner_address] = "multiple matching auctions found for configured want/receiver"
+
+        mapped_count = sum(1 for auction_address in fee_burner_to_auction.values() if auction_address)
+        unmapped_count = len(normalized_fee_burners) - mapped_count
+
+        return FeeBurnerAuctionRefreshResult(
+            fee_burner_to_auction=fee_burner_to_auction,
+            fee_burner_to_want=normalized_fee_burners,
+            fee_burner_to_auction_version=fee_burner_to_auction_version,
+            fee_burner_to_error=fee_burner_to_error,
+            auction_count=len(auction_addresses),
+            valid_auction_count=len(valid_auctions),
+            receiver_filtered_count=receiver_filtered_count,
+            mapped_count=mapped_count,
+            unmapped_count=unmapped_count,
+            source="fresh",
+        )
+
+    async def _load_valid_auctions(self) -> tuple[list[str], list[tuple[str, AuctionMetadata]], int]:
+        auction_addresses = await self._read_auction_addresses()
+        auction_metadata = await self._read_auction_metadata_many(auction_addresses)
+
+        valid_auctions: list[tuple[str, AuctionMetadata]] = []
+        receiver_filtered_count = 0
+
+        for auction_address in auction_addresses:
+            meta = auction_metadata.get(auction_address)
+            if meta is None:
+                continue
+            if meta.governance != self.required_governance_address:
+                continue
+            if meta.want is None or meta.want == ZERO_ADDRESS:
+                continue
+            if meta.receiver is None or meta.receiver == ZERO_ADDRESS:
+                receiver_filtered_count += 1
+                continue
+            valid_auctions.append((auction_address, meta))
+
+        return auction_addresses, valid_auctions, receiver_filtered_count
 
     async def _read_auction_addresses(self) -> list[str]:
         factory = self.web3_client.contract(self.auction_factory_address, AUCTION_FACTORY_ABI)

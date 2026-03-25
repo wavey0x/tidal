@@ -157,7 +157,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         if batch_size == 1:
             # Single-kick display (preserves old UX).
             k = kicks[0]
-            strategy_name = k.get("strategy_name") or "Unknown"
+            source_name = k.get("source_name") or "Unknown"
             token_sym = k.get("token_symbol") or "???"
             want_sym = k.get("want_symbol") or "???"
             amount = float(k["sell_amount"])
@@ -175,7 +175,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
 
             content = [
                 "Kick (1 of 1)",
-                f"  Strategy:    {strategy_name} ({short_address(k['strategy'])})",
+                f"  Source:      {source_name} ({short_address(k['source'])})",
                 f"  Auction:     {k['auction']}",
                 f"  Sell amount: {amount_str} {token_sym} (~${usd_value:,.2f})",
                 f"  Start quote: {k['starting_price_display']} | {want_price_str}",
@@ -191,13 +191,13 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
             # Multi-kick batch display.
             content = [f"Batch of {batch_size} kicks", ""]
             for i, k in enumerate(kicks, 1):
-                strategy_name = k.get("strategy_name") or "Unknown"
+                source_name = k.get("source_name") or "Unknown"
                 token_sym = k.get("token_symbol") or "???"
                 amount = float(k["sell_amount"])
                 amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
                 usd_value = float(k["usd_value"])
                 content.append(
-                    f"  {i}. {strategy_name} | {amount_str} {token_sym} (~${usd_value:,.2f})"
+                    f"  {i}. {source_name} | {amount_str} {token_sym} (~${usd_value:,.2f})"
                 )
 
             total_usd = float(summary["total_usd"])

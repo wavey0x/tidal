@@ -350,3 +350,69 @@ async def test_strategy_auction_mapper_uses_multicall_for_auction_and_strategy_r
     assert result.strategy_to_auction_version == {
         strategy.lower(): "1.0.1",
     }
+
+
+@pytest.mark.asyncio
+async def test_fee_burner_auction_mapper_matches_configured_want_and_receiver() -> None:
+    factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
+    required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
+    burner = "0xb911fcce8d5afcec73e072653107260bb23c1ee8"
+    want = "0xf939e0a03fb07f59a73314e73794be0e57ac1b4e"
+    other_want = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    matching_auction = "0x10bd77b0aa255d5cb7db1273705c1f0568536035"
+    wrong_want_auction = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    mapper = StrategyAuctionMapper(
+        web3_client=FakeWeb3Client(
+            factory_address=factory,
+            auctions=[wrong_want_auction, matching_auction],
+            auction_wants={wrong_want_auction: other_want, matching_auction: want},
+            auction_governance={wrong_want_auction: required_governance, matching_auction: required_governance},
+            auction_receivers={wrong_want_auction: burner, matching_auction: burner},
+            auction_versions={matching_auction: "1.0.3cc"},
+            strategy_wants={},
+        ),
+        chain_id=1,
+        auction_factory_address=factory,
+        required_governance_address=required_governance,
+    )
+
+    result = await mapper.refresh_for_fee_burners({burner: want})
+
+    assert result.mapped_count == 1
+    assert result.unmapped_count == 0
+    assert result.fee_burner_to_auction[burner.lower()] == matching_auction.lower()
+    assert result.fee_burner_to_want[burner.lower()] == want.lower()
+    assert result.fee_burner_to_auction_version[burner.lower()] == "1.0.3cc"
+    assert result.fee_burner_to_error == {}
+
+
+@pytest.mark.asyncio
+async def test_fee_burner_auction_mapper_fails_closed_on_multiple_matches() -> None:
+    factory = "0xe87af17acba165686e5aa7de2cec523864c25712"
+    required_governance = "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b"
+    burner = "0xb911fcce8d5afcec73e072653107260bb23c1ee8"
+    want = "0xf939e0a03fb07f59a73314e73794be0e57ac1b4e"
+    auction_a = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    auction_b = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+    mapper = StrategyAuctionMapper(
+        web3_client=FakeWeb3Client(
+            factory_address=factory,
+            auctions=[auction_a, auction_b],
+            auction_wants={auction_a: want, auction_b: want},
+            auction_governance={auction_a: required_governance, auction_b: required_governance},
+            auction_receivers={auction_a: burner, auction_b: burner},
+            strategy_wants={},
+        ),
+        chain_id=1,
+        auction_factory_address=factory,
+        required_governance_address=required_governance,
+    )
+
+    result = await mapper.refresh_for_fee_burners({burner: want})
+
+    assert result.mapped_count == 0
+    assert result.unmapped_count == 1
+    assert result.fee_burner_to_auction[burner.lower()] is None
+    assert result.fee_burner_to_error[burner.lower()] == "multiple matching auctions found for configured want/receiver"

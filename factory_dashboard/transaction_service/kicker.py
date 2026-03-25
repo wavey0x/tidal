@@ -116,7 +116,8 @@ class AuctionKicker:
     ) -> int:
         row: dict[str, object] = {
             "run_id": run_id,
-            "strategy_address": candidate.strategy_address,
+            "source_type": candidate.source_type,
+            "source_address": candidate.source_address,
             "token_address": candidate.token_address,
             "auction_address": candidate.auction_address,
             "price_usd": candidate.price_usd,
@@ -126,6 +127,8 @@ class AuctionKicker:
             "want_address": candidate.want_address,
             "want_symbol": candidate.want_symbol,
         }
+        if candidate.source_type == "strategy":
+            row["strategy_address"] = candidate.source_address
         if error_message is not None:
             row["error_message"] = error_message
         if sell_amount is not None:
@@ -182,7 +185,7 @@ class AuctionKicker:
         logger.debug(
             "txn_candidate_failed",
             run_id=run_id,
-            strategy=candidate.strategy_address,
+            source=candidate.source_address,
             token=candidate.token_address,
             token_symbol=candidate.token_symbol,
             want_symbol=candidate.want_symbol,
@@ -241,7 +244,7 @@ class AuctionKicker:
         try:
             erc20 = ERC20Reader(self.web3_client)
             live_balance_raw = await erc20.read_balance(
-                candidate.token_address, candidate.strategy_address
+                candidate.token_address, candidate.source_address
             )
         except Exception as exc:  # noqa: BLE001
             return self._fail(
@@ -256,7 +259,7 @@ class AuctionKicker:
         if live_usd_value < self.usd_threshold:
             logger.info(
                 "txn_candidate_below_threshold_live",
-                strategy=candidate.strategy_address,
+                source=candidate.source_address,
                 token=candidate.token_address,
                 cached_usd=candidate.usd_value,
                 live_usd=live_usd_value,
@@ -293,7 +296,7 @@ class AuctionKicker:
         if quote_result.amount_out_raw is None:
             logger.warning(
                 "txn_quote_no_amount",
-                strategy=candidate.strategy_address,
+                source=candidate.source_address,
                 token_in=candidate.token_address,
                 token_out=candidate.want_address,
                 provider_statuses=quote_result.provider_statuses,
@@ -309,7 +312,7 @@ class AuctionKicker:
             curve_status = quote_result.provider_statuses.get("curve", "not present")
             logger.warning(
                 "txn_quote_curve_unavailable",
-                strategy=candidate.strategy_address,
+                source=candidate.source_address,
                 token_in=candidate.token_address,
                 token_out=candidate.want_address,
                 curve_status=curve_status,
@@ -331,7 +334,7 @@ class AuctionKicker:
         if exact_value > 0 and starting_price_raw > exact_value * 2:
             logger.warning(
                 "txn_starting_price_precision_loss",
-                strategy=candidate.strategy_address,
+                source=candidate.source_address,
                 token=candidate.token_address,
                 exact_want_value=str(exact_value),
                 ceiled_value=starting_price_raw,
@@ -434,8 +437,11 @@ class AuctionKicker:
                 buffer_pct = self.start_price_buffer_bps / 100
                 min_buffer_pct = self.min_price_buffer_bps / 100
                 kick_summaries.append({
-                    "strategy": pk.candidate.strategy_address,
-                    "strategy_name": pk.candidate.strategy_name,
+                    "source": pk.candidate.source_address,
+                    "source_name": pk.candidate.source_name,
+                    "source_type": pk.candidate.source_type,
+                    "strategy": pk.candidate.source_address,
+                    "strategy_name": pk.candidate.source_name,
                     "token": pk.candidate.token_address,
                     "token_symbol": pk.candidate.token_symbol,
                     "auction": pk.candidate.auction_address,
@@ -586,12 +592,13 @@ class AuctionKicker:
 
     @staticmethod
     def _kick_args(pk: PreparedKick) -> tuple:
-        """Extract the 6 positional args shared by kick() and batchKick()."""
+        """Extract the 7 positional args shared by kick() and batchKick()."""
         return (
-            to_checksum_address(pk.candidate.strategy_address),
+            to_checksum_address(pk.candidate.source_address),
             to_checksum_address(pk.candidate.auction_address),
             to_checksum_address(pk.candidate.token_address),
             pk.sell_amount,
+            to_checksum_address(pk.candidate.want_address),
             pk.starting_price_raw,
             pk.minimum_price_raw,
         )

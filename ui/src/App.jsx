@@ -19,12 +19,17 @@ function apiUrl(path) {
 function parseLocation() {
   const path = window.location.pathname.replace(/^\/+/, "");
   const params = new URLSearchParams(window.location.search);
-  const page = path === "kicklog" ? "kicks" : "strategies";
+  let page = "strategies";
+  if (path === "kicklog") {
+    page = "kicks";
+  } else if (path === "fee-burner") {
+    page = "fee-burner";
+  }
   return { page, runId: params.get("run_id") || null };
 }
 
 function navigateTo(page, params) {
-  const slug = page === "kicks" ? "kicklog" : "strategies";
+  const slug = page === "kicks" ? "kicklog" : page === "fee-burner" ? "fee-burner" : "strategies";
   const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
   window.history.pushState(null, "", `/${slug}${qs}`);
 }
@@ -55,6 +60,38 @@ function formatStrategyDisplayName(name) {
   output = output.replace(/-{2,}/g, "-").trim();
   output = output.replace(/^-+/, "").replace(/-+$/, "");
   return output || name;
+}
+
+function normalizeKick(kick) {
+  return {
+    ...kick,
+    sourceType: kick.sourceType || (kick.strategyAddress ? "strategy" : null),
+    sourceAddress: kick.sourceAddress || kick.strategyAddress || null,
+    sourceName: kick.sourceName || kick.strategyName || null,
+  };
+}
+
+function normalizeDashboardRow(row) {
+  const sourceType = row.sourceType || (row.strategyAddress ? "strategy" : "fee_burner");
+  const sourceAddress = row.sourceAddress || row.strategyAddress || null;
+  const sourceName = row.sourceName || row.strategyName || null;
+  const contextType =
+    row.contextType || (row.vaultAddress || row.vaultName || row.vaultSymbol ? "vault" : null);
+  const contextAddress = row.contextAddress || row.vaultAddress || null;
+  const contextName = row.contextName || row.vaultName || null;
+  const contextSymbol = row.contextSymbol || row.vaultSymbol || null;
+
+  return {
+    ...row,
+    sourceType,
+    sourceAddress,
+    sourceName,
+    contextType,
+    contextAddress,
+    contextName,
+    contextSymbol,
+    kicks: Array.isArray(row.kicks) ? row.kicks.map(normalizeKick) : [],
+  };
 }
 
 function withGrouping(value) {
@@ -379,6 +416,15 @@ function TabBar({ activePage, onChangePage }) {
       <button
         type="button"
         role="tab"
+        aria-selected={activePage === "fee-burner"}
+        className={`tab-item ${activePage === "fee-burner" ? "is-active" : ""}`}
+        onClick={() => onChangePage("fee-burner")}
+      >
+        Fee Burner
+      </button>
+      <button
+        type="button"
+        role="tab"
         aria-selected={activePage === "kicks"}
         className={`tab-item ${activePage === "kicks" ? "is-active" : ""}`}
         onClick={() => onChangePage("kicks")}
@@ -464,8 +510,11 @@ function KickDetailContent({ kick }) {
         </div>
       </div>
       <div className="kick-detail-item">
-        <div className="kick-detail-label">Strategy</div>
-        <div className="kick-detail-value"><AddressCopy address={kick.strategyAddress} /></div>
+        <div className="kick-detail-label">Source</div>
+        <div className="kick-detail-value">
+          {kick.sourceName ? <div className="row-primary">{kick.sourceName}</div> : null}
+          <AddressCopy address={kick.sourceAddress} />
+        </div>
       </div>
       <div className="kick-detail-item">
         <div className="kick-detail-label">Tokens</div>
@@ -718,22 +767,22 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
             </span>
           ) : "—"}
         </td>
-        <td data-label="Strategy">
-          {kick.strategyAddress ? (
-            <span className="address-copy" title={kick.strategyAddress}>
+        <td data-label="Source">
+          {kick.sourceAddress ? (
+            <span className="address-copy" title={kick.sourceName || kick.sourceAddress}>
               <a
                 className="mono address-value"
-                href={`${ETHERSCAN_ADDRESS_URL}${kick.strategyAddress}`}
+                href={`${ETHERSCAN_ADDRESS_URL}${kick.sourceAddress}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
               >
-                {shortenAddress(kick.strategyAddress)}
+                {kick.sourceName || shortenAddress(kick.sourceAddress)}
               </a>
               <CopyIconButton
-                valueToCopy={kick.strategyAddress}
-                title={`Copy ${kick.strategyAddress}`}
-                ariaLabel={`Copy strategy address ${kick.strategyAddress}`}
+                valueToCopy={kick.sourceAddress}
+                title={`Copy ${kick.sourceAddress}`}
+                ariaLabel={`Copy source address ${kick.sourceAddress}`}
               />
             </span>
           ) : "—"}
@@ -795,7 +844,7 @@ function KickLogPage({ nowMs, initialRunId }) {
         if (!response.ok) throw new Error("Unable to load kicks");
         const payload = await response.json();
         if (!isMounted) return;
-        setKicks(payload.kicks || []);
+        setKicks(Array.isArray(payload.kicks) ? payload.kicks.map(normalizeKick) : []);
         setTotal(payload.total || 0);
       } catch (err) {
         if (isMounted && err.name !== "AbortError") {
@@ -838,7 +887,8 @@ function KickLogPage({ nowMs, initialRunId }) {
           kick.wantSymbol,
           kick.auctionAddress,
           kick.txHash,
-          kick.strategyAddress,
+          kick.sourceAddress,
+          kick.sourceName,
         ]
           .filter(Boolean)
           .join(" ")
@@ -906,7 +956,7 @@ function KickLogPage({ nowMs, initialRunId }) {
               <th className="align-right">USD Value</th>
               <th>Status</th>
               <th>Auction</th>
-              <th>Strategy</th>
+              <th>Source</th>
               <th>Tx</th>
             </tr>
           </thead>
@@ -985,6 +1035,117 @@ function TokenBalances({
   );
 }
 
+function FeeBurnerPage({
+  rows,
+  loading,
+  error,
+  nowMs,
+  displayMode,
+  onToggleMode,
+  expandedKickRows,
+  onToggleExpand,
+}) {
+  const latestScanAt = rows.reduce((latest, row) => {
+    if (!row.scannedAt) {
+      return latest;
+    }
+    if (!latest || row.scannedAt > latest) {
+      return row.scannedAt;
+    }
+    return latest;
+  }, null);
+
+  return (
+    <>
+      <div className="toolbar-meta">
+        <span>Showing {rows.length.toLocaleString()} fee burner{rows.length === 1 ? "" : "s"}</span>
+        <span className="meta-sep" aria-hidden="true">&middot;</span>
+        <span>Scanned {formatTimestamp(latestScanAt)}</span>
+      </div>
+
+      {error ? <p className="error">{error}</p> : null}
+
+      {loading ? (
+        <div className="fee-burner-empty">Loading fee burner rows...</div>
+      ) : !rows.length ? (
+        <div className="fee-burner-empty">No fee burner rows are available.</div>
+      ) : (
+        <section className="fee-burner-grid">
+          {rows.map((row) => (
+            <article key={row.sourceAddress} className="fee-burner-card">
+              <div className="fee-burner-header">
+                <div className="fee-burner-heading">
+                  <div className="fee-burner-eyebrow">Fee Burner</div>
+                  <EntityIdentity
+                    primary={row.sourceName || "Unnamed Fee Burner"}
+                    address={row.sourceAddress}
+                  />
+                </div>
+                <div className="fee-burner-total">
+                  <div className="fee-burner-label">Total USD</div>
+                  <div className="fee-burner-total-value">
+                    {row.totalUsdValue ? `$${formatBalance(row.totalUsdValue)}` : "?"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="fee-burner-meta-grid">
+                <div className="fee-burner-meta-item">
+                  <div className="fee-burner-label">Want</div>
+                  <div className="fee-burner-value">
+                    {row.wantAddress ? (
+                      <span className="address-copy" title={row.wantAddress}>
+                        <span className="mono address-value">
+                          {row.wantSymbol || shortenAddress(row.wantAddress)}
+                        </span>
+                        <CopyIconButton
+                          valueToCopy={row.wantAddress}
+                          title={`Copy address ${row.wantAddress}`}
+                          ariaLabel={`Copy address ${row.wantAddress}`}
+                        />
+                      </span>
+                    ) : "—"}
+                  </div>
+                </div>
+                <div className="fee-burner-meta-item fee-burner-auction">
+                  <div className="fee-burner-label">Auction</div>
+                  <AuctionAddressCell
+                    address={row.auctionAddress}
+                    version={row.auctionVersion}
+                    kicks={row.kicks}
+                    nowMs={nowMs}
+                    isExpanded={expandedKickRows.has(row.sourceAddress)}
+                    onToggleExpand={() => onToggleExpand(row.sourceAddress)}
+                  />
+                </div>
+                <div className="fee-burner-meta-item">
+                  <div className="fee-burner-label">Last Scan</div>
+                  <div className="fee-burner-value mono">
+                    {row.scannedAt ? formatRelativeTimestamp(row.scannedAt, nowMs) : "—"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="fee-burner-balances">
+                <div className="fee-burner-label">Token Balances</div>
+                {row.balances.length ? (
+                  <TokenBalances
+                    balances={row.balances}
+                    displayMode={displayMode}
+                    onToggleMode={onToggleMode}
+                  />
+                ) : (
+                  <div className="row-secondary">No balances above the visibility threshold.</div>
+                )}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+    </>
+  );
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState(() => parseLocation().page);
   const [initialRunId] = useState(() => parseLocation().runId);
@@ -997,7 +1158,6 @@ export default function App() {
   const [showZeroBalance, setShowZeroBalance] = useState(false);
   const [showClosedVaults, setShowClosedVaults] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [tokens, setTokens] = useState([]);
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loadingRows, setLoadingRows] = useState(true);
@@ -1144,13 +1304,11 @@ export default function App() {
             };
 
         setSummary(summaryPayload);
-        setTokens(payload.tokens || []);
         setRows(payload.rows || []);
       } catch (loadError) {
         if (isMounted && loadError.name !== "AbortError") {
           setError(loadError.message || "Unable to load dashboard");
           setSummary(null);
-          setTokens([]);
           setRows([]);
         }
       } finally {
@@ -1168,45 +1326,11 @@ export default function App() {
     };
   }, []);
 
-  const tokenOptions = useMemo(() => {
-    const bySymbol = new Map();
-
-    for (const token of tokens) {
-      const symbol = String(token.tokenSymbol || "UNKNOWN").trim() || "UNKNOWN";
-      const key = symbol.toUpperCase();
-      const existing = bySymbol.get(key);
-
-      if (!existing || Number(token.strategyCount || 0) > Number(existing.strategyCount || 0)) {
-        bySymbol.set(key, {
-          tokenAddress: token.tokenAddress,
-          tokenSymbol: symbol,
-          strategyCount: Number(token.strategyCount || 0),
-        });
-      }
-    }
-
-    return Array.from(bySymbol.values()).sort(
-      (a, b) => b.strategyCount - a.strategyCount || a.tokenSymbol.localeCompare(b.tokenSymbol),
-    );
-  }, [tokens]);
-
-  useEffect(() => {
-    if (selectedToken === ALL_TOKENS || !tokenOptions.length) {
-      return;
-    }
-
-    const exists = tokenOptions.some(
-      (option) => option.tokenAddress.toLowerCase() === selectedToken.toLowerCase(),
-    );
-    if (!exists) {
-      setSelectedToken(ALL_TOKENS);
-    }
-  }, [selectedToken, tokenOptions]);
-
-  const normalizedRows = useMemo(() => {
+  const decoratedRows = useMemo(() => {
     return rows
       .map((row) => {
-        const visibleBalances = row.balances
+        const normalizedRow = normalizeDashboardRow(row);
+        const visibleBalances = normalizedRow.balances
           .map((balance) => {
             const normalizedBalance = parseBig(balance.normalizedBalance);
             const tokenPriceUsd = parseBig(balance.tokenPriceUsd);
@@ -1240,17 +1364,68 @@ export default function App() {
           : null;
 
         return {
-          ...row,
+          ...normalizedRow,
           balances: visibleBalances,
           totalUsdValue,
         };
-      })
-      .filter((row) => (showZeroBalance || row.balances.length > 0) && (showClosedVaults || row.depositLimit !== "0"));
-  }, [rows, showZeroBalance, showClosedVaults]);
+      });
+  }, [rows]);
 
-  const filteredRows = useMemo(() => {
+  const strategyRows = useMemo(
+    () => decoratedRows.filter((row) => row.sourceType === "strategy"),
+    [decoratedRows],
+  );
+
+  const feeBurnerRows = useMemo(
+    () => decoratedRows.filter((row) => row.sourceType === "fee_burner"),
+    [decoratedRows],
+  );
+
+  const tokenOptions = useMemo(() => {
+    const byAddress = new Map();
+
+    for (const row of strategyRows) {
+      for (const balance of row.balances) {
+        if (!balance.tokenAddress) {
+          continue;
+        }
+        const key = balance.tokenAddress.toLowerCase();
+        const existing = byAddress.get(key);
+        byAddress.set(key, {
+          tokenAddress: balance.tokenAddress,
+          tokenSymbol: String(balance.tokenSymbol || "UNKNOWN").trim() || "UNKNOWN",
+          strategyCount: existing ? existing.strategyCount + 1 : 1,
+        });
+      }
+    }
+
+    return Array.from(byAddress.values()).sort(
+      (a, b) => b.strategyCount - a.strategyCount || a.tokenSymbol.localeCompare(b.tokenSymbol),
+    );
+  }, [strategyRows]);
+
+  useEffect(() => {
+    if (selectedToken === ALL_TOKENS || !tokenOptions.length) {
+      return;
+    }
+
+    const exists = tokenOptions.some(
+      (option) => option.tokenAddress.toLowerCase() === selectedToken.toLowerCase(),
+    );
+    if (!exists) {
+      setSelectedToken(ALL_TOKENS);
+    }
+  }, [selectedToken, tokenOptions]);
+
+  const visibleStrategyRows = useMemo(() => {
+    return strategyRows.filter(
+      (row) => (showZeroBalance || row.balances.length > 0) && (showClosedVaults || row.depositLimit !== "0"),
+    );
+  }, [strategyRows, showZeroBalance, showClosedVaults]);
+
+  const filteredStrategyRows = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const filtered = normalizedRows.filter((row) => {
+    const filtered = visibleStrategyRows.filter((row) => {
       const tokenMatch =
         selectedToken === ALL_TOKENS
           ? true
@@ -1277,11 +1452,11 @@ export default function App() {
       }
 
       const searchable = [
-        row.strategyName,
-        row.strategyAddress,
-        row.vaultAddress,
-        row.vaultName,
-        row.vaultSymbol,
+        row.sourceName,
+        row.sourceAddress,
+        row.contextAddress,
+        row.contextName,
+        row.contextSymbol,
         row.auctionAddress,
         ...row.balances.map((balance) => `${balance.tokenSymbol} ${balance.tokenAddress}`),
       ]
@@ -1297,7 +1472,7 @@ export default function App() {
       const totalB = parseBig(b.totalUsdValue);
 
       if (!totalA && !totalB) {
-        return a.strategyAddress.localeCompare(b.strategyAddress);
+        return (a.sourceAddress || "").localeCompare(b.sourceAddress || "");
       }
       if (!totalA) {
         return 1;
@@ -1308,27 +1483,27 @@ export default function App() {
 
       const cmp = totalA.cmp(totalB);
       if (cmp === 0) {
-        return a.strategyAddress.localeCompare(b.strategyAddress);
+        return (a.sourceAddress || "").localeCompare(b.sourceAddress || "");
       }
       return balanceSortDirection === "desc" ? -cmp : cmp;
     });
 
     return filtered;
-  }, [normalizedRows, searchTerm, selectedToken, auctionFilter, balanceSortDirection]);
+  }, [visibleStrategyRows, searchTerm, selectedToken, auctionFilter, balanceSortDirection]);
 
 
   const latestVisibleScan = useMemo(() => {
-    if (!filteredRows.length) {
+    if (!filteredStrategyRows.length) {
       return summary?.latestScanAt || null;
     }
 
-    return filteredRows.reduce((latest, row) => {
+    return filteredStrategyRows.reduce((latest, row) => {
       if (!latest) {
         return row.scannedAt;
       }
       return row.scannedAt > latest ? row.scannedAt : latest;
     }, null);
-  }, [filteredRows, summary]);
+  }, [filteredStrategyRows, summary]);
 
   function toggleDisplayMode() {
     setDisplayMode((prev) => (prev === "token" ? "usd" : "token"));
@@ -1347,13 +1522,13 @@ export default function App() {
     setIsAuctionFilterMenuOpen(false);
   }
 
-  function toggleKickExpand(strategyAddress) {
+  function toggleKickExpand(sourceAddress) {
     setExpandedKickRows((prev) => {
       const next = new Set(prev);
-      if (next.has(strategyAddress)) {
-        next.delete(strategyAddress);
+      if (next.has(sourceAddress)) {
+        next.delete(sourceAddress);
       } else {
-        next.add(strategyAddress);
+        next.add(sourceAddress);
       }
       return next;
     });
@@ -1433,7 +1608,7 @@ export default function App() {
       </section>
 
       <div className="toolbar-meta">
-        <span>Showing {filteredRows.length.toLocaleString()} results</span>
+        <span>Showing {filteredStrategyRows.length.toLocaleString()} results</span>
         <span className="meta-sep" aria-hidden="true">&middot;</span>
         <span>Scanned {formatTimestamp(latestVisibleScan)}</span>
       </div>
@@ -1515,27 +1690,28 @@ export default function App() {
           </thead>
           <tbody>
             {loadingRows ? <SkeletonRows /> : null}
-            {!loadingRows && !filteredRows.length ? (
+            {!loadingRows && !filteredStrategyRows.length ? (
               <tr>
                 <td colSpan={5} className="empty">No strategies match the current filters.</td>
               </tr>
             ) : null}
             {!loadingRows
-              ? filteredRows.map((row) => (
-                  <tr key={row.strategyAddress}>
+              ? filteredStrategyRows.map((row) => (
+                  <tr key={row.sourceAddress}>
                     <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)} data-label="Last Scan">
                       {formatRelativeTimestamp(row.scannedAt, nowMs)}
                     </td>
                     <td data-label="Vault">
                       <EntityIdentity
-                        primary={row.vaultSymbol || row.vaultName || "Unknown Vault"}
-                        address={row.vaultAddress}
+                        primary={row.contextSymbol || row.contextName || "Unknown Vault"}
+                        secondary={row.contextName && row.contextSymbol !== row.contextName ? row.contextName : null}
+                        address={row.contextAddress}
                       />
                     </td>
                     <td data-label="Strategy">
                       <EntityIdentity
-                        primary={formatStrategyDisplayName(row.strategyName)}
-                        address={row.strategyAddress}
+                        primary={formatStrategyDisplayName(row.sourceName)}
+                        address={row.sourceAddress}
                       />
                     </td>
                     <td className="auction-cell" data-label="Auction">
@@ -1544,8 +1720,8 @@ export default function App() {
                         version={row.auctionVersion}
                         kicks={row.kicks}
                         nowMs={nowMs}
-                        isExpanded={expandedKickRows.has(row.strategyAddress)}
-                        onToggleExpand={() => toggleKickExpand(row.strategyAddress)}
+                        isExpanded={expandedKickRows.has(row.sourceAddress)}
+                        onToggleExpand={() => toggleKickExpand(row.sourceAddress)}
                       />
                     </td>
                     <td data-label="Balances">
@@ -1562,6 +1738,19 @@ export default function App() {
         </table>
       </div>
       </>
+      ) : null}
+
+      {activePage === "fee-burner" ? (
+        <FeeBurnerPage
+          rows={feeBurnerRows}
+          loading={loadingRows}
+          error={error}
+          nowMs={nowMs}
+          displayMode={displayMode}
+          onToggleMode={toggleDisplayMode}
+          expandedKickRows={expandedKickRows}
+          onToggleExpand={toggleKickExpand}
+        />
       ) : null}
     </main>
   );

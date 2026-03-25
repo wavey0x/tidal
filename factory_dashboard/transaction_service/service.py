@@ -119,7 +119,7 @@ class TxnService:
                 logger.debug(
                     "txn_candidate_skip",
                     run_id=run_id,
-                    strategy=decision.candidate.strategy_address,
+                    source=decision.candidate.source_address,
                     token=decision.candidate.token_address,
                     reason=decision.skip_reason,
                 )
@@ -127,20 +127,27 @@ class TxnService:
 
             if not live:
                 # Dry-run: persist DRY_RUN row.
-                self.kick_tx_repository.insert({
+                row = {
                     "run_id": run_id,
-                    "strategy_address": decision.candidate.strategy_address,
+                    "source_type": decision.candidate.source_type,
+                    "source_address": decision.candidate.source_address,
                     "token_address": decision.candidate.token_address,
                     "auction_address": decision.candidate.auction_address,
                     "price_usd": decision.candidate.price_usd,
                     "usd_value": str(decision.candidate.usd_value),
                     "status": "DRY_RUN",
                     "created_at": utcnow_iso(),
-                })
+                    "want_address": decision.candidate.want_address,
+                    "want_symbol": decision.candidate.want_symbol,
+                    "token_symbol": decision.candidate.token_symbol,
+                }
+                if decision.candidate.source_type == "strategy":
+                    row["strategy_address"] = decision.candidate.source_address
+                self.kick_tx_repository.insert(row)
                 logger.info(
                     "txn_kick_dry_run",
                     run_id=run_id,
-                    strategy=decision.candidate.strategy_address,
+                    source=decision.candidate.source_address,
                     token=decision.candidate.token_address,
                     usd_value=decision.candidate.usd_value,
                 )

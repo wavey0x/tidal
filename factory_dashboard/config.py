@@ -14,8 +14,16 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class MonitoredFeeBurner(BaseModel):
+    """Static fee burner registration from config.yaml."""
+
+    address: str
+    want_address: str
+    label: str | None = None
 
 
 class Settings(BaseSettings):
@@ -106,6 +114,10 @@ class Settings(BaseSettings):
 
     max_batch_kick_size: int = Field(default=5, alias="MAX_BATCH_KICK_SIZE")
     batch_kick_delay_seconds: float = Field(default=5, alias="BATCH_KICK_DELAY_SECONDS")
+    monitored_fee_burners: list[MonitoredFeeBurner] = Field(
+        default_factory=list,
+        alias="MONITORED_FEE_BURNERS",
+    )
 
     @property
     def resolved_db_path(self) -> Path:

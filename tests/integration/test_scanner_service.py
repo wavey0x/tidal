@@ -3,10 +3,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from factory_dashboard.alerts.base import NullAlertSink
+from factory_dashboard.config import MonitoredFeeBurner
 from factory_dashboard.constants import ADDITIONAL_DISCOVERY_VAULTS, CORE_REWARD_TOKENS
 from factory_dashboard.persistence import models
 from factory_dashboard.persistence.repositories import (
     BalanceRepository,
+    FeeBurnerRepository,
+    FeeBurnerTokenBalanceRepository,
+    FeeBurnerTokenRepository,
     ScanItemErrorRepository,
     ScanRunRepository,
     StrategyRepository,
@@ -15,7 +19,7 @@ from factory_dashboard.persistence.repositories import (
     VaultRepository,
 )
 from factory_dashboard.scanner.service import ScannerService
-from factory_dashboard.scanner.auction_mapper import AuctionMappingRefreshResult
+from factory_dashboard.scanner.auction_mapper import AuctionMappingRefreshResult, FeeBurnerAuctionRefreshResult
 from factory_dashboard.scanner.token_metadata import TokenMetadataService
 from factory_dashboard.types import BalancePair, DiscoveredStrategy
 
@@ -144,6 +148,17 @@ class FakeTokenPriceRefreshService:
         )
 
 
+class FakeFeeBurnerTokenResolver:
+    def __init__(self, tokens_by_burner=None):
+        self.tokens_by_burner = tokens_by_burner or {}
+
+    async def resolve_many(self, fee_burners):
+        return (
+            {fee_burner.address.lower(): set(self.tokens_by_burner.get(fee_burner.address.lower(), set())) for fee_burner in fee_burners},
+            [],
+        )
+
+
 class FakeStrategyAuctionMapper:
     def __init__(self, *, fail_refresh: bool = False) -> None:
         self.fail_refresh = fail_refresh
@@ -176,6 +191,25 @@ class FakeStrategyAuctionMapper:
             source="fresh",
         )
 
+    async def refresh_for_fee_burners(self, fee_burner_to_want: dict[str, str]) -> FeeBurnerAuctionRefreshResult:
+        fee_burner_to_auction = {
+            address: f"0x{index:040x}"
+            for index, address in enumerate(sorted(fee_burner_to_want), start=1)
+        }
+        fee_burner_to_auction_version = {address: "1.0.3cc" for address in fee_burner_to_want}
+        return FeeBurnerAuctionRefreshResult(
+            fee_burner_to_auction=fee_burner_to_auction,
+            fee_burner_to_want=fee_burner_to_want,
+            fee_burner_to_auction_version=fee_burner_to_auction_version,
+            fee_burner_to_error={},
+            auction_count=4,
+            valid_auction_count=2,
+            receiver_filtered_count=0,
+            mapped_count=len(fee_burner_to_want),
+            unmapped_count=0,
+            source="fresh",
+        )
+
 
 @pytest.mark.asyncio
 async def test_scanner_persists_lowercase_and_zero_balances() -> None:
@@ -185,9 +219,12 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
     with Session(engine) as session:
         vault_repo = VaultRepository(session)
         strategy_repo = StrategyRepository(session)
+        fee_burner_repo = FeeBurnerRepository(session)
         token_repo = TokenRepository(session)
         strategy_token_repo = StrategyTokenRepository(session)
+        fee_burner_token_repo = FeeBurnerTokenRepository(session)
         balance_repo = BalanceRepository(session)
+        fee_burner_balance_repo = FeeBurnerTokenBalanceRepository(session)
         scan_run_repo = ScanRunRepository(session)
         scan_item_error_repo = ScanItemErrorRepository(session)
 
@@ -213,11 +250,16 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
             token_metadata_service=token_metadata_service,
             token_price_refresh_service=fake_token_price_refresh_service,
             balance_reader=FakeBalanceReader(),
+            monitored_fee_burners=[],
+            fee_burner_token_resolver=FakeFeeBurnerTokenResolver(),
             name_reader=fake_name_reader,
             vault_repository=vault_repo,
             strategy_repository=strategy_repo,
+            fee_burner_repository=fee_burner_repo,
             strategy_token_repository=strategy_token_repo,
+            fee_burner_token_repository=fee_burner_token_repo,
             balance_repository=balance_repo,
+            fee_burner_balance_repository=fee_burner_balance_repo,
             scan_run_repository=scan_run_repo,
             scan_item_error_repository=scan_item_error_repo,
             alert_sink=NullAlertSink(),
@@ -275,6 +317,86 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scanner_persists_fee_burner_rows_and_balances() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    models.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        vault_repo = VaultRepository(session)
+        strategy_repo = StrategyRepository(session)
+        fee_burner_repo = FeeBurnerRepository(session)
+        token_repo = TokenRepository(session)
+        strategy_token_repo = StrategyTokenRepository(session)
+        fee_burner_token_repo = FeeBurnerTokenRepository(session)
+        balance_repo = BalanceRepository(session)
+        fee_burner_balance_repo = FeeBurnerTokenBalanceRepository(session)
+        scan_run_repo = ScanRunRepository(session)
+        scan_item_error_repo = ScanItemErrorRepository(session)
+
+        fake_erc20 = FakeERC20Reader()
+        token_metadata_service = TokenMetadataService(
+            chain_id=1,
+            token_repository=token_repo,
+            erc20_reader=fake_erc20,
+        )
+        fee_burner = MonitoredFeeBurner(
+            address="0xb911fcce8d5afcec73e072653107260bb23c1ee8",
+            want_address="0xf939e0a03fb07f59a73314e73794be0e57ac1b4e",
+            label="Yearn Fee Burner",
+        )
+
+        scanner = ScannerService(
+            session=session,
+            chain_id=1,
+            concurrency=5,
+            multicall_enabled=True,
+            web3_client=FakeWeb3Client(),
+            strategy_auction_mapper=FakeStrategyAuctionMapper(),
+            strategy_discovery_service=FakeDiscoveryService(),
+            reward_token_resolver=FakeRewardTokenResolver(),
+            token_metadata_service=token_metadata_service,
+            token_price_refresh_service=FakeTokenPriceRefreshService(),
+            balance_reader=FakeBalanceReader(),
+            monitored_fee_burners=[fee_burner],
+            fee_burner_token_resolver=FakeFeeBurnerTokenResolver(
+                tokens_by_burner={fee_burner.address.lower(): {"0xcccccccccccccccccccccccccccccccccccccccc"}}
+            ),
+            name_reader=FakeNameReader(),
+            vault_repository=vault_repo,
+            strategy_repository=strategy_repo,
+            fee_burner_repository=fee_burner_repo,
+            strategy_token_repository=strategy_token_repo,
+            fee_burner_token_repository=fee_burner_token_repo,
+            balance_repository=balance_repo,
+            fee_burner_balance_repository=fee_burner_balance_repo,
+            scan_run_repository=scan_run_repo,
+            scan_item_error_repository=scan_item_error_repo,
+            alert_sink=NullAlertSink(),
+        )
+
+        result = await scanner.scan_once()
+
+        assert result.status == "SUCCESS"
+
+        fee_burner_rows = session.execute(select(models.fee_burners)).mappings().all()
+        assert len(fee_burner_rows) == 1
+        assert fee_burner_rows[0]["address"] == fee_burner.address.lower()
+        assert fee_burner_rows[0]["name"] == "Yearn Fee Burner"
+        assert fee_burner_rows[0]["want_address"] == fee_burner.want_address.lower()
+        assert fee_burner_rows[0]["auction_address"] is not None
+        assert fee_burner_rows[0]["auction_version"] == "1.0.3cc"
+
+        fee_burner_token_rows = session.execute(select(models.fee_burner_tokens)).mappings().all()
+        assert len(fee_burner_token_rows) == 1
+        assert fee_burner_token_rows[0]["source"] == "trade_handler_approval"
+
+        fee_burner_balance_rows = session.execute(select(models.fee_burner_token_balances_latest)).mappings().all()
+        assert len(fee_burner_balance_rows) == 1
+        assert fee_burner_balance_rows[0]["fee_burner_address"] == fee_burner.address.lower()
+        assert fee_burner_balance_rows[0]["normalized_balance"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     models.metadata.create_all(engine)
@@ -282,9 +404,12 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
     with Session(engine) as session:
         vault_repo = VaultRepository(session)
         strategy_repo = StrategyRepository(session)
+        fee_burner_repo = FeeBurnerRepository(session)
         token_repo = TokenRepository(session)
         strategy_token_repo = StrategyTokenRepository(session)
+        fee_burner_token_repo = FeeBurnerTokenRepository(session)
         balance_repo = BalanceRepository(session)
+        fee_burner_balance_repo = FeeBurnerTokenBalanceRepository(session)
         scan_run_repo = ScanRunRepository(session)
         scan_item_error_repo = ScanItemErrorRepository(session)
 
@@ -308,11 +433,16 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
             token_metadata_service=token_metadata_service,
             token_price_refresh_service=FakeTokenPriceRefreshService(),
             balance_reader=FakeBalanceReader(),
+            monitored_fee_burners=[],
+            fee_burner_token_resolver=FakeFeeBurnerTokenResolver(),
             name_reader=FakeNameReader(),
             vault_repository=vault_repo,
             strategy_repository=strategy_repo,
+            fee_burner_repository=fee_burner_repo,
             strategy_token_repository=strategy_token_repo,
+            fee_burner_token_repository=fee_burner_token_repo,
             balance_repository=balance_repo,
+            fee_burner_balance_repository=fee_burner_balance_repo,
             scan_run_repository=scan_run_repo,
             scan_item_error_repository=scan_item_error_repo,
             alert_sink=NullAlertSink(),
@@ -333,11 +463,16 @@ async def test_scanner_uses_cached_auction_mapping_when_refresh_fails() -> None:
             token_metadata_service=token_metadata_service,
             token_price_refresh_service=FakeTokenPriceRefreshService(),
             balance_reader=FakeBalanceReader(),
+            monitored_fee_burners=[],
+            fee_burner_token_resolver=FakeFeeBurnerTokenResolver(),
             name_reader=FakeNameReader(),
             vault_repository=vault_repo,
             strategy_repository=strategy_repo,
+            fee_burner_repository=fee_burner_repo,
             strategy_token_repository=strategy_token_repo,
+            fee_burner_token_repository=fee_burner_token_repo,
             balance_repository=balance_repo,
+            fee_burner_balance_repository=fee_burner_balance_repo,
             scan_run_repository=scan_run_repo,
             scan_item_error_repository=scan_item_error_repo,
             alert_sink=NullAlertSink(),

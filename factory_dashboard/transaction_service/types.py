@@ -29,9 +29,10 @@ class KickStatus(str, Enum):
 
 @dataclass(slots=True)
 class KickCandidate:
-    """Row from the shortlist query — a (strategy, token) pair above threshold."""
+    """Row from the shortlist query — a (source, token) pair above threshold."""
 
-    strategy_address: str
+    source_type: str
+    source_address: str
     token_address: str
     auction_address: str
     normalized_balance: str
@@ -39,9 +40,21 @@ class KickCandidate:
     want_address: str
     usd_value: float
     decimals: int
-    strategy_name: str | None = None
+    source_name: str | None = None
+    context_type: str | None = None
+    context_address: str | None = None
+    context_name: str | None = None
+    context_symbol: str | None = None
     token_symbol: str | None = None
     want_symbol: str | None = None
+
+    @property
+    def strategy_address(self) -> str:
+        return self.source_address
+
+    @property
+    def strategy_name(self) -> str | None:
+        return self.source_name
 
 
 @dataclass(slots=True)

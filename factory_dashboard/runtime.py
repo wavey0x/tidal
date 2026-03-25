@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from factory_dashboard.alerts.base import NullAlertSink
 from factory_dashboard.alerts.telegram import TelegramAlertSink
+from factory_dashboard.chain.contracts.fee_burner import FeeBurnerReader
 from factory_dashboard.chain.contracts.erc20 import ERC20Reader
 from factory_dashboard.chain.contracts.multicall import MulticallClient
 from factory_dashboard.chain.contracts.yearn import StrategyRewardsReader, YearnCurveFactoryReader, YearnNameReader
@@ -15,6 +16,9 @@ from factory_dashboard.constants import (
 )
 from factory_dashboard.persistence.repositories import (
     BalanceRepository,
+    FeeBurnerRepository,
+    FeeBurnerTokenBalanceRepository,
+    FeeBurnerTokenRepository,
     ScanItemErrorRepository,
     ScanRunRepository,
     StrategyRepository,
@@ -27,6 +31,7 @@ from factory_dashboard.pricing.service import TokenPriceRefreshService
 from factory_dashboard.scanner.balance_reader import BalanceReader
 from factory_dashboard.scanner.discovery import StrategyDiscoveryService
 from factory_dashboard.scanner.auction_mapper import StrategyAuctionMapper
+from factory_dashboard.scanner.fee_burner import FeeBurnerTokenResolver
 from factory_dashboard.scanner.reward_token_resolver import RewardTokenResolver
 from factory_dashboard.scanner.service import ScannerService
 from factory_dashboard.scanner.token_metadata import TokenMetadataService
@@ -66,13 +71,17 @@ def build_scanner_service(settings: Settings, session) -> ScannerService:
         multicall_enabled=settings.multicall_enabled,
         multicall_balance_batch_calls=settings.multicall_balance_batch_calls,
     )
+    fee_burner_reader = FeeBurnerReader(web3_client)
     yearn_name_reader = YearnNameReader(web3_client)
 
     vault_repository = VaultRepository(session)
     strategy_repository = StrategyRepository(session)
+    fee_burner_repository = FeeBurnerRepository(session)
     token_repository = TokenRepository(session)
     strategy_token_repository = StrategyTokenRepository(session)
+    fee_burner_token_repository = FeeBurnerTokenRepository(session)
     balance_repository = BalanceRepository(session)
+    fee_burner_balance_repository = FeeBurnerTokenBalanceRepository(session)
     scan_run_repository = ScanRunRepository(session)
     scan_item_error_repository = ScanItemErrorRepository(session)
 
@@ -124,11 +133,19 @@ def build_scanner_service(settings: Settings, session) -> ScannerService:
         token_metadata_service=token_metadata_service,
         token_price_refresh_service=token_price_refresh_service,
         balance_reader=BalanceReader(erc20_reader),
+        monitored_fee_burners=settings.monitored_fee_burners,
+        fee_burner_token_resolver=FeeBurnerTokenResolver(
+            fee_burner_reader,
+            spender_address=YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS,
+        ),
         name_reader=yearn_name_reader,
         vault_repository=vault_repository,
         strategy_repository=strategy_repository,
+        fee_burner_repository=fee_burner_repository,
         strategy_token_repository=strategy_token_repository,
+        fee_burner_token_repository=fee_burner_token_repository,
         balance_repository=balance_repository,
+        fee_burner_balance_repository=fee_burner_balance_repository,
         scan_run_repository=scan_run_repository,
         scan_item_error_repository=scan_item_error_repository,
         alert_sink=alert_sink,

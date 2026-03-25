@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import {ITradeHandler} from "./interfaces/ITradeHandler.sol";
 import {IAuction} from "./interfaces/IAuction.sol";
-import {IStrategy} from "./interfaces/IStrategy.sol";
 import {WeiRollCommandLib} from "./utils/WeiRollCommandLib.sol";
 
 contract AuctionKicker {
@@ -16,14 +15,15 @@ contract AuctionKicker {
     event OwnerUpdated(address indexed owner);
     event KeeperUpdated(address indexed account, bool allowed);
     event Kicked(
-        address indexed strategy, address indexed auction, address sellToken, uint256 sellAmount, uint256 startingPrice, uint256 minimumPrice
+        address indexed source, address indexed auction, address sellToken, uint256 sellAmount, uint256 startingPrice, uint256 minimumPrice
     );
 
     struct KickParams {
-        address strategy;
+        address source;
         address auction;
         address sellToken;
         uint256 sellAmount;
+        address wantToken;
         uint256 startingPrice;
         uint256 minimumPrice;
     }
@@ -57,11 +57,11 @@ contract AuctionKicker {
         emit KeeperUpdated(account, allowed);
     }
 
-    function kick(address strategy, address auction, address sellToken, uint256 sellAmount, uint256 startingPrice, uint256 minimumPrice)
+    function kick(address source, address auction, address sellToken, uint256 sellAmount, address wantToken, uint256 startingPrice, uint256 minimumPrice)
         external
         onlyKeeperOrOwner
     {
-        _kick(KickParams(strategy, auction, sellToken, sellAmount, startingPrice, minimumPrice));
+        _kick(KickParams(source, auction, sellToken, sellAmount, wantToken, startingPrice, minimumPrice));
     }
 
     function batchKick(KickParams[] calldata kicks) external onlyKeeperOrOwner {
@@ -72,11 +72,11 @@ contract AuctionKicker {
 
     function _kick(KickParams memory p) internal {
         require(p.startingPrice != 0, "starting price zero");
-        require(IAuction(p.auction).want() == IStrategy(p.strategy).want(), "want mismatch");
-        require(IAuction(p.auction).receiver() == p.strategy, "receiver mismatch");
+        require(IAuction(p.auction).want() == p.wantToken, "want mismatch");
+        require(IAuction(p.auction).receiver() == p.source, "receiver mismatch");
 
         bytes[] memory state = new bytes[](6);
-        state[0] = abi.encode(p.strategy);
+        state[0] = abi.encode(p.source);
         state[1] = abi.encode(p.auction);
         state[2] = abi.encode(p.sellAmount);
         state[3] = abi.encode(p.startingPrice);
@@ -96,6 +96,6 @@ contract AuctionKicker {
         );
 
         ITradeHandler(tradeHandler).execute(commands, state);
-        emit Kicked(p.strategy, p.auction, p.sellToken, p.sellAmount, p.startingPrice, p.minimumPrice);
+        emit Kicked(p.source, p.auction, p.sellToken, p.sellAmount, p.startingPrice, p.minimumPrice);
     }
 }

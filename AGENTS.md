@@ -4,6 +4,11 @@
 
 - Never add `Co-Authored-By` trailers to commit messages.
 
+## External Repos
+
+- The read-only Factory Dashboard API repo lives at `/Users/wavey/yearn/wavey-api`.
+- When the dashboard UI or scanner/txn payload shape changes, check `services/factory_dashboard.py` and `app.py` there as part of the same workflow.
+
 ## UI Compliance Guardrails
 
 These rules apply to `the `ui/` directory`.

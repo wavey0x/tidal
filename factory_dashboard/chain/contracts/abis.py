@@ -98,6 +98,23 @@ STRATEGY_ABI = [
     }
 ]
 
+FEE_BURNER_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "_spender", "type": "address"}],
+        "name": "getApprovals",
+        "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "_spender", "type": "address"}],
+        "name": "isTokenSpender",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
 AUCTION_ABI = [
     {
         "inputs": [],
@@ -167,10 +184,11 @@ ERC20_ABI = [
 AUCTION_KICKER_ABI = [
     {
         "inputs": [
-            {"internalType": "address", "name": "strategy", "type": "address"},
+            {"internalType": "address", "name": "source", "type": "address"},
             {"internalType": "address", "name": "auction", "type": "address"},
             {"internalType": "address", "name": "sellToken", "type": "address"},
             {"internalType": "uint256", "name": "sellAmount", "type": "uint256"},
+            {"internalType": "address", "name": "wantToken", "type": "address"},
             {"internalType": "uint256", "name": "startingPrice", "type": "uint256"},
             {"internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
         ],
@@ -183,10 +201,11 @@ AUCTION_KICKER_ABI = [
         "inputs": [
             {
                 "components": [
-                    {"internalType": "address", "name": "strategy", "type": "address"},
+                    {"internalType": "address", "name": "source", "type": "address"},
                     {"internalType": "address", "name": "auction", "type": "address"},
                     {"internalType": "address", "name": "sellToken", "type": "address"},
                     {"internalType": "uint256", "name": "sellAmount", "type": "uint256"},
+                    {"internalType": "address", "name": "wantToken", "type": "address"},
                     {"internalType": "uint256", "name": "startingPrice", "type": "uint256"},
                     {"internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
                 ],

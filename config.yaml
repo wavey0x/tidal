@@ -10,6 +10,10 @@ scan_interval_seconds: 300
 scan_concurrency: 20
 rpc_timeout_seconds: 10
 rpc_retry_attempts: 3
+monitored_fee_burners:
+  - address: "0xb911Fcce8D5AFCEc73E072653107260bb23C1eE8"
+    want_address: "0xf939e0a03fb07f59a73314e73794be0e57ac1b4e"
+    label: "Yearn Fee Burner"
 
 # ── Multicall ────────────────────────────────────────
 multicall_enabled: true

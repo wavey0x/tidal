@@ -46,6 +46,22 @@ strategies = Table(
     Column("last_seen_at", String, nullable=False),
 )
 
+fee_burners = Table(
+    "fee_burners",
+    metadata,
+    Column("address", String, primary_key=True),
+    Column("chain_id", Integer, nullable=False),
+    Column("name", String, nullable=True),
+    Column("active", Integer, nullable=False, server_default="1"),
+    Column("auction_address", String, nullable=True),
+    Column("want_address", String, nullable=True),
+    Column("auction_version", String, nullable=True),
+    Column("auction_updated_at", String, nullable=True),
+    Column("auction_error_message", Text, nullable=True),
+    Column("first_seen_at", String, nullable=False),
+    Column("last_seen_at", String, nullable=False),
+)
+
 tokens = Table(
     "tokens",
     metadata,
@@ -94,6 +110,30 @@ strategy_token_balances_latest = Table(
     PrimaryKeyConstraint("strategy_address", "token_address"),
 )
 
+fee_burner_tokens = Table(
+    "fee_burner_tokens",
+    metadata,
+    Column("fee_burner_address", String, nullable=False),
+    Column("token_address", String, nullable=False),
+    Column("source", String, nullable=False),
+    Column("active", Integer, nullable=False, server_default="1"),
+    Column("first_seen_at", String, nullable=False),
+    Column("last_seen_at", String, nullable=False),
+    PrimaryKeyConstraint("fee_burner_address", "token_address"),
+)
+
+fee_burner_token_balances_latest = Table(
+    "fee_burner_token_balances_latest",
+    metadata,
+    Column("fee_burner_address", String, nullable=False),
+    Column("token_address", String, nullable=False),
+    Column("raw_balance", Text, nullable=False),
+    Column("normalized_balance", Text, nullable=False),
+    Column("block_number", Integer, nullable=False),
+    Column("scanned_at", String, nullable=False),
+    PrimaryKeyConstraint("fee_burner_address", "token_address"),
+)
+
 scan_runs = Table(
     "scan_runs",
     metadata,
@@ -114,6 +154,8 @@ scan_item_errors = Table(
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("run_id", String, nullable=False),
+    Column("source_type", String, nullable=True),
+    Column("source_address", String, nullable=True),
     Column("strategy_address", String, nullable=True),
     Column("token_address", String, nullable=True),
     Column("stage", String, nullable=False),
@@ -142,7 +184,9 @@ kick_txs = Table(
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("run_id", String, nullable=False),
-    Column("strategy_address", String, nullable=False),
+    Column("source_type", String, nullable=True),
+    Column("source_address", String, nullable=True),
+    Column("strategy_address", String, nullable=True),
     Column("token_address", String, nullable=False),
     Column("auction_address", String, nullable=False),
     Column("sell_amount", Text, nullable=True),
@@ -168,6 +212,9 @@ kick_txs = Table(
 )
 
 Index("ix_strategy_token_balances_strategy_scanned", strategy_token_balances_latest.c.strategy_address, strategy_token_balances_latest.c.scanned_at)
+Index("ix_fee_burner_token_balances_scanned", fee_burner_token_balances_latest.c.fee_burner_address, fee_burner_token_balances_latest.c.scanned_at)
 Index("ix_scan_item_errors_run_id", scan_item_errors.c.run_id)
+Index("ix_scan_item_errors_source_identity", scan_item_errors.c.source_address, scan_item_errors.c.token_address, scan_item_errors.c.stage, scan_item_errors.c.error_code)
 Index("ix_scan_item_errors_identity", scan_item_errors.c.strategy_address, scan_item_errors.c.token_address, scan_item_errors.c.stage, scan_item_errors.c.error_code)
+Index("ix_kick_txs_source_token_created", kick_txs.c.source_address, kick_txs.c.token_address, kick_txs.c.created_at.desc())
 Index("ix_kick_txs_strategy_token_created", kick_txs.c.strategy_address, kick_txs.c.token_address, kick_txs.c.created_at.desc())

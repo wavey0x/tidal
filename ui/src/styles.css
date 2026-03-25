@@ -253,6 +253,13 @@ body {
   color: var(--text-primary);
 }
 
+.fee-burner-empty {
+  margin-top: 8px;
+  padding: 18px 0;
+  border-top: 1px solid var(--divider-subtle);
+  color: var(--text-secondary);
+}
+
 .table-shell {
   padding-top: 8px;
   overflow-x: auto;
@@ -958,6 +965,104 @@ tbody tr:hover td {
   text-decoration: underline;
 }
 
+.fee-burner-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.fee-burner-card {
+  border: 1px solid var(--divider-subtle);
+  border-radius: 12px;
+  padding: 14px;
+  background: linear-gradient(180deg, var(--hover), transparent 44%), var(--bg);
+}
+
+.fee-burner-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.fee-burner-heading {
+  min-width: 0;
+}
+
+.fee-burner-eyebrow {
+  margin-bottom: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.fee-burner-total {
+  min-width: 112px;
+  text-align: right;
+}
+
+.fee-burner-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.fee-burner-total-value {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.fee-burner-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.fee-burner-meta-item {
+  min-width: 0;
+}
+
+.fee-burner-value {
+  margin-top: 4px;
+  color: var(--text-primary);
+}
+
+.fee-burner-card .auction-value-slot,
+.fee-burner-card .token-cell {
+  width: auto;
+  min-width: 0;
+}
+
+.fee-burner-card .auction-address-row {
+  flex-wrap: wrap;
+}
+
+.fee-burner-balances {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider-row);
+}
+
+.fee-burner-balances .fee-burner-label {
+  margin-bottom: 8px;
+}
+
+.fee-burner-card .token-stack {
+  gap: 6px;
+}
+
+.fee-burner-card .token-item {
+  width: 100%;
+  grid-template-columns: var(--token-icon-size) minmax(0, 1fr) 86px;
+}
+
 .kick-log-empty {
   text-align: center;
   color: var(--text-faint);
@@ -1040,6 +1145,10 @@ tbody tr:hover td {
   .kick-detail-grid {
     grid-template-columns: 1fr;
   }
+
+  .fee-burner-meta-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 600px) {
@@ -1082,6 +1191,24 @@ tbody tr:hover td {
 
   .kick-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .fee-burner-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fee-burner-card {
+    padding: 12px;
+  }
+
+  .fee-burner-header {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .fee-burner-total {
+    text-align: left;
+    min-width: 0;
   }
 
   /* ── Kick Log cards ── */

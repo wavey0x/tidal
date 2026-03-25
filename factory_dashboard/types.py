@@ -37,13 +37,14 @@ class ScanItemError:
     stage: str
     error_code: str
     error_message: str
-    strategy_address: str | None = None
+    source_type: str | None = None
+    source_address: str | None = None
     token_address: str | None = None
 
 
 @dataclass(slots=True)
 class BalanceResult:
-    strategy_address: str
+    source_address: str
     token_address: str
     raw_balance: int
     normalized_balance: str
@@ -53,7 +54,7 @@ class BalanceResult:
 
 @dataclass(slots=True, frozen=True)
 class BalancePair:
-    strategy_address: str
+    source_address: str
     token_address: str
 
 

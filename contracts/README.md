@@ -3,14 +3,15 @@
 This project contains a minimal Yearn `AuctionKicker` mech contract that can be
 allowlisted in TradeHandler and then atomically:
 
-1. transfer CRV from a strategy to the Auction
+1. transfer a sell token from a source contract to the Auction
 2. set Auction starting price
 3. set Auction minimum price
 4. kick the Auction
 
 The mech builds a fixed 4-step Weiroll command program from typed inputs and
 does not accept arbitrary command/state payloads. `kick(...)` receives an
-auction parameter and validates `auction.want() == strategy.want()`. The
+explicit `source`, `auction`, `sellToken`, and `wantToken`, then validates
+`auction.receiver() == source` and `auction.want() == wantToken`. The
 TradeHandler is hardcoded to
 `0xb634316E06cC0B358437CbadD4dC94F1D3a92B3b`.
 
@@ -49,5 +50,5 @@ name, not the deployer address. If you prefer an explicit path, use
 - Short-command packing is isolated in `src/utils/WeiRollCommandLib.sol`.
 - Tests run on a mainnet fork and use:
   - governance impersonation + `TradeHandler.addMech(mech)` to allowlist the mech
-  - `deal` to fund strategy CRV balance deterministically
-  - `stdstore` to set CRV allowance (`strategy -> tradeHandler`)
+  - `deal` to fund source token balances deterministically
+  - `stdstore` to set sell-token allowance (`source -> tradeHandler`)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import asdict
 
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -96,6 +96,63 @@ class StrategyRepository:
             row.address: row.auction_address
             for row in self.session.execute(stmt)
         }
+
+
+class FeeBurnerRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert_many(self, rows: Iterable[dict[str, object]]) -> None:
+        for row in rows:
+            stmt = insert(models.fee_burners).values(**row)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[models.fee_burners.c.address],
+                set_={
+                    "chain_id": row["chain_id"],
+                    "name": row["name"] if row.get("name") is not None else models.fee_burners.c.name,
+                    "active": row.get("active", 1),
+                    "want_address": row.get("want_address", models.fee_burners.c.want_address),
+                    "last_seen_at": row["last_seen_at"],
+                },
+            )
+            self.session.execute(stmt)
+
+    def set_auction_mappings(
+        self,
+        fee_burner_to_auction: dict[str, str | None],
+        *,
+        updated_at: str,
+        fee_burner_to_want: dict[str, str | None] | None = None,
+        fee_burner_to_auction_version: dict[str, str | None] | None = None,
+    ) -> None:
+        for fee_burner_address, auction_address in fee_burner_to_auction.items():
+            values: dict[str, object] = {
+                "auction_address": auction_address,
+                "auction_updated_at": updated_at,
+                "auction_error_message": None,
+            }
+            if fee_burner_to_want is not None:
+                values["want_address"] = fee_burner_to_want.get(fee_burner_address)
+            if fee_burner_to_auction_version is not None:
+                values["auction_version"] = fee_burner_to_auction_version.get(fee_burner_address)
+            self.session.execute(
+                update(models.fee_burners)
+                .where(models.fee_burners.c.address == fee_burner_address)
+                .values(**values)
+            )
+
+    def mark_auction_refresh_failed(self, address_to_error: dict[str, str], *, updated_at: str) -> None:
+        for address, error_message in address_to_error.items():
+            self.session.execute(
+                update(models.fee_burners)
+                .where(models.fee_burners.c.address == address)
+                .values(
+                    auction_address=None,
+                    auction_updated_at=updated_at,
+                    auction_error_message=error_message,
+                )
+            )
+    
 
 
 class VaultRepository:
@@ -289,13 +346,37 @@ class StrategyTokenRepository:
         self.session.execute(stmt)
 
 
+class FeeBurnerTokenRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert(self, fee_burner_address: str, token_address: str, source: str, now_iso: str) -> None:
+        stmt = insert(models.fee_burner_tokens).values(
+            fee_burner_address=fee_burner_address,
+            token_address=token_address,
+            source=source,
+            active=1,
+            first_seen_at=now_iso,
+            last_seen_at=now_iso,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[models.fee_burner_tokens.c.fee_burner_address, models.fee_burner_tokens.c.token_address],
+            set_={
+                "source": source,
+                "active": 1,
+                "last_seen_at": now_iso,
+            },
+        )
+        self.session.execute(stmt)
+
+
 class BalanceRepository:
     def __init__(self, session: Session):
         self.session = session
 
     def upsert(self, result: BalanceResult) -> None:
         stmt = insert(models.strategy_token_balances_latest).values(
-            strategy_address=result.strategy_address,
+            strategy_address=result.source_address,
             token_address=result.token_address,
             raw_balance=str(result.raw_balance),
             normalized_balance=result.normalized_balance,
@@ -306,6 +387,34 @@ class BalanceRepository:
             index_elements=[
                 models.strategy_token_balances_latest.c.strategy_address,
                 models.strategy_token_balances_latest.c.token_address,
+            ],
+            set_={
+                "raw_balance": str(result.raw_balance),
+                "normalized_balance": result.normalized_balance,
+                "block_number": result.block_number,
+                "scanned_at": result.scanned_at.isoformat(),
+            },
+        )
+        self.session.execute(stmt)
+
+
+class FeeBurnerTokenBalanceRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert(self, result: BalanceResult) -> None:
+        stmt = insert(models.fee_burner_token_balances_latest).values(
+            fee_burner_address=result.source_address,
+            token_address=result.token_address,
+            raw_balance=str(result.raw_balance),
+            normalized_balance=result.normalized_balance,
+            block_number=result.block_number,
+            scanned_at=result.scanned_at.isoformat(),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                models.fee_burner_token_balances_latest.c.fee_burner_address,
+                models.fee_burner_token_balances_latest.c.token_address,
             ],
             set_={
                 "raw_balance": str(result.raw_balance),
@@ -371,7 +480,9 @@ class ScanItemErrorRepository:
             self.session.execute(
                 insert(models.scan_item_errors).values(
                     run_id=run_id,
-                    strategy_address=error.strategy_address,
+                    source_type=error.source_type,
+                    source_address=error.source_address,
+                    strategy_address=error.source_address if error.source_type == "strategy" else None,
                     token_address=error.token_address,
                     stage=error.stage,
                     error_code=error.error_code,
@@ -384,7 +495,7 @@ class ScanItemErrorRepository:
         self,
         run_id: str,
         *,
-        strategy_address: str | None,
+        source_address: str | None,
         token_address: str | None,
         stage: str,
         error_code: str,
@@ -392,7 +503,7 @@ class ScanItemErrorRepository:
         stmt = select(models.scan_item_errors.c.id).where(
             and_(
                 models.scan_item_errors.c.run_id == run_id,
-                models.scan_item_errors.c.strategy_address == strategy_address,
+                models.scan_item_errors.c.source_address == source_address,
                 models.scan_item_errors.c.token_address == token_address,
                 models.scan_item_errors.c.stage == stage,
                 models.scan_item_errors.c.error_code == error_code,
@@ -475,11 +586,17 @@ class KickTxRepository:
         )
         self.session.commit()
 
-    def last_kick_for_pair(self, strategy_address: str, token_address: str) -> dict[str, object] | None:
+    def last_kick_for_pair(self, source_address: str, token_address: str) -> dict[str, object] | None:
         stmt = (
             select(models.kick_txs)
             .where(
-                models.kick_txs.c.strategy_address == strategy_address,
+                or_(
+                    models.kick_txs.c.source_address == source_address,
+                    and_(
+                        models.kick_txs.c.source_address.is_(None),
+                        models.kick_txs.c.strategy_address == source_address,
+                    ),
+                ),
                 models.kick_txs.c.token_address == token_address,
                 models.kick_txs.c.status.in_(("CONFIRMED", "SUBMITTED")),
             )

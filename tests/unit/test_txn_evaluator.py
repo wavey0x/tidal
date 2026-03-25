@@ -121,9 +121,62 @@ def test_shortlist_filters_stale_price(session):
     assert len(candidates) == 0
 
 
+def test_shortlist_includes_fee_burner_candidates(session):
+    now = datetime.now(timezone.utc).isoformat()
+    session.execute(insert(models.fee_burners).values(
+        address="0xburner1",
+        chain_id=1,
+        name="Yearn Fee Burner",
+        active=1,
+        auction_address="0xauctionfb",
+        want_address="0xwantfb",
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address="0xtokenfb",
+        chain_id=1,
+        symbol="YFI",
+        decimals=18,
+        is_core_reward=0,
+        price_usd="10.0",
+        price_status="SUCCESS",
+        price_fetched_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address="0xwantfb",
+        chain_id=1,
+        symbol="crvUSD",
+        decimals=18,
+        is_core_reward=0,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.fee_burner_token_balances_latest).values(
+        fee_burner_address="0xburner1",
+        token_address="0xtokenfb",
+        raw_balance="50000000000000000000",
+        normalized_balance="50",
+        block_number=101,
+        scanned_at=now,
+    ))
+    session.commit()
+
+    candidates = shortlist_candidates(session, usd_threshold=100, max_data_age_seconds=600)
+    fee_burner_candidate = next(candidate for candidate in candidates if candidate.source_type == "fee_burner")
+
+    assert fee_burner_candidate.source_address == "0xburner1"
+    assert fee_burner_candidate.source_name == "Yearn Fee Burner"
+    assert fee_burner_candidate.want_address == "0xwantfb"
+    assert fee_burner_candidate.want_symbol == "crvUSD"
+
+
 def _make_candidate(**overrides):
     defaults = {
-        "strategy_address": "0xstrategy1",
+        "source_type": "strategy",
+        "source_address": "0xstrategy1",
         "token_address": "0xtoken1",
         "auction_address": "0xauction1",
         "normalized_balance": "1000",
@@ -226,5 +279,3 @@ def test_check_pre_send_expired_cooldown_allows(session):
         candidates, kick_tx_repository=repo, cooldown_seconds=3600
     )
     assert decisions[0].action == "KICK"
-
-

@@ -371,6 +371,65 @@ async def test_multiple_candidates_dry_run(session):
 
 
 @pytest.mark.asyncio
+async def test_live_batch_orders_candidates_by_descending_usd_value(session):
+    _seed_candidate(
+        session,
+        strategy_address="0xstrategy1",
+        token_address="0xtoken1",
+        auction_address="0xauction1",
+        want_address="0xwant1",
+        price_usd="2.0",
+        normalized_balance="100",
+    )
+    _seed_candidate(
+        session,
+        strategy_address="0xstrategy2",
+        token_address="0xtoken2",
+        auction_address="0xauction2",
+        want_address="0xwant2",
+        price_usd="3.0",
+        normalized_balance="200",
+    )
+
+    prepare_order: list[str] = []
+    executed_order: list[str] = []
+
+    async def prepare_side_effect(candidate, run_id):
+        prepare_order.append(candidate.token_address)
+        return _make_prepared_kick(candidate)
+
+    async def execute_batch_side_effect(prepared_kicks, run_id):
+        executed_order.extend(pk.candidate.token_address for pk in prepared_kicks)
+        return [
+            KickResult(
+                kick_tx_id=index + 1,
+                status=KickStatus.CONFIRMED,
+                tx_hash=f"0xabc{index}",
+            )
+            for index, _ in enumerate(prepared_kicks)
+        ]
+
+    kicker = MagicMock()
+    kicker.prepare_kick = AsyncMock(side_effect=prepare_side_effect)
+    kicker.execute_batch = AsyncMock(side_effect=execute_batch_side_effect)
+
+    service = _build_txn_service(session, kicker=kicker)
+    with patch("factory_dashboard.transaction_service.service.logger.info") as log_info:
+        result = await service.run_once(live=True)
+
+    assert result.status == "SUCCESS"
+    assert prepare_order == ["0xtoken2", "0xtoken1"]
+    assert executed_order == ["0xtoken2", "0xtoken1"]
+
+    ranked_call = next(
+        call
+        for call in log_info.call_args_list
+        if call.args and call.args[0] == "txn_candidates_ranked"
+    )
+    assert [entry["token"] for entry in ranked_call.kwargs["candidates"]] == ["0xtoken2", "0xtoken1"]
+
+
+@pytest.mark.asyncio
 async def test_dry_run_filters_to_fee_burner_candidates(session):
     _seed_candidate(session)
     _seed_fee_burner_candidate(session)

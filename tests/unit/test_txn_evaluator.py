@@ -392,6 +392,113 @@ def test_shortlist_keeps_highest_usd_candidate_per_auction(session):
     assert candidates[0].usd_value == pytest.approx(500.0)
 
 
+def test_shortlist_orders_candidates_by_descending_usd_value(session):
+    now = datetime.now(timezone.utc).isoformat()
+
+    session.execute(insert(models.vaults).values(
+        address="0xvault1",
+        chain_id=1,
+        symbol="v1",
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.vaults).values(
+        address="0xvault2",
+        chain_id=1,
+        symbol="v2",
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.strategies).values(
+        address="0xstrategy1",
+        chain_id=1,
+        vault_address="0xvault1",
+        name="Strategy One",
+        adapter="yearn_curve_strategy",
+        active=1,
+        auction_address="0xauction1",
+        want_address="0xwant1",
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.strategies).values(
+        address="0xstrategy2",
+        chain_id=1,
+        vault_address="0xvault2",
+        name="Strategy Two",
+        adapter="yearn_curve_strategy",
+        active=1,
+        auction_address="0xauction2",
+        want_address="0xwant2",
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address="0xtoken1",
+        chain_id=1,
+        symbol="AAA",
+        decimals=18,
+        is_core_reward=1,
+        price_usd="2.0",
+        price_status="SUCCESS",
+        price_fetched_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address="0xtoken2",
+        chain_id=1,
+        symbol="BBB",
+        decimals=18,
+        is_core_reward=1,
+        price_usd="1.5",
+        price_status="SUCCESS",
+        price_fetched_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address="0xwant1",
+        chain_id=1,
+        symbol="USDC",
+        decimals=6,
+        is_core_reward=0,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address="0xwant2",
+        chain_id=1,
+        symbol="crvUSD",
+        decimals=18,
+        is_core_reward=0,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.strategy_token_balances_latest).values(
+        strategy_address="0xstrategy1",
+        token_address="0xtoken1",
+        raw_balance="100000000000000000000",
+        normalized_balance="100",
+        block_number=100,
+        scanned_at=now,
+    ))
+    session.execute(insert(models.strategy_token_balances_latest).values(
+        strategy_address="0xstrategy2",
+        token_address="0xtoken2",
+        raw_balance="200000000000000000000",
+        normalized_balance="200",
+        block_number=101,
+        scanned_at=now,
+    ))
+    session.commit()
+
+    candidates = shortlist_candidates(session, usd_threshold=100, max_data_age_seconds=600)
+
+    assert [candidate.token_address for candidate in candidates] == ["0xtoken2", "0xtoken1"]
+    assert [candidate.usd_value for candidate in candidates] == pytest.approx([300.0, 200.0])
+
+
 def _make_candidate(**overrides):
     defaults = {
         "source_type": "strategy",

@@ -12,11 +12,25 @@ import structlog
 
 from factory_dashboard.persistence.repositories import KickTxRepository, TxnRunRepository
 from factory_dashboard.time import utcnow_iso
-from factory_dashboard.transaction_service.evaluator import check_pre_send, shortlist_candidates
+from factory_dashboard.transaction_service.evaluator import check_pre_send, shortlist_candidates, sort_candidates
 from factory_dashboard.transaction_service.kicker import AuctionKicker
 from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickResult, KickStatus, PreparedKick, SourceType, TxnRunResult
 
 logger = structlog.get_logger(__name__)
+
+
+def _candidate_order_log(candidates: list[KickCandidate]) -> list[dict[str, object]]:
+    return [
+        {
+            "rank": index + 1,
+            "source": candidate.source_address,
+            "source_type": candidate.source_type,
+            "auction": candidate.auction_address,
+            "token": candidate.token_address,
+            "usd_value": candidate.usd_value,
+        }
+        for index, candidate in enumerate(candidates)
+    ]
 
 
 class TxnService:
@@ -121,8 +135,18 @@ class TxnService:
 
         # Phase 1: Prepare all candidates.
         prepared: list[PreparedKick] = []
-        candidates_to_prepare: list[KickCandidate] = []
         failed_messages: list[str] = []
+        candidates_to_prepare = sort_candidates(
+            [decision.candidate for decision in decisions if decision.action == KickAction.KICK]
+        )
+
+        if candidates_to_prepare:
+            logger.info(
+                "txn_candidates_ranked",
+                run_id=run_id,
+                source_type=source_type,
+                candidates=_candidate_order_log(candidates_to_prepare),
+            )
 
         for decision in decisions:
             if decision.action == KickAction.SKIP:
@@ -162,15 +186,11 @@ class TxnService:
                     usd_value=decision.candidate.usd_value,
                 )
                 kicks_attempted += 1
-                continue
-
-            candidates_to_prepare.append(decision.candidate)
-
-        if candidates_to_prepare:
-            candidates_to_prepare.sort(key=lambda c: c.usd_value, reverse=True)
+        
+        if live and candidates_to_prepare:
             kicks_attempted += len(candidates_to_prepare)
 
-        if not batch and candidates_to_prepare:
+        if live and not batch and candidates_to_prepare:
             # Non-batch: prepare and execute one candidate at a time (highest USD first).
             for candidate in candidates_to_prepare:
                 result = await self.kicker.prepare_kick(candidate, run_id)
@@ -191,7 +211,7 @@ class TxnService:
                         failed_messages.append(exec_result.error_message)
                 elif exec_result.status == KickStatus.USER_SKIPPED:
                     kicks_attempted -= 1
-        elif candidates_to_prepare:
+        elif live and candidates_to_prepare:
             # Batch: prepare all in groups, then execute as one batch transaction.
             prepare_results: list[PreparedKick | KickResult] = []
             for batch_start in range(0, len(candidates_to_prepare), self.max_batch_kick_size):

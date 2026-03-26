@@ -17,6 +17,7 @@ from factory_dashboard.migrations import run_migrations
 from factory_dashboard.normalizers import short_address
 from factory_dashboard.persistence.db import Database
 from factory_dashboard.runtime import build_scanner_service, build_txn_service, build_web3_client
+from factory_dashboard.transaction_service.types import SourceType
 
 logger = structlog.get_logger(__name__)
 
@@ -143,6 +144,23 @@ def _require_keystore(settings) -> None:
         raise ConfigurationError("TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for txn commands")
 
 
+def _normalize_source_type_filter(value: str | None) -> SourceType | None:
+    if value is None:
+        return None
+
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in {"strategy", "fee_burner"}:
+        return normalized  # type: ignore[return-value]
+
+    raise typer.BadParameter("expected 'strategy' or 'fee-burner'")
+
+
+def _display_source_type_filter(source_type: SourceType | None) -> str:
+    if source_type is None:
+        return ""
+    return source_type.replace("_", "-")
+
+
 def _make_confirm_fn() -> Callable[[dict], bool]:
     """Return a confirm callback that displays a batch summary."""
 
@@ -227,7 +245,15 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
     return _confirm_batch
 
 
-def _run_txn_once(*, live: bool, confirm: bool, config: Path | None, batch: bool, verbose: bool = False) -> None:
+def _run_txn_once(
+    *,
+    live: bool,
+    confirm: bool,
+    config: Path | None,
+    batch: bool,
+    verbose: bool = False,
+    source_type: SourceType | None = None,
+) -> None:
     """Execute a single transaction evaluation cycle."""
 
     if confirm:
@@ -265,12 +291,14 @@ def _run_txn_once(*, live: bool, confirm: bool, config: Path | None, batch: bool
             skip_base_fee_check=skip_base_fee_check,
             web3_client=web3_client,
         )
-        result = asyncio.run(txn_service.run_once(live=live, batch=batch))
+        result = asyncio.run(txn_service.run_once(live=live, batch=batch, source_type=source_type))
+        type_suffix = f" type={_display_source_type_filter(source_type)}" if source_type is not None else ""
         typer.echo(
             (
                 f"txn_complete run_id={result.run_id} status={result.status} "
                 f"candidates={result.candidates_found} attempted={result.kicks_attempted} "
                 f"succeeded={result.kicks_succeeded} failed={result.kicks_failed}"
+                f"{type_suffix}"
             )
         )
         if verbose and result.failure_summary:
@@ -286,13 +314,22 @@ def txn(
     live: bool = typer.Option(default=False, help="Send transactions (default: dry-run)"),
     confirm: bool = typer.Option(default=False, help="Interactive confirmation before each kick (implies --live)"),
     batch: bool = typer.Option(default=False, help="Send a single batchKick() instead of individual kick() per candidate"),
+    source_type: str | None = typer.Option(None, "--type", help="Filter candidates by source type: strategy or fee-burner"),
     config: Path | None = typer.Option(default=None, exists=True, file_okay=True, dir_okay=False),
     verbose: bool = typer.Option(default=False, help="Show per-candidate failure details and grouped summary"),
 ) -> None:
     """Evaluate kick candidates and send transactions."""
     if ctx.invoked_subcommand is not None:
         return
-    _run_txn_once(live=live, confirm=confirm, config=config, batch=batch, verbose=verbose)
+    normalized_source_type = _normalize_source_type_filter(source_type)
+    _run_txn_once(
+        live=live,
+        confirm=confirm,
+        config=config,
+        batch=batch,
+        verbose=verbose,
+        source_type=normalized_source_type,
+    )
 
 
 @txn_app.command("daemon")
@@ -300,6 +337,7 @@ def txn_daemon(
     live: bool = typer.Option(default=False, help="Send transactions (default: dry-run)"),
     batch: bool = typer.Option(default=True, help="Use batchKick (default) or individual kick() per candidate"),
     interval_seconds: int | None = typer.Option(default=None, min=1),
+    source_type: str | None = typer.Option(None, "--type", help="Filter candidates by source type: strategy or fee-burner"),
     config: Path | None = typer.Option(default=None, exists=True, file_okay=True, dir_okay=False),
     verbose: bool = typer.Option(default=False, help="Show per-candidate failure details and grouped summary"),
 ) -> None:
@@ -315,6 +353,7 @@ def txn_daemon(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
+    normalized_source_type = _normalize_source_type_filter(source_type)
     sleep_seconds = interval_seconds or 1800
 
     async def _run() -> None:
@@ -338,12 +377,18 @@ def txn_daemon(
             db = Database(settings.database_url)
             with db.session() as session:
                 txn_service = build_txn_service(settings, session, web3_client=web3_client)
-                result = await txn_service.run_once(live=live, batch=batch)
+                result = await txn_service.run_once(live=live, batch=batch, source_type=normalized_source_type)
+                type_suffix = (
+                    f" type={_display_source_type_filter(normalized_source_type)}"
+                    if normalized_source_type is not None
+                    else ""
+                )
                 typer.echo(
                     (
                         f"txn_complete run_id={result.run_id} status={result.status} "
                         f"candidates={result.candidates_found} attempted={result.kicks_attempted} "
                         f"succeeded={result.kicks_succeeded} failed={result.kicks_failed}"
+                        f"{type_suffix}"
                     )
                 )
                 if verbose and result.failure_summary:

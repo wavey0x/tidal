@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Literal
+
+
+SourceType = Literal["strategy", "fee_burner"]
 
 
 class KickAction(str, Enum):

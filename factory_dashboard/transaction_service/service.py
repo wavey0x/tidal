@@ -14,7 +14,7 @@ from factory_dashboard.persistence.repositories import KickTxRepository, TxnRunR
 from factory_dashboard.time import utcnow_iso
 from factory_dashboard.transaction_service.evaluator import check_pre_send, shortlist_candidates
 from factory_dashboard.transaction_service.kicker import AuctionKicker
-from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickResult, KickStatus, PreparedKick, TxnRunResult
+from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickResult, KickStatus, PreparedKick, SourceType, TxnRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -47,7 +47,7 @@ class TxnService:
         self.max_batch_kick_size = max_batch_kick_size
         self.batch_kick_delay_seconds = batch_kick_delay_seconds
 
-    async def run_once(self, *, live: bool, batch: bool = True) -> TxnRunResult:
+    async def run_once(self, *, live: bool, batch: bool = True, source_type: SourceType | None = None) -> TxnRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
 
@@ -66,12 +66,20 @@ class TxnService:
                 )
 
         try:
-            return await self._run(run_id=run_id, started_at=started_at, live=live, batch=batch)
+            return await self._run(run_id=run_id, started_at=started_at, live=live, batch=batch, source_type=source_type)
         finally:
             if lock_file is not None:
                 self._release_lock(lock_file)
 
-    async def _run(self, *, run_id: str, started_at: str, live: bool, batch: bool = True) -> TxnRunResult:
+    async def _run(
+        self,
+        *,
+        run_id: str,
+        started_at: str,
+        live: bool,
+        batch: bool = True,
+        source_type: SourceType | None = None,
+    ) -> TxnRunResult:
         # 1. INSERT txn_runs with status=RUNNING.
         self.txn_run_repository.create({
             "run_id": run_id,
@@ -89,12 +97,14 @@ class TxnService:
             self.session,
             usd_threshold=self.usd_threshold,
             max_data_age_seconds=self.max_data_age_seconds,
+            source_type=source_type,
         )
 
         logger.info(
             "txn_run_started",
             run_id=run_id,
             live=live,
+            source_type=source_type,
             candidates_shortlisted=len(candidates),
         )
 

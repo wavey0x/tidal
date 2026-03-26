@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from factory_dashboard.persistence import models
 from factory_dashboard.persistence.repositories import KickTxRepository
-from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickDecision, SkipReason
+from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickDecision, SkipReason, SourceType
 
 logger = structlog.get_logger(__name__)
 
@@ -20,6 +20,7 @@ def shortlist_candidates(
     *,
     usd_threshold: float,
     max_data_age_seconds: int,
+    source_type: SourceType | None = None,
 ) -> list[KickCandidate]:
     """Query SQLite for source-token pairs above threshold with fresh data."""
 
@@ -153,6 +154,9 @@ def shortlist_candidates(
                 want_symbol=row["want_symbol"],
             )
         )
+
+    if source_type is not None:
+        candidates = [candidate for candidate in candidates if candidate.source_type == source_type]
 
     return candidates
 

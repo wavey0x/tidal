@@ -67,6 +67,58 @@ def _seed_candidate(session, *, strategy_address="0xstrategy1", token_address="0
     session.commit()
 
 
+def _seed_fee_burner_candidate(
+    session,
+    *,
+    burner_address="0xburner1",
+    token_address="0xtokenfb",
+    auction_address="0xauctionfb",
+    want_address="0xwantfb",
+    price_usd="10.0",
+    normalized_balance="50",
+):
+    now = datetime.now(timezone.utc).isoformat()
+
+    session.execute(insert(models.fee_burners).values(
+        address=burner_address,
+        chain_id=1,
+        name="Yearn Fee Burner",
+        active=1,
+        auction_address=auction_address,
+        want_address=want_address,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address=token_address,
+        chain_id=1,
+        decimals=18,
+        is_core_reward=0,
+        price_usd=price_usd,
+        price_status="SUCCESS",
+        price_fetched_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.tokens).values(
+        address=want_address,
+        chain_id=1,
+        decimals=18,
+        is_core_reward=0,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.fee_burner_token_balances_latest).values(
+        fee_burner_address=burner_address,
+        token_address=token_address,
+        raw_balance="50000000000000000000",
+        normalized_balance=normalized_balance,
+        block_number=101,
+        scanned_at=now,
+    ))
+    session.commit()
+
+
 def _make_prepared_kick(candidate: KickCandidate) -> PreparedKick:
     """Build a PreparedKick from a KickCandidate for test mocks."""
     return PreparedKick(
@@ -316,3 +368,22 @@ async def test_multiple_candidates_dry_run(session):
     kick_txs = session.execute(select(models.kick_txs)).mappings().all()
     assert len(kick_txs) == 2
     assert all(row["status"] == "DRY_RUN" for row in kick_txs)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_filters_to_fee_burner_candidates(session):
+    _seed_candidate(session)
+    _seed_fee_burner_candidate(session)
+
+    service = _build_txn_service(session)
+    result = await service.run_once(live=False, source_type="fee_burner")
+
+    assert result.status == "DRY_RUN"
+    assert result.candidates_found == 1
+    assert result.kicks_attempted == 1
+
+    kick_txs = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(kick_txs) == 1
+    assert kick_txs[0]["source_type"] == "fee_burner"
+    assert kick_txs[0]["source_address"] == "0xburner1"
+    assert kick_txs[0]["strategy_address"] is None

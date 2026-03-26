@@ -30,7 +30,7 @@ contract AuctionKickerTest is Test {
     address internal constant ALT_AUCTION = 0x1721A935063EcFBc1542f15E028e7c2FCe52B169;
     address internal constant STRATEGY = 0x9AD3047D578e79187f0FaEEf26729097a4973325;
     address internal constant FEE_BURNER = 0xb911Fcce8D5AFCEc73E072653107260bb23C1eE8;
-    address internal constant FEE_BURNER_AUCTION = 0x10Bd77b0aA255d5cb7db1273705C1f0568536035;
+    address internal constant FEE_BURNER_AUCTION = 0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693;
     address internal constant FEE_BURNER_WANT = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
     address internal constant CRV = 0xD533a949740bb3306d119CC777fa900bA034cd52;
     address internal constant CVX = 0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B;
@@ -57,14 +57,22 @@ contract AuctionKickerTest is Test {
             type(uint256).max
         );
         vm.prank(TRADE_HANDLER);
-        IAuction(AUCTION).enable(CRV);
+        _enableIfNeeded(AUCTION, CRV);
 
         // CVX allowance + enable (for batch tests).
         stdstore.target(CVX).sig("allowance(address,address)").with_key(STRATEGY).with_key(TRADE_HANDLER).checked_write(
             type(uint256).max
         );
         vm.prank(TRADE_HANDLER);
-        IAuction(AUCTION).enable(CVX);
+        _enableIfNeeded(AUCTION, CVX);
+    }
+
+    function _enableIfNeeded(address auction, address token) internal {
+        try IAuction(auction).enable(token) {} catch Error(string memory reason) {
+            if (keccak256(bytes(reason)) != keccak256(bytes("already enabled"))) {
+                revert(reason);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -131,19 +139,22 @@ contract AuctionKickerTest is Test {
     }
 
     function test_revert_notKeeperOrOwner() public {
+        address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("unauthorized");
         vm.prank(makeAddr("not-authorized"));
-        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, IAuction(AUCTION).want(), 1e18, 0);
+        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, wantToken, 1e18, 0);
     }
 
     function test_revert_startingPriceZero() public {
+        address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("starting price zero");
-        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, IAuction(AUCTION).want(), 0, 0);
+        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, wantToken, 0, 0);
     }
 
     function test_revert_wantMismatch() public {
+        address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("want mismatch");
-        kicker.kick(STRATEGY, ALT_AUCTION, CRV, 1e18, IAuction(AUCTION).want(), 1e18, 0);
+        kicker.kick(STRATEGY, ALT_AUCTION, CRV, 1e18, wantToken, 1e18, 0);
     }
 
     function test_revert_receiverMismatch() public {
@@ -218,7 +229,7 @@ contract AuctionKickerTest is Test {
 
         // Enable CRV on ALT_AUCTION.
         vm.prank(TRADE_HANDLER);
-        IAuction(ALT_AUCTION).enable(CRV);
+        _enableIfNeeded(ALT_AUCTION, CRV);
 
         // Fund strategy for both kicks.
         uint256 crvBaseBal = IERC20(CRV).balanceOf(STRATEGY);
@@ -274,8 +285,9 @@ contract AuctionKickerTest is Test {
     }
 
     function test_batchKick_revert_unauthorized() public {
+        address wantToken = IAuction(AUCTION).want();
         AuctionKicker.KickParams[] memory kicks = new AuctionKicker.KickParams[](1);
-        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, 1e18, IAuction(AUCTION).want(), 1e18, 0);
+        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, 1e18, wantToken, 1e18, 0);
 
         vm.expectRevert("unauthorized");
         vm.prank(makeAddr("not-authorized"));
@@ -295,7 +307,7 @@ contract AuctionKickerTest is Test {
             type(uint256).max
         );
         vm.prank(TRADE_HANDLER);
-        IAuction(FEE_BURNER_AUCTION).enable(CRV);
+        _enableIfNeeded(FEE_BURNER_AUCTION, CRV);
 
         vm.warp(block.timestamp + 8 days);
 
@@ -329,7 +341,7 @@ contract AuctionKickerTest is Test {
             type(uint256).max
         );
         vm.prank(TRADE_HANDLER);
-        IAuction(FEE_BURNER_AUCTION).enable(CRV);
+        _enableIfNeeded(FEE_BURNER_AUCTION, CRV);
 
         vm.warp(block.timestamp + 8 days);
 

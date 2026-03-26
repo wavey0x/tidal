@@ -810,7 +810,19 @@ function TabBar({ activePage, onChangePage }) {
   );
 }
 
-function StatusBadge({ status }) {
+function formatKickStatusLabel(status, operationType) {
+  if (status !== "CONFIRMED") {
+    return status;
+  }
+
+  if (operationType === "settle") {
+    return "SETTLED";
+  }
+
+  return "KICKED";
+}
+
+function StatusBadge({ status, operationType }) {
   let className = "status-badge";
   if (status === "CONFIRMED") {
     className += " status-confirmed";
@@ -820,7 +832,7 @@ function StatusBadge({ status }) {
     className += " status-faint";
   }
 
-  return <span className={className}>{status}</span>;
+  return <span className={className}>{formatKickStatusLabel(status, operationType)}</span>;
 }
 
 function formatProviderAmount(amountOut, decimals, status) {
@@ -1141,7 +1153,7 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
           {kick.operationType === "settle" ? "N/A" : kick.usdValue ? `$${formatBalance(kick.usdValue)}` : "—"}
         </td>
         <td data-label="Status">
-          <StatusBadge status={kick.status} />
+          <StatusBadge status={kick.status} operationType={kick.operationType} />
         </td>
         <td data-label="Auction">
           {kick.auctionAddress ? (

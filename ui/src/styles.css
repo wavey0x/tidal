@@ -441,6 +441,50 @@ tbody tr:hover td {
   gap: 6px;
 }
 
+.auction-missing-state {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.auction-action-link {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.auction-action-link:hover {
+  color: var(--text-primary);
+}
+
+.auction-action-link:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.auction-action-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.auction-action-error {
+  color: var(--error);
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 160px;
+  white-space: normal;
+}
+
 .auction-version-badge {
   font-size: 9px;
   color: var(--text-faint);

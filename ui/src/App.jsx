@@ -55,12 +55,108 @@ function formatStrategyDisplayName(name) {
   if (output.startsWith("Strategy")) {
     output = output.slice("Strategy".length);
   }
+  output = output.replaceAll("Curve.fi Factory Crypto Pool:", "");
   output = output.replaceAll("Curve.fi Crypto Pool:", "");
   output = output.replaceAll("Boosted", "");
   output = output.replaceAll("Factory", "");
   output = output.replace(/-{2,}/g, "-").trim();
   output = output.replace(/^-+/, "").replace(/-+$/, "");
   return output || name;
+}
+
+function getEthereumProvider() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const { ethereum } = window;
+  if (!ethereum || typeof ethereum.request !== "function") {
+    return null;
+  }
+
+  return ethereum;
+}
+
+function normalizeChainIdValue(value) {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = normalized.startsWith("0x") ? Number.parseInt(normalized, 16) : Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toHexChainId(chainId) {
+  return `0x${Number(chainId).toString(16)}`;
+}
+
+function formatDeployConfirmation(spec) {
+  const lines = [
+    `Deploy auction for ${spec.strategyName || shortenAddress(spec.strategyAddress)}?`,
+    "",
+    `Factory: ${shortenAddress(spec.factoryAddress)}`,
+    `Receiver: ${shortenAddress(spec.receiverAddress)}`,
+    `Want: ${spec.wantSymbol || shortenAddress(spec.wantAddress)}`,
+  ];
+
+  if (spec.inference?.sellTokenAddress) {
+    lines.push(
+      `Inference token: ${spec.inference.sellTokenSymbol || shortenAddress(spec.inference.sellTokenAddress)}`,
+    );
+  }
+  if (spec.startingPrice) {
+    lines.push(`Starting price: ${spec.startingPrice}`);
+  }
+  if (spec.startPriceBufferBps != null) {
+    lines.push(`Start-price buffer: +${(Number(spec.startPriceBufferBps) / 100).toFixed(1)}%`);
+  }
+  if (spec.predictedAuctionAddress) {
+    lines.push(`Predicted auction: ${shortenAddress(spec.predictedAuctionAddress)}`);
+  }
+
+  lines.push("", "Queue this transaction in your connected wallet?");
+  return lines.join("\n");
+}
+
+function formatDeployError(error) {
+  const code = error?.code ?? error?.cause?.code;
+  if (code === 4001) {
+    return "Wallet request rejected";
+  }
+  if (code === 4902) {
+    return "Ethereum mainnet is not configured in this wallet";
+  }
+
+  const messages = [
+    error?.data?.message,
+    error?.cause?.message,
+    error?.message,
+    typeof error === "string" ? error : null,
+  ];
+
+  for (const rawMessage of messages) {
+    if (!rawMessage) {
+      continue;
+    }
+
+    let message = String(rawMessage).trim();
+    message = message.replace(/^Internal JSON-RPC error\.?\s*/i, "").trim();
+    message = message.replace(/^Error:\s*/i, "").trim();
+    if (message) {
+      return message;
+    }
+  }
+
+  return "Unable to queue deployment transaction";
 }
 
 function normalizeKick(kick) {
@@ -315,14 +411,38 @@ function EtherscanTxLink({ txHash }) {
   );
 }
 
-function AuctionAddressCell({ address, version, kicks, nowMs, isExpanded, onToggleExpand }) {
+function MissingAuctionAction({ deployState, onDeploy }) {
+  const status = deployState?.status || "idle";
+  const txHash = deployState?.txHash || null;
+  const error = deployState?.error || "";
+  const isBusy = status === "preparing" || status === "wallet";
+
+  return (
+    <div className="auction-missing-state">
+      {txHash ? (
+        <div className="auction-action-status">
+          <span className="row-secondary mono">submitted</span>
+          <span className="kick-separator mono">·</span>
+          <EtherscanTxLink txHash={txHash} />
+        </div>
+      ) : (
+        <button type="button" className="auction-action-link mono" onClick={onDeploy} disabled={isBusy}>
+          {status === "wallet" ? "confirm in wallet…" : status === "preparing" ? "preparing…" : "deploy"}
+        </button>
+      )}
+      {error ? <div className="auction-action-error">{error}</div> : null}
+    </div>
+  );
+}
+
+function AuctionAddressCell({ address, version, kicks, nowMs, isExpanded, onToggleExpand, emptyContent = null }) {
   const hasKicks = kicks && kicks.length > 0;
   const hasChevron = kicks && kicks.length > 1;
 
   if (!address) {
     return (
       <span className="auction-value-slot">
-        <span className="row-secondary mono">—</span>
+        {emptyContent || <span className="row-secondary mono">—</span>}
       </span>
     );
   }
@@ -1166,6 +1286,7 @@ export default function App() {
   const [displayMode, setDisplayMode] = useState("usd");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
+  const [deployStates, setDeployStates] = useState({});
   const auctionFilterMenuRef = useRef(null);
 
   const handlePageChange = (page) => {
@@ -1535,6 +1656,100 @@ export default function App() {
     });
   }
 
+  function updateDeployState(sourceAddress, updates) {
+    setDeployStates((prev) => ({
+      ...prev,
+      [sourceAddress]: {
+        status: "idle",
+        error: "",
+        txHash: null,
+        ...(prev[sourceAddress] || {}),
+        ...updates,
+      },
+    }));
+  }
+
+  async function handleDeployStrategy(row) {
+    const sourceAddress = row.sourceAddress;
+    if (!sourceAddress) {
+      return;
+    }
+
+    const provider = getEthereumProvider();
+    if (!provider) {
+      updateDeployState(sourceAddress, { status: "idle", error: "No injected wallet found" });
+      return;
+    }
+
+    updateDeployState(sourceAddress, { status: "preparing", error: "" });
+
+    try {
+      const response = await fetch(apiUrl(`/strategies/${sourceAddress}/deploy-auction-tx`), {
+        method: "POST",
+      });
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to prepare deploy transaction");
+      }
+
+      const txRequest = payload?.txRequest;
+      if (!txRequest?.to || !txRequest?.data) {
+        throw new Error("Deploy transaction payload is incomplete");
+      }
+
+      const confirmed = window.confirm(formatDeployConfirmation(payload));
+      if (!confirmed) {
+        updateDeployState(sourceAddress, { status: "idle", error: "" });
+        return;
+      }
+
+      updateDeployState(sourceAddress, { status: "wallet", error: "" });
+
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const account = Array.isArray(accounts) ? accounts[0] : null;
+      if (!account) {
+        throw new Error("No wallet account connected");
+      }
+
+      const requiredChainId = normalizeChainIdValue(txRequest.chainId);
+      if (requiredChainId != null) {
+        const activeChainId = normalizeChainIdValue(await provider.request({ method: "eth_chainId" }));
+        if (activeChainId !== requiredChainId) {
+          await provider.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: toHexChainId(requiredChainId) }],
+          });
+        }
+      }
+
+      const txHash = await provider.request({
+        method: "eth_sendTransaction",
+        params: [
+          {
+            from: account,
+            to: txRequest.to,
+            data: txRequest.data,
+            value: txRequest.value || "0x0",
+          },
+        ],
+      });
+
+      updateDeployState(sourceAddress, { status: "submitted", error: "", txHash });
+    } catch (deployError) {
+      updateDeployState(sourceAddress, {
+        status: "idle",
+        error: formatDeployError(deployError),
+      });
+    }
+  }
+
   function cycleThemePreference() {
     const currentTheme = themePreference || systemTheme;
     const currentIndex = THEME_SEQUENCE.indexOf(currentTheme);
@@ -1723,6 +1938,12 @@ export default function App() {
                         nowMs={nowMs}
                         isExpanded={expandedKickRows.has(row.sourceAddress)}
                         onToggleExpand={() => toggleKickExpand(row.sourceAddress)}
+                        emptyContent={
+                          <MissingAuctionAction
+                            deployState={deployStates[row.sourceAddress]}
+                            onDeploy={() => handleDeployStrategy(row)}
+                          />
+                        }
                       />
                     </td>
                     <td data-label="Balances">

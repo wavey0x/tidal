@@ -55,6 +55,7 @@ function formatStrategyDisplayName(name) {
   if (output.startsWith("Strategy")) {
     output = output.slice("Strategy".length);
   }
+  output = output.replaceAll("Curve.fi Crypto Pool:", "");
   output = output.replaceAll("Boosted", "");
   output = output.replaceAll("Factory", "");
   output = output.replace(/-{2,}/g, "-").trim();

@@ -133,6 +133,11 @@ def _make_prepared_kick(candidate: KickCandidate) -> PreparedKick:
         live_balance_raw=1000000000000000000000,
         normalized_balance=candidate.normalized_balance,
         quote_amount_str="1000",
+        start_price_buffer_bps=1000,
+        min_price_buffer_bps=500,
+        step_decay_rate_bps=50,
+        pricing_profile_name="volatile",
+        settle_token=None,
     )
 
 
@@ -142,6 +147,10 @@ def _build_txn_service(session, *, kicker=None, lock_path=None):
 
     if kicker is None:
         kicker = MagicMock()
+    if not isinstance(getattr(kicker, "inspect_candidates", None), AsyncMock):
+        kicker.inspect_candidates = AsyncMock(return_value={})
+    if not isinstance(getattr(kicker, "execute_sweep_and_settle", None), AsyncMock):
+        kicker.execute_sweep_and_settle = AsyncMock()
 
     if lock_path is None:
         lock_path = Path("/tmp/test_txn_daemon.lock")
@@ -216,7 +225,7 @@ async def test_live_kick_confirmed(session):
     _seed_candidate(session)
 
     kicker = MagicMock()
-    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id: _make_prepared_kick(c))
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id, inspection=None: _make_prepared_kick(c))
     kicker.execute_batch = AsyncMock(return_value=[KickResult(
         kick_tx_id=1,
         status=KickStatus.CONFIRMED,
@@ -243,7 +252,7 @@ async def test_live_kick_reverted(session):
     _seed_candidate(session)
 
     kicker = MagicMock()
-    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id: _make_prepared_kick(c))
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id, inspection=None: _make_prepared_kick(c))
     kicker.execute_batch = AsyncMock(return_value=[KickResult(
         kick_tx_id=1,
         status=KickStatus.REVERTED,
@@ -283,7 +292,7 @@ async def test_submitted_blocks_resend(session):
 
     # First run: kick returns SUBMITTED (receipt timeout).
     kicker = MagicMock()
-    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id: _make_prepared_kick(c))
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id, inspection=None: _make_prepared_kick(c))
     kicker.execute_batch = AsyncMock(return_value=[KickResult(
         kick_tx_id=1,
         status=KickStatus.SUBMITTED,
@@ -394,7 +403,7 @@ async def test_live_batch_orders_candidates_by_descending_usd_value(session):
     prepare_order: list[str] = []
     executed_order: list[str] = []
 
-    async def prepare_side_effect(candidate, run_id):
+    async def prepare_side_effect(candidate, run_id, inspection=None):
         prepare_order.append(candidate.token_address)
         return _make_prepared_kick(candidate)
 

@@ -41,6 +41,7 @@ from factory_dashboard.scanner.reward_token_resolver import RewardTokenResolver
 from factory_dashboard.scanner.service import ScannerService
 from factory_dashboard.scanner.token_metadata import TokenMetadataService
 from factory_dashboard.transaction_service.signer import TransactionSigner
+from factory_dashboard.transaction_service.pricing_policy import load_auction_pricing_policy
 
 
 def build_scanner_service(settings: Settings, session) -> ScannerService:
@@ -225,6 +226,25 @@ def build_txn_service(
         settings.txn_keystore_passphrase,
     )
 
+    multicall_client = MulticallClient(
+        web3_client,
+        settings.multicall_address,
+        enabled=settings.multicall_enabled,
+    )
+    erc20_reader = ERC20Reader(
+        web3_client,
+        multicall_client=multicall_client,
+        multicall_enabled=settings.multicall_enabled,
+        multicall_balance_batch_calls=settings.multicall_balance_batch_calls,
+    )
+    auction_state_reader = AuctionStateReader(
+        web3_client=web3_client,
+        multicall_client=multicall_client,
+        multicall_enabled=settings.multicall_enabled,
+        multicall_auction_batch_calls=settings.multicall_auction_batch_calls,
+    )
+    pricing_policy = load_auction_pricing_policy()
+
     price_provider = _TPA(
         chain_id=settings.chain_id,
         base_url=settings.token_price_agg_base_url,
@@ -249,6 +269,9 @@ def build_txn_service(
         chain_id=settings.chain_id,
         confirm_fn=confirm_fn,
         require_curve_quote=settings.txn_require_curve_quote,
+        erc20_reader=erc20_reader,
+        auction_state_reader=auction_state_reader,
+        pricing_policy=pricing_policy,
     )
 
     lock_path = settings.resolved_db_path.parent / "txn_daemon.lock"

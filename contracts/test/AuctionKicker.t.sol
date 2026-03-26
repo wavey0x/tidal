@@ -22,8 +22,16 @@ contract AuctionKickerTest is Test {
     event OwnerUpdated(address indexed owner);
     event KeeperUpdated(address indexed account, bool allowed);
     event Kicked(
-        address indexed source, address indexed auction, address sellToken, uint256 sellAmount, uint256 startingPrice, uint256 minimumPrice
+        address indexed source,
+        address indexed auction,
+        address sellToken,
+        uint256 sellAmount,
+        uint256 startingPrice,
+        uint256 minimumPrice,
+        uint256 stepDecayRateBps,
+        address settleToken
     );
+    event SweepAndSettled(address indexed auction, address indexed sellToken);
 
     address internal constant TRADE_HANDLER = 0xb634316E06cC0B358437CbadD4dC94F1D3a92B3b;
     address internal constant AUCTION = 0x785cf728913e92DC5b24162DCBeE7A41E7de5747;
@@ -44,9 +52,11 @@ contract AuctionKickerTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.envString("MAINNET_URL"));
 
-        kicker = new AuctionKicker();
+        address[] memory initialKeepers = new address[](1);
+        initialKeepers[0] = keeper;
+
+        kicker = new AuctionKicker(initialKeepers);
         commandHarness = new WeiRollCommandLibHarness();
-        kicker.setKeeper(keeper, true);
 
         address governance = ITradeHandler(TRADE_HANDLER).governance();
         vm.prank(governance);
@@ -80,10 +90,32 @@ contract AuctionKickerTest is Test {
     // -----------------------------------------------------------------------
 
     function test_constructor_emitsOwnerUpdated() public {
+        address[] memory initialKeepers = new address[](0);
+
         vm.expectEmit(true, false, false, false);
         emit OwnerUpdated(address(this));
 
-        new AuctionKicker();
+        new AuctionKicker(initialKeepers);
+    }
+
+    function test_constructor_setsInitialKeepers_andEmitsKeeperUpdated() public {
+        address firstKeeper = makeAddr("first-keeper");
+        address secondKeeper = makeAddr("second-keeper");
+        address[] memory initialKeepers = new address[](2);
+        initialKeepers[0] = firstKeeper;
+        initialKeepers[1] = secondKeeper;
+
+        vm.expectEmit(true, false, false, false);
+        emit OwnerUpdated(address(this));
+        vm.expectEmit(true, false, false, true);
+        emit KeeperUpdated(firstKeeper, true);
+        vm.expectEmit(true, false, false, true);
+        emit KeeperUpdated(secondKeeper, true);
+
+        AuctionKicker deployed = new AuctionKicker(initialKeepers);
+
+        assertTrue(deployed.keeper(firstKeeper));
+        assertTrue(deployed.keeper(secondKeeper));
     }
 
     function test_cmdCall_packsExpectedShortCommand() public view {
@@ -118,6 +150,7 @@ contract AuctionKickerTest is Test {
         uint256 amount = 100e18;
         uint256 startingPrice = 2e18;
         uint256 minimumPrice = 1e18;
+        uint256 stepDecayRateBps = 50;
         address wantToken = IAuction(AUCTION).want();
 
         uint256 strategyBaseBalance = IERC20(CRV).balanceOf(STRATEGY);
@@ -127,40 +160,41 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         vm.expectEmit(true, true, false, true);
-        emit Kicked(STRATEGY, AUCTION, CRV, amount, startingPrice, minimumPrice);
+        emit Kicked(STRATEGY, AUCTION, CRV, amount, startingPrice, minimumPrice, stepDecayRateBps, address(0));
 
         vm.prank(keeper);
-        kicker.kick(STRATEGY, AUCTION, CRV, amount, wantToken, startingPrice, minimumPrice);
+        kicker.kick(STRATEGY, AUCTION, CRV, amount, wantToken, startingPrice, minimumPrice, stepDecayRateBps, address(0));
 
         assertEq(IERC20(CRV).balanceOf(STRATEGY), strategyBaseBalance);
         assertEq(IERC20(CRV).balanceOf(AUCTION), auctionStartBalance + amount);
         assertEq(IAuction(AUCTION).startingPrice(), startingPrice);
         assertEq(IAuction(AUCTION).minimumPrice(), minimumPrice);
+        assertEq(IAuction(AUCTION).stepDecayRate(), stepDecayRateBps);
     }
 
     function test_revert_notKeeperOrOwner() public {
         address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("unauthorized");
         vm.prank(makeAddr("not-authorized"));
-        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, wantToken, 1e18, 0);
+        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, wantToken, 1e18, 0, 50, address(0));
     }
 
     function test_revert_startingPriceZero() public {
         address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("starting price zero");
-        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, wantToken, 0, 0);
+        kicker.kick(STRATEGY, AUCTION, CRV, 1e18, wantToken, 0, 0, 50, address(0));
     }
 
     function test_revert_wantMismatch() public {
         address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("want mismatch");
-        kicker.kick(STRATEGY, ALT_AUCTION, CRV, 1e18, wantToken, 1e18, 0);
+        kicker.kick(STRATEGY, ALT_AUCTION, CRV, 1e18, wantToken, 1e18, 0, 50, address(0));
     }
 
     function test_revert_sellTokenIsWant() public {
         address wantToken = IAuction(AUCTION).want();
         vm.expectRevert("sell token is want");
-        kicker.kick(STRATEGY, AUCTION, wantToken, 1e18, wantToken, 1e18, 0);
+        kicker.kick(STRATEGY, AUCTION, wantToken, 1e18, wantToken, 1e18, 0, 50, address(0));
     }
 
     function test_revert_receiverMismatch() public {
@@ -172,12 +206,13 @@ contract AuctionKickerTest is Test {
         );
 
         vm.expectRevert("receiver mismatch");
-        kicker.kick(STRATEGY, ALT_AUCTION, CRV, 1e18, strategyWant, 1e18, 0);
+        kicker.kick(STRATEGY, ALT_AUCTION, CRV, 1e18, strategyWant, 1e18, 0, 50, address(0));
     }
 
     function test_minimumPrice_zeroAllowed() public {
         uint256 amount = 100e18;
         uint256 startingPrice = 2e18;
+        uint256 stepDecayRateBps = 50;
         address wantToken = IAuction(AUCTION).want();
 
         uint256 strategyBaseBalance = IERC20(CRV).balanceOf(STRATEGY);
@@ -186,7 +221,7 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         vm.prank(keeper);
-        kicker.kick(STRATEGY, AUCTION, CRV, amount, wantToken, startingPrice, 0);
+        kicker.kick(STRATEGY, AUCTION, CRV, amount, wantToken, startingPrice, 0, stepDecayRateBps, address(0));
 
         assertEq(IAuction(AUCTION).minimumPrice(), 0);
     }
@@ -199,6 +234,7 @@ contract AuctionKickerTest is Test {
         uint256 amount = 100e18;
         uint256 startingPrice = 2e18;
         uint256 minimumPrice = 1e18;
+        uint256 stepDecayRateBps = 50;
         address wantToken = IAuction(AUCTION).want();
 
         uint256 strategyBaseBalance = IERC20(CRV).balanceOf(STRATEGY);
@@ -208,10 +244,11 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         AuctionKicker.KickParams[] memory kicks = new AuctionKicker.KickParams[](1);
-        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, amount, wantToken, startingPrice, minimumPrice);
+        kicks[0] =
+            AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, amount, wantToken, startingPrice, minimumPrice, stepDecayRateBps, address(0));
 
         vm.expectEmit(true, true, false, true);
-        emit Kicked(STRATEGY, AUCTION, CRV, amount, startingPrice, minimumPrice);
+        emit Kicked(STRATEGY, AUCTION, CRV, amount, startingPrice, minimumPrice, stepDecayRateBps, address(0));
 
         vm.prank(keeper);
         kicker.batchKick(kicks);
@@ -227,6 +264,7 @@ contract AuctionKickerTest is Test {
         uint256 amount2 = 30e18;
         uint256 startingPrice = 2e18;
         uint256 minimumPrice = 1e18;
+        uint256 stepDecayRateBps = 50;
 
         // Mock ALT_AUCTION to accept our strategy (want match + receiver match).
         address strategyWant = IAuction(AUCTION).want();
@@ -247,13 +285,17 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         AuctionKicker.KickParams[] memory kicks = new AuctionKicker.KickParams[](2);
-        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, amount1, strategyWant, startingPrice, minimumPrice);
-        kicks[1] = AuctionKicker.KickParams(STRATEGY, ALT_AUCTION, CRV, amount2, strategyWant, startingPrice, minimumPrice);
+        kicks[0] = AuctionKicker.KickParams(
+            STRATEGY, AUCTION, CRV, amount1, strategyWant, startingPrice, minimumPrice, stepDecayRateBps, address(0)
+        );
+        kicks[1] = AuctionKicker.KickParams(
+            STRATEGY, ALT_AUCTION, CRV, amount2, strategyWant, startingPrice, minimumPrice, stepDecayRateBps, address(0)
+        );
 
         vm.expectEmit(true, true, false, true);
-        emit Kicked(STRATEGY, AUCTION, CRV, amount1, startingPrice, minimumPrice);
+        emit Kicked(STRATEGY, AUCTION, CRV, amount1, startingPrice, minimumPrice, stepDecayRateBps, address(0));
         vm.expectEmit(true, true, false, true);
-        emit Kicked(STRATEGY, ALT_AUCTION, CRV, amount2, startingPrice, minimumPrice);
+        emit Kicked(STRATEGY, ALT_AUCTION, CRV, amount2, startingPrice, minimumPrice, stepDecayRateBps, address(0));
 
         vm.prank(keeper);
         kicker.batchKick(kicks);
@@ -271,8 +313,8 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         AuctionKicker.KickParams[] memory kicks = new AuctionKicker.KickParams[](2);
-        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, amount, IAuction(AUCTION).want(), 2e18, 1e18);
-        kicks[1] = AuctionKicker.KickParams(STRATEGY, AUCTION, CVX, amount, IAuction(AUCTION).want(), 0, 0); // startingPrice = 0 → revert
+        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, amount, IAuction(AUCTION).want(), 2e18, 1e18, 50, address(0));
+        kicks[1] = AuctionKicker.KickParams(STRATEGY, AUCTION, CVX, amount, IAuction(AUCTION).want(), 0, 0, 50, address(0)); // startingPrice = 0 → revert
 
         vm.expectRevert("starting price zero");
         vm.prank(keeper);
@@ -293,7 +335,7 @@ contract AuctionKickerTest is Test {
     function test_batchKick_revert_unauthorized() public {
         address wantToken = IAuction(AUCTION).want();
         AuctionKicker.KickParams[] memory kicks = new AuctionKicker.KickParams[](1);
-        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, 1e18, wantToken, 1e18, 0);
+        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, 1e18, wantToken, 1e18, 0, 50, address(0));
 
         vm.expectRevert("unauthorized");
         vm.prank(makeAddr("not-authorized"));
@@ -304,6 +346,7 @@ contract AuctionKickerTest is Test {
         uint256 amount = 100e18;
         uint256 startingPrice = 2e18;
         uint256 minimumPrice = 1e18;
+        uint256 stepDecayRateBps = 50;
 
         uint256 burnerBaseBalance = IERC20(CRV).balanceOf(FEE_BURNER);
         uint256 auctionStartBalance = IERC20(CRV).balanceOf(FEE_BURNER_AUCTION);
@@ -318,15 +361,18 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         vm.expectEmit(true, true, false, true);
-        emit Kicked(FEE_BURNER, FEE_BURNER_AUCTION, CRV, amount, startingPrice, minimumPrice);
+        emit Kicked(FEE_BURNER, FEE_BURNER_AUCTION, CRV, amount, startingPrice, minimumPrice, stepDecayRateBps, address(0));
 
         vm.prank(keeper);
-        kicker.kick(FEE_BURNER, FEE_BURNER_AUCTION, CRV, amount, FEE_BURNER_WANT, startingPrice, minimumPrice);
+        kicker.kick(
+            FEE_BURNER, FEE_BURNER_AUCTION, CRV, amount, FEE_BURNER_WANT, startingPrice, minimumPrice, stepDecayRateBps, address(0)
+        );
 
         assertEq(IERC20(CRV).balanceOf(FEE_BURNER), burnerBaseBalance);
         assertEq(IERC20(CRV).balanceOf(FEE_BURNER_AUCTION), auctionStartBalance + amount);
         assertEq(IAuction(FEE_BURNER_AUCTION).startingPrice(), startingPrice);
         assertEq(IAuction(FEE_BURNER_AUCTION).minimumPrice(), minimumPrice);
+        assertEq(IAuction(FEE_BURNER_AUCTION).stepDecayRate(), stepDecayRateBps);
     }
 
     function test_batchKick_mixedStrategyAndFeeBurner() public {
@@ -334,6 +380,7 @@ contract AuctionKickerTest is Test {
         uint256 burnerAmount = 60e18;
         uint256 startingPrice = 2e18;
         uint256 minimumPrice = 1e18;
+        uint256 stepDecayRateBps = 50;
         address strategyWant = IAuction(AUCTION).want();
 
         uint256 strategyBaseBalance = IERC20(CRV).balanceOf(STRATEGY);
@@ -352,8 +399,12 @@ contract AuctionKickerTest is Test {
         vm.warp(block.timestamp + 8 days);
 
         AuctionKicker.KickParams[] memory kicks = new AuctionKicker.KickParams[](2);
-        kicks[0] = AuctionKicker.KickParams(STRATEGY, AUCTION, CRV, strategyAmount, strategyWant, startingPrice, minimumPrice);
-        kicks[1] = AuctionKicker.KickParams(FEE_BURNER, FEE_BURNER_AUCTION, CRV, burnerAmount, FEE_BURNER_WANT, startingPrice, minimumPrice);
+        kicks[0] = AuctionKicker.KickParams(
+            STRATEGY, AUCTION, CRV, strategyAmount, strategyWant, startingPrice, minimumPrice, stepDecayRateBps, address(0)
+        );
+        kicks[1] = AuctionKicker.KickParams(
+            FEE_BURNER, FEE_BURNER_AUCTION, CRV, burnerAmount, FEE_BURNER_WANT, startingPrice, minimumPrice, stepDecayRateBps, address(0)
+        );
 
         vm.prank(keeper);
         kicker.batchKick(kicks);
@@ -362,5 +413,30 @@ contract AuctionKickerTest is Test {
         assertEq(IERC20(CRV).balanceOf(FEE_BURNER), burnerBaseBalance);
         assertEq(IERC20(CRV).balanceOf(AUCTION), strategyAuctionBefore + strategyAmount);
         assertEq(IERC20(CRV).balanceOf(FEE_BURNER_AUCTION), burnerAuctionBefore + burnerAmount);
+    }
+
+    function test_sweepAndSettle_clearsActiveAuction() public {
+        uint256 amount = 15e18;
+        address wantToken = IAuction(AUCTION).want();
+
+        uint256 strategyBaseBalance = IERC20(CRV).balanceOf(STRATEGY);
+        uint256 auctionBalanceBefore = IERC20(CRV).balanceOf(AUCTION);
+        deal(CRV, STRATEGY, strategyBaseBalance + amount);
+
+        vm.prank(keeper);
+        kicker.kick(STRATEGY, AUCTION, CRV, amount, wantToken, 2e18, 1e18, 50, address(0));
+
+        assertTrue(IAuction(AUCTION).isActive(CRV));
+        assertEq(IERC20(CRV).balanceOf(AUCTION), auctionBalanceBefore + amount);
+
+        vm.expectEmit(true, true, false, true);
+        emit SweepAndSettled(AUCTION, CRV);
+
+        vm.prank(keeper);
+        kicker.sweepAndSettle(AUCTION, CRV);
+
+        assertFalse(IAuction(AUCTION).isActive(CRV));
+        assertEq(IERC20(CRV).balanceOf(AUCTION), 0);
+        assertEq(IERC20(CRV).balanceOf(STRATEGY), strategyBaseBalance + amount);
     }
 }

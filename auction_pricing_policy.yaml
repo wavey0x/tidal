@@ -1,0 +1,20 @@
+default_profile: volatile
+
+profiles:
+  volatile:
+    start_price_buffer_bps: 1000
+    min_price_buffer_bps: 500
+    step_decay_rate_bps: 50
+
+  stable:
+    start_price_buffer_bps: 100
+    min_price_buffer_bps: 50
+    step_decay_rate_bps: 2
+
+auctions:
+  "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693": # Fee burner v1.0.4 auction
+    "0x2A8e1E676Ec238d8A992307B495b45B3fEAa5e86": stable # OUSD
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": stable # USDC
+    "0xf4c13D631450De6B12a19829E37c8e2826891dC4": stable # avUSD
+    "0xC0c17dD08263C16f6b64E772fB9B723Bf1344DdF": stable # pmUSD
+    "0x7CB20517776636eD76b68EdB3D99DCce356ABf02": stable # sdUSD

@@ -10,13 +10,30 @@ from pathlib import Path
 
 import structlog
 
+from factory_dashboard.normalizers import normalize_address
 from factory_dashboard.persistence.repositories import KickTxRepository, TxnRunRepository
 from factory_dashboard.time import utcnow_iso
 from factory_dashboard.transaction_service.evaluator import check_pre_send, shortlist_candidates, sort_candidates
 from factory_dashboard.transaction_service.kicker import AuctionKicker
-from factory_dashboard.transaction_service.types import KickAction, KickCandidate, KickResult, KickStatus, PreparedKick, SourceType, TxnRunResult
+from factory_dashboard.transaction_service.types import (
+    KickAction,
+    KickCandidate,
+    KickResult,
+    KickStatus,
+    PreparedKick,
+    PreparedSweepAndSettle,
+    SourceType,
+    TxnRunResult,
+)
 
 logger = structlog.get_logger(__name__)
+
+
+def _candidate_key(candidate: KickCandidate) -> tuple[str, str]:
+    try:
+        return normalize_address(candidate.auction_address), normalize_address(candidate.token_address)
+    except Exception:  # noqa: BLE001
+        return candidate.auction_address, candidate.token_address
 
 
 def _candidate_order_log(candidates: list[KickCandidate]) -> list[dict[str, object]]:
@@ -135,6 +152,7 @@ class TxnService:
 
         # Phase 1: Prepare all candidates.
         prepared: list[PreparedKick] = []
+        prepared_sweep_and_settle: list[PreparedSweepAndSettle] = []
         failed_messages: list[str] = []
         candidates_to_prepare = sort_candidates(
             [decision.candidate for decision in decisions if decision.action == KickAction.KICK]
@@ -193,7 +211,8 @@ class TxnService:
         if live and not batch and candidates_to_prepare:
             # Non-batch: prepare and execute one candidate at a time (highest USD first).
             for candidate in candidates_to_prepare:
-                result = await self.kicker.prepare_kick(candidate, run_id)
+                inspection = (await self.kicker.inspect_candidates([candidate])).get(_candidate_key(candidate))
+                result = await self.kicker.prepare_kick(candidate, run_id, inspection=inspection)
                 if isinstance(result, KickResult):
                     if result.status == KickStatus.SKIP:
                         kicks_attempted -= 1
@@ -202,7 +221,10 @@ class TxnService:
                         if result.error_message:
                             failed_messages.append(result.error_message)
                     continue
-                exec_result = await self.kicker.execute_single(result, run_id)
+                if isinstance(result, PreparedSweepAndSettle):
+                    exec_result = await self.kicker.execute_sweep_and_settle(result, run_id)
+                else:
+                    exec_result = await self.kicker.execute_single(result, run_id)
                 if exec_result.status == KickStatus.CONFIRMED:
                     kicks_succeeded += 1
                 elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
@@ -213,13 +235,14 @@ class TxnService:
                     kicks_attempted -= 1
         elif live and candidates_to_prepare:
             # Batch: prepare all in groups, then execute as one batch transaction.
-            prepare_results: list[PreparedKick | KickResult] = []
+            prepare_results: list[PreparedKick | PreparedSweepAndSettle | KickResult] = []
             for batch_start in range(0, len(candidates_to_prepare), self.max_batch_kick_size):
                 if batch_start > 0:
                     await asyncio.sleep(self.batch_kick_delay_seconds)
                 group = candidates_to_prepare[batch_start:batch_start + self.max_batch_kick_size]
+                inspections = await self.kicker.inspect_candidates(group)
                 batch_results = await asyncio.gather(
-                    *(self.kicker.prepare_kick(c, run_id) for c in group)
+                    *(self.kicker.prepare_kick(c, run_id, inspection=inspections.get(_candidate_key(c))) for c in group)
                 )
                 prepare_results.extend(batch_results)
             for result in prepare_results:
@@ -230,8 +253,21 @@ class TxnService:
                         kicks_failed += 1
                         if result.error_message:
                             failed_messages.append(result.error_message)
+                elif isinstance(result, PreparedSweepAndSettle):
+                    prepared_sweep_and_settle.append(result)
                 else:
                     prepared.append(result)
+
+            for prepared_operation in prepared_sweep_and_settle:
+                exec_result = await self.kicker.execute_sweep_and_settle(prepared_operation, run_id)
+                if exec_result.status == KickStatus.CONFIRMED:
+                    kicks_succeeded += 1
+                elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                    kicks_failed += 1
+                    if exec_result.error_message:
+                        failed_messages.append(exec_result.error_message)
+                elif exec_result.status == KickStatus.USER_SKIPPED:
+                    kicks_attempted -= 1
 
             if prepared:
                 exec_results = await self.kicker.execute_batch(prepared, run_id)

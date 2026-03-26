@@ -8,6 +8,7 @@ from typing import Literal
 
 
 SourceType = Literal["strategy", "fee_burner"]
+OperationType = Literal["kick", "settle", "sweep_and_settle"]
 
 
 class KickAction(str, Enum):
@@ -76,6 +77,11 @@ class PreparedKick:
     live_balance_raw: int
     normalized_balance: str
     quote_amount_str: str
+    start_price_buffer_bps: int
+    min_price_buffer_bps: int
+    step_decay_rate_bps: int
+    pricing_profile_name: str
+    settle_token: str | None = None
     quote_response_json: str | None = None
 
 
@@ -86,6 +92,35 @@ class KickDecision:
     candidate: KickCandidate
     action: KickAction
     skip_reason: SkipReason | None = None
+
+
+@dataclass(slots=True)
+class PreparedSweepAndSettle:
+    """Prepared stuck-auction abort operation."""
+
+    candidate: KickCandidate
+    sell_token: str
+    minimum_price_raw: int | None
+    available_raw: int | None
+    sell_amount_str: str | None
+    minimum_price_str: str | None
+    usd_value_str: str | None
+    normalized_balance: str | None
+    stuck_abort_reason: str
+    token_symbol: str | None = None
+
+
+@dataclass(slots=True)
+class AuctionInspection:
+    """Live auction status snapshot for a candidate auction."""
+
+    auction_address: str
+    is_active_auction: bool | None
+    active_tokens: tuple[str, ...]
+    active_token: str | None = None
+    active_available_raw: int | None = None
+    active_price_raw: int | None = None
+    minimum_price_raw: int | None = None
 
 
 @dataclass(slots=True)

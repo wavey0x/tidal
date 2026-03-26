@@ -36,6 +36,48 @@ Out of scope for this repo:
    factory-dashboard scan
    ```
 
+## Auction Pricing Policy
+
+The transaction service reads pricing-profile overrides from [`auction_pricing_policy.yaml`](./auction_pricing_policy.yaml) at the repo root.
+
+Use it to mark specific `auction -> sell token` combinations as `stable`. Anything not listed there falls back to the `default_profile`, which should usually stay `volatile`.
+
+Minimal shape:
+
+```yaml
+default_profile: volatile
+
+profiles:
+  volatile:
+    start_price_buffer_bps: 1000
+    min_price_buffer_bps: 500
+    step_decay_rate_bps: 50
+
+  stable:
+    start_price_buffer_bps: 100
+    min_price_buffer_bps: 50
+    step_decay_rate_bps: 1
+
+auctions:
+  0xauction_address:
+    0xsell_token_address: stable
+```
+
+Fill it out with these rules:
+
+- only add entries under `auctions` when you want non-default behavior
+- the key is the auction address, then the sell token address for that auction
+- the value is the profile name, usually `stable`
+- most auctions should have no entry at all
+- no auto-classification exists in v1
+- do not put these mappings in `config.yaml`
+
+Examples:
+
+- `USDC/USDT` style auction lots can be marked `stable`
+- `WETH/wstETH` style auction lots can be marked `stable`
+- if an auction sell token is not listed, it will use the `volatile` profile
+
 ## Commands
 
 - `factory-dashboard db migrate`

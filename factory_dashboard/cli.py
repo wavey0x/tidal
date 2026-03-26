@@ -182,6 +182,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
             source_name = k.get("source_name") or "Unknown"
             token_sym = k.get("token_symbol") or "???"
             want_sym = k.get("want_symbol") or "???"
+            profile_name = k.get("pricing_profile_name") or "default"
             amount = float(k["sell_amount"])
             amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
             quote_amount = float(k["quote_amount"])
@@ -191,6 +192,12 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
             starting_price = int(k["starting_price"])
             minimum_price = int(k["minimum_price"])
             min_usd_str = f"~${usd_value / minimum_price:,.2f}/{want_sym}" if minimum_price else ""
+            step_decay_rate_bps = k.get("step_decay_rate_bps")
+            step_decay_str = (
+                f"{step_decay_rate_bps / 100:.2f}%"
+                if step_decay_rate_bps is not None
+                else "—"
+            )
             precision_line = None
             if quote_amount > 0 and starting_price > quote_amount * 2:
                 precision_line = f"               \u21b3 ceiled lot based on {quote_amount:.4f} quote"
@@ -202,6 +209,7 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
                 f"  Sell amount: {amount_str} {token_sym} (~${usd_value:,.2f})",
                 f"  Start quote: {k['starting_price_display']} | {want_price_str}",
                 f"  Min price:   {k['minimum_price_display']} | {min_usd_str}",
+                f"  Profile:     {profile_name} | decay {step_decay_str}",
             ]
             if precision_line:
                 content.append(precision_line)
@@ -215,11 +223,12 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
             for i, k in enumerate(kicks, 1):
                 source_name = k.get("source_name") or "Unknown"
                 token_sym = k.get("token_symbol") or "???"
+                profile_name = k.get("pricing_profile_name") or "default"
                 amount = float(k["sell_amount"])
                 amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
                 usd_value = float(k["usd_value"])
                 content.append(
-                    f"  {i}. {source_name} | {amount_str} {token_sym} (~${usd_value:,.2f})"
+                    f"  {i}. {source_name} | {amount_str} {token_sym} (~${usd_value:,.2f}) | {profile_name}"
                 )
 
             total_usd = float(summary["total_usd"])

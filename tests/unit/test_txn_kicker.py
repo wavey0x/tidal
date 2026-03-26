@@ -16,7 +16,7 @@ import json
 
 from factory_dashboard.pricing.token_price_agg import QuoteResult
 from factory_dashboard.transaction_service.kicker import AuctionKicker, _DEFAULT_PRIORITY_FEE_GWEI
-from factory_dashboard.transaction_service.types import KickCandidate, KickResult, PreparedKick
+from factory_dashboard.transaction_service.types import KickCandidate, KickResult, PreparedKick, PreparedSweepAndSettle
 
 
 def _make_candidate(**overrides):
@@ -49,6 +49,11 @@ def _make_prepared_kick(**overrides):
         "live_balance_raw": 10**21,
         "normalized_balance": "1000",
         "quote_amount_str": "2500",
+        "start_price_buffer_bps": 1000,
+        "min_price_buffer_bps": 500,
+        "step_decay_rate_bps": 50,
+        "pricing_profile_name": "volatile",
+        "settle_token": None,
     }
     defaults.update(overrides)
     return PreparedKick(**defaults)
@@ -67,7 +72,7 @@ def kick_tx_repo(session):
     return KickTxRepository(session)
 
 
-def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None, **overrides):
+def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None, auction_state_reader=None, **overrides):
     if web3_client is None:
         web3_client = MagicMock()
     if signer is None:
@@ -80,6 +85,13 @@ def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None,
         price_provider.quote = AsyncMock(
             return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 2_500_000_000})
         )
+    if auction_state_reader is None:
+        auction_state_reader = MagicMock()
+        auction_state_reader.read_bool_noargs_many = AsyncMock(side_effect=lambda auctions, method: {auction: False for auction in auctions})
+        auction_state_reader.read_address_array_noargs_many = AsyncMock(side_effect=lambda auctions, method: {auction: [] for auction in auctions})
+        auction_state_reader.read_bool_arg_many = AsyncMock(side_effect=lambda pairs, method: {pair: False for pair in pairs})
+        auction_state_reader.read_uint_arg_many = AsyncMock(side_effect=lambda pairs, method: {pair: 0 for pair in pairs})
+        auction_state_reader.read_uint_noargs_many = AsyncMock(side_effect=lambda auctions, method: {auction: 0 for auction in auctions})
 
     kick_tx_repo = KickTxRepository(session)
 
@@ -97,6 +109,7 @@ def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None,
         "auction_kicker_address": "0x2a76c6aD151AF2EDbe16755Fc3BFf67176f01071",
         "chain_id": 1,
         "require_curve_quote": True,
+        "auction_state_reader": auction_state_reader,
     }
     defaults.update(overrides)
     return AuctionKicker(**defaults)
@@ -1184,6 +1197,8 @@ async def test_prepare_kick_success(session):
     assert result.starting_price_str == "2750"
     assert result.minimum_price_str == "2375"
     assert result.candidate is candidate
+    assert result.step_decay_rate_bps == 50
+    assert result.settle_token is None
 
 
 @pytest.mark.asyncio
@@ -1290,6 +1305,123 @@ async def test_prepare_kick_quote_error(session):
     assert isinstance(result, KickResult)
     assert result.status == "ERROR"
     assert "quote" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_active_sold_out_sets_settle_token(session):
+    web3_client = MagicMock()
+
+    auction_state_reader = MagicMock()
+    auction_state_reader.read_bool_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": True,
+    })
+    auction_state_reader.read_address_array_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": ["0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"],
+    })
+    auction_state_reader.read_bool_arg_many = AsyncMock(return_value={
+        ("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): False,
+        ("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"): True,
+    })
+    auction_state_reader.read_uint_arg_many = AsyncMock(side_effect=[
+        {("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"): 0},
+        {("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"): 123},
+    ])
+    auction_state_reader.read_uint_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": 100,
+    })
+
+    with patch("factory_dashboard.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client, auction_state_reader=auction_state_reader)
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, PreparedKick)
+    assert result.settle_token == "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_active_stuck_returns_sweep_and_settle(session):
+    web3_client = MagicMock()
+
+    auction_state_reader = MagicMock()
+    auction_state_reader.read_bool_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": True,
+    })
+    auction_state_reader.read_address_array_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    })
+    auction_state_reader.read_bool_arg_many = AsyncMock(return_value={
+        ("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): True,
+    })
+    auction_state_reader.read_uint_arg_many = AsyncMock(side_effect=[
+        {("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): 10**21},
+        {("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): 90},
+    ])
+    auction_state_reader.read_uint_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": 100,
+    })
+
+    kicker = _make_kicker(session, web3_client=web3_client, auction_state_reader=auction_state_reader)
+    candidate = _make_candidate()
+    result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, PreparedSweepAndSettle)
+    assert result.sell_token == candidate.token_address
+    assert result.stuck_abort_reason == "active auction price is at or below minimumPrice"
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_errors_when_active_flag_read_fails(session):
+    web3_client = MagicMock()
+
+    auction_state_reader = MagicMock()
+    auction_state_reader.read_bool_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": None,
+    })
+    auction_state_reader.read_address_array_noargs_many = AsyncMock(return_value={})
+    auction_state_reader.read_bool_arg_many = AsyncMock(return_value={})
+    auction_state_reader.read_uint_arg_many = AsyncMock(return_value={})
+    auction_state_reader.read_uint_noargs_many = AsyncMock(return_value={})
+
+    kicker = _make_kicker(session, web3_client=web3_client, auction_state_reader=auction_state_reader)
+    candidate = _make_candidate()
+    result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, KickResult)
+    assert result.status == "ERROR"
+    assert result.error_message == "auction isAnActiveAuction() read failed"
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_errors_when_active_token_resolution_fails(session):
+    web3_client = MagicMock()
+
+    auction_state_reader = MagicMock()
+    auction_state_reader.read_bool_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": True,
+    })
+    auction_state_reader.read_address_array_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": [],
+    })
+    auction_state_reader.read_bool_arg_many = AsyncMock(return_value={
+        ("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): False,
+    })
+    auction_state_reader.read_uint_arg_many = AsyncMock(return_value={})
+    auction_state_reader.read_uint_noargs_many = AsyncMock(return_value={
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": 100,
+    })
+
+    kicker = _make_kicker(session, web3_client=web3_client, auction_state_reader=auction_state_reader)
+    candidate = _make_candidate()
+    result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, KickResult)
+    assert result.status == "ERROR"
+    assert result.error_message == "active auction token inspection failed"
 
 
 # ---------------------------------------------------------------------------
@@ -1478,6 +1610,53 @@ async def test_execute_batch_confirm_summary_schema(session):
     assert "quote_amount" in kick
     assert "buffer_bps" in kick
     assert "min_buffer_bps" in kick
+    assert kick["pricing_profile_name"] == "volatile"
+
+
+@pytest.mark.asyncio
+async def test_execute_sweep_and_settle_confirmed(session):
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_abort")
+    web3_client.get_transaction_receipt = AsyncMock(return_value={
+        "status": 1,
+        "gasUsed": 180000,
+        "effectiveGasPrice": int(12 * 1e9),
+        "blockNumber": 99901,
+    })
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    mock_contract = MagicMock()
+    mock_sweep_fn = MagicMock()
+    mock_sweep_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
+    mock_contract.functions.sweepAndSettle = MagicMock(return_value=mock_sweep_fn)
+    web3_client.contract = MagicMock(return_value=mock_contract)
+
+    kicker = _make_kicker(session, web3_client=web3_client, signer=signer)
+    prepared = PreparedSweepAndSettle(
+        candidate=_make_candidate(),
+        sell_token="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        minimum_price_raw=100,
+        available_raw=10**21,
+        sell_amount_str=str(10**21),
+        minimum_price_str="100",
+        usd_value_str="2500.0",
+        normalized_balance="1000",
+        stuck_abort_reason="active auction price is at or below minimumPrice",
+        token_symbol="AAA",
+    )
+
+    result = await kicker.execute_sweep_and_settle(prepared, "run-abort")
+
+    assert result.status == "CONFIRMED"
+    rows = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["operation_type"] == "sweep_and_settle"
+    assert rows[0]["stuck_abort_reason"] == "active auction price is at or below minimumPrice"
 
 
 # ---------------------------------------------------------------------------

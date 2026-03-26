@@ -269,6 +269,9 @@ function formatKickPairLabel(kick) {
   if (kick.operationType === "settle") {
     return `SETTLE ${kick.tokenSymbol || "?"}`;
   }
+  if (kick.operationType === "sweep_and_settle") {
+    return `ABORT ${kick.tokenSymbol || "?"}`;
+  }
   return `${kick.tokenSymbol || "?"} → ${kick.wantSymbol || "?"}`;
 }
 
@@ -830,6 +833,9 @@ function formatKickStatusLabel(status, operationType) {
   if (operationType === "settle") {
     return "SETTLED";
   }
+  if (operationType === "sweep_and_settle") {
+    return "ABORTED";
+  }
 
   return "KICKED";
 }
@@ -895,7 +901,13 @@ function KickDetailContent({ kick }) {
     <div className="kick-detail-grid">
       <div className="kick-detail-item">
         <div className="kick-detail-label">Action</div>
-        <div className="kick-detail-value">{kick.operationType === "settle" ? "Settle" : "Kick"}</div>
+        <div className="kick-detail-value">
+          {kick.operationType === "settle"
+            ? "Settle"
+            : kick.operationType === "sweep_and_settle"
+              ? "Sweep + Settle"
+              : "Kick"}
+        </div>
       </div>
       <div className="kick-detail-item">
         <div className="kick-detail-label">Timestamp</div>
@@ -935,7 +947,7 @@ function KickDetailContent({ kick }) {
           </span>
           <span>
             <span className="kick-detail-token-direction">
-              {kick.operationType === "settle" ? "Auction want" : "Buy"}
+              {kick.operationType === "kick" ? "Buy" : "Auction want"}
             </span>
             {kick.wantAddress ? (
               <span className="address-copy" title={kick.wantAddress}>
@@ -974,6 +986,28 @@ function KickDetailContent({ kick }) {
         <div className="kick-detail-label">Quote Amount</div>
         <div className="kick-detail-value">{kick.quoteAmount || "—"}</div>
       </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Step Decay</div>
+        <div className="kick-detail-value">
+          {kick.stepDecayRateBps != null ? `${(Number(kick.stepDecayRateBps) / 100).toFixed(2)}%` : "—"}
+        </div>
+      </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Pre-Kick Settle</div>
+        <div className="kick-detail-value">
+          {kick.settleToken
+            ? (kick.settleToken === kick.tokenAddress
+              ? (kick.tokenSymbol || shortenAddress(kick.settleToken))
+              : shortenAddress(kick.settleToken))
+            : "—"}
+        </div>
+      </div>
+      {kick.stuckAbortReason ? (
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Abort Reason</div>
+          <div className="kick-detail-value">{kick.stuckAbortReason}</div>
+        </div>
+      ) : null}
       {quoteProviders ? (
         <div className="kick-detail-item">
           <div className="kick-detail-label">Quote Providers</div>
@@ -2249,57 +2283,7 @@ export default function App() {
               <th className="last-scan-col">Last Scan</th>
               <th>Vault</th>
               <th>Strategy</th>
-              <th className="auction-col">
-                <span className="th-header-inline">
-                  <span>Auction</span>
-                  <span className="th-filter-wrap" ref={auctionFilterMenuRef}>
-                    <button
-                      type="button"
-                      className={`th-filter-icon ${auctionFilter !== "all" ? "is-active" : ""}`}
-                      title={`Auction filter: ${auctionFilter}`}
-                      aria-label={`Auction filter: ${auctionFilter}`}
-                      aria-haspopup="menu"
-                      aria-expanded={isAuctionFilterMenuOpen}
-                      onClick={toggleAuctionFilterMenu}
-                    >
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M2.5 3.5h11l-4.5 5v3.5l-2 1v-4.5z" />
-                      </svg>
-                    </button>
-                    {isAuctionFilterMenuOpen ? (
-                      <div className="th-filter-popover" role="menu">
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={auctionFilter === "all"}
-                          className={`th-filter-option ${auctionFilter === "all" ? "is-active" : ""}`}
-                          onClick={() => selectAuctionFilter("all")}
-                        >
-                          all
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={auctionFilter === "null"}
-                          className={`th-filter-option ${auctionFilter === "null" ? "is-active" : ""}`}
-                          onClick={() => selectAuctionFilter("null")}
-                        >
-                          null
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={auctionFilter === "not_null"}
-                          className={`th-filter-option ${auctionFilter === "not_null" ? "is-active" : ""}`}
-                          onClick={() => selectAuctionFilter("not_null")}
-                        >
-                          not null
-                        </button>
-                      </div>
-                    ) : null}
-                  </span>
-                </span>
-              </th>
+              <th className="auction-col">Auction</th>
               <th className="token-col">
                 <button
                   type="button"

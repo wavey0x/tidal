@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 from collections.abc import Callable
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
@@ -468,9 +469,9 @@ class AuctionKicker:
         tokens_to_probe_by_auction: dict[str, set[str]] = {auction_address: set() for auction_address in active_auctions}
         for auction_address, token_address in candidate_keys:
             if active_flags.get(auction_address) is True:
-                tokens_to_probe_by_auction.setdefault(auction_address, set()).add(token_address)
+                tokens_to_probe_by_auction[auction_address].add(token_address)
         for auction_address in active_auctions:
-            tokens_to_probe_by_auction.setdefault(auction_address, set()).update(enabled_tokens.get(auction_address, []))
+            tokens_to_probe_by_auction[auction_address].update(enabled_tokens.get(auction_address, []))
 
         probe_pairs = sorted(
             (auction_address, token_address)
@@ -497,9 +498,12 @@ class AuctionKicker:
         price_by_pair = {}
         minimum_price_by_auction = {}
         if active_pairs:
-            available_by_pair = await reader.read_uint_arg_many(active_pairs, "available")
-            price_by_pair = await reader.read_uint_arg_many(active_pairs, "price")
-        if active_auctions:
+            available_by_pair, price_by_pair, minimum_price_by_auction = await asyncio.gather(
+                reader.read_uint_arg_many(active_pairs, "available"),
+                reader.read_uint_arg_many(active_pairs, "price"),
+                reader.read_uint_noargs_many(active_auctions, "minimumPrice"),
+            )
+        elif active_auctions:
             minimum_price_by_auction = await reader.read_uint_noargs_many(active_auctions, "minimumPrice")
 
         for auction_address, token_address in candidate_keys:
@@ -1133,6 +1137,16 @@ class AuctionKicker:
         now_iso = utcnow_iso()
         kicker_address, kicker_contract = self._kicker_contract()
 
+        op_kwargs = {
+            "token_address": prepared_operation.sell_token,
+            "token_symbol": prepared_operation.token_symbol,
+            "sell_amount": prepared_operation.sell_amount_str,
+            "minimum_price": prepared_operation.minimum_price_str,
+            "usd_value": prepared_operation.usd_value_str,
+            "normalized_balance": prepared_operation.normalized_balance,
+            "stuck_abort_reason": prepared_operation.stuck_abort_reason,
+        }
+
         try:
             base_fee_wei = await self.web3_client.get_base_fee()
             base_fee_gwei = base_fee_wei / 1e9
@@ -1144,13 +1158,7 @@ class AuctionKicker:
                 operation_type="sweep_and_settle",
                 status=KickStatus.ERROR,
                 error_message=f"base fee check failed: {exc}",
-                token_address=prepared_operation.sell_token,
-                token_symbol=prepared_operation.token_symbol,
-                sell_amount=prepared_operation.sell_amount_str,
-                minimum_price=prepared_operation.minimum_price_str,
-                usd_value=prepared_operation.usd_value_str,
-                normalized_balance=prepared_operation.normalized_balance,
-                stuck_abort_reason=prepared_operation.stuck_abort_reason,
+                **op_kwargs,
             )
 
         if not self.skip_base_fee_check and base_fee_gwei > self.max_base_fee_gwei:
@@ -1161,13 +1169,7 @@ class AuctionKicker:
                 operation_type="sweep_and_settle",
                 status=KickStatus.ERROR,
                 error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds limit {self.max_base_fee_gwei}",
-                token_address=prepared_operation.sell_token,
-                token_symbol=prepared_operation.token_symbol,
-                sell_amount=prepared_operation.sell_amount_str,
-                minimum_price=prepared_operation.minimum_price_str,
-                usd_value=prepared_operation.usd_value_str,
-                normalized_balance=prepared_operation.normalized_balance,
-                stuck_abort_reason=prepared_operation.stuck_abort_reason,
+                **op_kwargs,
             )
 
         tx_data = kicker_contract.functions.sweepAndSettle(

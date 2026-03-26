@@ -10,6 +10,7 @@ const ETHERSCAN_TX_URL = "https://etherscan.io/tx/";
 const ETHERSCAN_ADDRESS_URL = "https://etherscan.io/address/";
 const COW_EXPLORER_URL = "https://explorer.cow.fi/address/";
 const AUCTIONSCAN_BASE_URL = "https://auctionscan.info";
+const AUCTIONSCAN_ICON_SRC = "/auctionscan-favicon.svg";
 const FAILED_STATUSES = new Set(["REVERTED", "ERROR", "ESTIMATE_FAILED"]);
 const FAINT_STATUSES = new Set(["DRY_RUN", "SUBMITTED", "USER_SKIPPED", "SKIP"]);
 
@@ -503,6 +504,85 @@ function EtherscanTxLink({ txHash }) {
   );
 }
 
+function getAuctionScanHref(kick) {
+  return kick.auctionScanRoundUrl || kick.auctionScanAuctionUrl || null;
+}
+
+function getAuctionScanTargetLabel(kick) {
+  return kick.auctionScanRoundUrl ? "round" : "auction";
+}
+
+function AuctionScanFavicon({ className = "" }) {
+  return (
+    <img
+      src={AUCTIONSCAN_ICON_SRC}
+      alt=""
+      aria-hidden="true"
+      className={`auctionscan-favicon ${className}`.trim()}
+    />
+  );
+}
+
+function OutboundLinkGlyph({ className = "" }) {
+  return (
+    <svg
+      className={`outbound-link-glyph ${className}`.trim()}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M6 4h6v6" />
+      <path d="M10.5 5.5 4 12" />
+    </svg>
+  );
+}
+
+function AuctionScanTextLink({ kick }) {
+  const href = getAuctionScanHref(kick);
+  if (!href) {
+    return null;
+  }
+
+  const target = getAuctionScanTargetLabel(kick);
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="kick-external-link"
+    >
+      <span>{`view ${target} on`}</span>
+      <AuctionScanFavicon />
+      <span>auctionscan.info</span>
+    </a>
+  );
+}
+
+function AuctionScanIconLink({ kick }) {
+  const href = getAuctionScanHref(kick);
+  if (!href) {
+    return "—";
+  }
+
+  const target = getAuctionScanTargetLabel(kick);
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="kick-auctionscan-link"
+      title={`View ${target} on AuctionScan`}
+      aria-label={`View ${target} on AuctionScan`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <AuctionScanFavicon className="kick-auctionscan-link-icon" />
+      <OutboundLinkGlyph className="kick-auctionscan-link-glyph" />
+    </a>
+  );
+}
+
 function MissingAuctionAction({ deployState, onDeploy }) {
   const status = deployState?.status || "idle";
   const txHash = deployState?.txHash || null;
@@ -525,7 +605,7 @@ function MissingAuctionAction({ deployState, onDeploy }) {
             <span className="mono">preparing…</span>
           ) : (
             <>
-              <span className="mono">N/A</span>
+              <span className="deploy-cta">N/A</span>
               <br />
               <span className="deploy-cta">click to deploy now 🚀</span>
             </>
@@ -902,25 +982,14 @@ function KickDetailContent({ kick }) {
           <div className="kick-detail-value">
             {kick.auctionScanRoundUrl ? (
               <div>
-                <a
-                  href={kick.auctionScanRoundUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="cow-explorer-link"
-                >
-                  view round on auctionscan.info
-                </a>
+                <AuctionScanTextLink kick={kick} />
+                {kick.auctionScanResolving ? (
+                  <span className="kick-link-status"> checking for round…</span>
+                ) : null}
               </div>
             ) : kick.auctionScanAuctionUrl ? (
               <div>
-                <a
-                  href={kick.auctionScanAuctionUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="cow-explorer-link"
-                >
-                  view auction on auctionscan.info
-                </a>
+                <AuctionScanTextLink kick={kick} />
                 {kick.auctionScanResolving ? (
                   <span className="kick-link-status"> checking for round…</span>
                 ) : null}
@@ -932,7 +1001,7 @@ function KickDetailContent({ kick }) {
                   href={`${COW_EXPLORER_URL}${kick.auctionAddress}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="cow-explorer-link"
+                  className="kick-external-link"
                 >
                   view on 🐮 explorer
                 </a>
@@ -944,7 +1013,7 @@ function KickDetailContent({ kick }) {
                   href={quoteRequestUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="cow-explorer-link"
+                  className="kick-external-link"
                 >
                   view new quote via 🌊 api
                 </a>
@@ -960,7 +1029,7 @@ function KickDetailContent({ kick }) {
 function KickDetailPanel({ kick }) {
   return (
     <tr className="kick-detail">
-      <td colSpan={7}>
+      <td colSpan={8}>
         <KickDetailContent kick={kick} />
       </td>
     </tr>
@@ -1100,6 +1169,9 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
             </span>
           ) : "—"}
         </td>
+        <td className="kick-auctionscan-cell" data-label="AuctionScan">
+          <AuctionScanIconLink kick={kick} />
+        </td>
         <td data-label="Tx">
           {kick.txHash ? (
             <span onClick={(e) => e.stopPropagation()}>
@@ -1117,6 +1189,7 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
 function KickLogSkeletonRows() {
   return [...Array(10)].map((_, index) => (
     <tr key={`kick-skeleton-${index}`} className="kick-log-skeleton">
+      <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
@@ -1338,6 +1411,11 @@ function KickLogPage({ nowMs, initialRunId }) {
               <th>Status</th>
               <th>Auction</th>
               <th>Source</th>
+              <th className="kick-auctionscan-col" title="AuctionScan">
+                <span className="kick-log-header-icon">
+                  <AuctionScanFavicon />
+                </span>
+              </th>
               <th>Tx</th>
             </tr>
           </thead>
@@ -1345,7 +1423,7 @@ function KickLogPage({ nowMs, initialRunId }) {
             {loading ? <KickLogSkeletonRows /> : null}
             {!loading && !filteredKicks.length ? (
               <tr>
-                <td colSpan={7} className="kick-log-empty">No activity found</td>
+                <td colSpan={8} className="kick-log-empty">No activity found</td>
               </tr>
             ) : null}
             {!loading
@@ -2211,7 +2289,7 @@ export default function App() {
                         address={row.sourceAddress}
                       />
                     </td>
-                    <td className="auction-cell" data-label="Auction">
+                    <td className={`auction-cell${row.auctionAddress ? "" : " auction-cell-empty"}`} data-label="Auction">
                       <AuctionAddressCell
                         address={row.auctionAddress}
                         version={row.auctionVersion}

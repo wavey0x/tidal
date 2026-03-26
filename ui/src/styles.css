@@ -422,6 +422,10 @@ tbody tr:hover td {
   max-width: 220px;
 }
 
+.auction-cell-empty {
+  vertical-align: middle;
+}
+
 .auction-col {
   width: 220px;
   min-width: 220px;
@@ -1006,15 +1010,83 @@ tbody tr:hover td {
   text-transform: uppercase;
 }
 
-.cow-explorer-link {
+.kick-external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 11px;
 }
 
-.cow-explorer-link:hover {
+.kick-external-link:hover {
   color: var(--text-primary);
   text-decoration: underline;
+}
+
+.auctionscan-favicon {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.kick-auctionscan-col,
+.kick-auctionscan-cell {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  text-align: center;
+}
+
+.kick-log-table thead th.kick-auctionscan-col {
+  text-align: center;
+}
+
+.kick-log-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kick-auctionscan-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+  text-decoration: none;
+}
+
+.kick-auctionscan-link:hover {
+  color: var(--text-primary);
+}
+
+.kick-auctionscan-link-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.outbound-link-glyph {
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kick-auctionscan-link-glyph {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  padding: 1px;
+  border-radius: 999px;
+  background: var(--bg);
 }
 
 .kick-link-status {
@@ -1433,6 +1505,12 @@ tbody tr:hover td {
 
   .kick-log-row td.align-right {
     text-align: left;
+  }
+
+  .kick-log-table .kick-log-row td.kick-auctionscan-cell {
+    width: auto;
+    min-width: 0;
+    max-width: none;
   }
 
   .kick-log-skeleton {

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from collections.abc import Callable
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 import structlog
+from eth_abi import decode as abi_decode
+from eth_utils import keccak
+from hexbytes import HexBytes
 from eth_utils import to_checksum_address
 
 from factory_dashboard.chain.contracts.abis import AUCTION_KICKER_ABI
 from factory_dashboard.chain.contracts.erc20 import ERC20Reader
 from factory_dashboard.chain.web3_client import Web3Client
-from factory_dashboard.normalizers import to_decimal_string
+from factory_dashboard.normalizers import short_address, to_decimal_string
 from factory_dashboard.persistence.repositories import KickTxRepository
 from factory_dashboard.pricing.token_price_agg import TokenPriceAggProvider
 from factory_dashboard.time import utcnow_iso
@@ -32,6 +36,27 @@ _GAS_ESTIMATE_BUFFER = 1.2
 # Fallback priority fee when the RPC call fails.
 _DEFAULT_PRIORITY_FEE_GWEI = 0.1
 
+_ERROR_STRING_SELECTOR = keccak(text="Error(string)")[:4]
+_PANIC_SELECTOR = keccak(text="Panic(uint256)")[:4]
+_EXECUTION_FAILED_SELECTOR = keccak(text="ExecutionFailed(uint256,address,string)")[:4]
+_COMMAND_LABELS = {
+    0: "transferFrom(sell token)",
+    1: "setStartingPrice",
+    2: "setMinimumPrice",
+    3: "kick",
+}
+_PANIC_REASONS = {
+    0x01: "assertion failed",
+    0x11: "arithmetic overflow/underflow",
+    0x12: "division or modulo by zero",
+    0x21: "invalid enum conversion",
+    0x22: "invalid storage byte array encoding",
+    0x31: "pop on empty array",
+    0x32: "array index out of bounds",
+    0x41: "too much memory allocated",
+    0x51: "zero-initialized internal function",
+}
+
 
 def _clean_quote_response(raw: dict, *, request_url: str | None = None) -> dict:
     """Keep only the fields useful for the kick log UI."""
@@ -46,6 +71,91 @@ def _clean_quote_response(raw: dict, *, request_url: str | None = None) -> dict:
     if request_url:
         cleaned["requestUrl"] = request_url
     return cleaned
+
+
+def _walk_error_values(value: object) -> list[str]:
+    values: list[str] = []
+
+    def _walk(item: object) -> None:
+        if isinstance(item, BaseException):
+            _walk(item.args)
+            return
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                _walk(child)
+            return
+        if not isinstance(item, str):
+            return
+
+        values.append(item)
+        if item and item[0] in {"(", "["}:
+            try:
+                parsed = ast.literal_eval(item)
+            except Exception:
+                return
+            _walk(parsed)
+
+    _walk(value)
+    return values
+
+
+def _decode_revert_payload(payload: str) -> str | None:
+    if not isinstance(payload, str) or not payload.startswith("0x") or len(payload) < 10:
+        return None
+
+    try:
+        raw = HexBytes(payload)
+    except Exception:
+        return None
+
+    selector = bytes(raw[:4])
+    data = bytes(raw[4:])
+
+    try:
+        if selector == _ERROR_STRING_SELECTOR:
+            return str(abi_decode(["string"], data)[0])
+
+        if selector == _PANIC_SELECTOR:
+            code = int(abi_decode(["uint256"], data)[0])
+            reason = _PANIC_REASONS.get(code)
+            if reason is not None:
+                return f"panic 0x{code:x}: {reason}"
+            return f"panic 0x{code:x}"
+
+        if selector == _EXECUTION_FAILED_SELECTOR:
+            command_index, target, message = abi_decode(["uint256", "address", "string"], data)
+            command_label = _COMMAND_LABELS.get(int(command_index), f"command {int(command_index)}")
+            target_address = to_checksum_address(target)
+            return f"{command_label} on {short_address(target_address)} failed: {message}"
+    except Exception:
+        return None
+
+    return None
+
+
+def _format_execution_error(exc: Exception) -> str:
+    decoded_messages: list[str] = []
+    reverted_messages: list[str] = []
+
+    for value in _walk_error_values(exc):
+        decoded = _decode_revert_payload(value)
+        if decoded and decoded not in decoded_messages:
+            decoded_messages.append(decoded)
+            continue
+
+        marker = "execution reverted:"
+        lowered = value.lower()
+        if marker in lowered:
+            idx = lowered.index(marker) + len(marker)
+            reason = value[idx:].strip()
+            if reason and reason not in reverted_messages:
+                reverted_messages.append(reason)
+
+    if decoded_messages:
+        return decoded_messages[0]
+    if reverted_messages:
+        return reverted_messages[0]
+    return str(exc)
 
 
 class AuctionKicker:
@@ -418,10 +528,11 @@ class AuctionKicker:
         try:
             gas_estimate = await self.web3_client.estimate_gas(tx_params)
         except Exception as exc:  # noqa: BLE001
-            logger.info("txn_batch_estimate_failed", error=str(exc), batch_size=batch_size)
+            friendly_error = _format_execution_error(exc)
+            logger.info("txn_batch_estimate_failed", error=friendly_error, batch_size=batch_size)
             return self._fail_batch(
                 run_id, prepared_kicks, now_iso,
-                status=KickStatus.ESTIMATE_FAILED, error_message=str(exc),
+                status=KickStatus.ESTIMATE_FAILED, error_message=friendly_error,
             )
 
         batch_gas_cap = self.max_gas_limit * batch_size

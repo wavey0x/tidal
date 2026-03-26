@@ -5,6 +5,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from eth_abi import encode
+from eth_utils import keccak
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -199,6 +201,72 @@ async def test_kick_estimate_failed(session):
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["status"] == "ESTIMATE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_kick_estimate_failed_decodes_execution_failed(session):
+    """Estimate failures should decode wrapped custom errors into human text."""
+    web3_client = MagicMock()
+    web3_client.get_balance = AsyncMock(return_value=int(1 * 1e18))
+    web3_client.get_base_fee = AsyncMock(return_value=int(0.1 * 1e9))
+
+    mock_contract = MagicMock()
+    mock_kick_fn = MagicMock()
+    mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
+    web3_client.contract = MagicMock(return_value=mock_contract)
+
+    selector = keccak(text="ExecutionFailed(uint256,address,string)")[:4]
+    payload = "0x" + (
+        selector
+        + encode(
+            ["uint256", "address", "string"],
+            [3, "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693", "active auction"],
+        )
+    ).hex()
+    web3_client.estimate_gas = AsyncMock(side_effect=RuntimeError(payload, payload))
+
+    with patch("factory_dashboard.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client)
+        candidate = _make_candidate()
+        result = await kicker.kick(candidate, "run-1")
+
+    assert result.status == "ESTIMATE_FAILED"
+    assert result.error_message == "kick on 0xA00E…6693 failed: active auction"
+
+
+@pytest.mark.asyncio
+async def test_kick_estimate_failed_decodes_error_string(session):
+    """Estimate failures should decode standard Error(string) payloads."""
+    web3_client = MagicMock()
+    web3_client.get_balance = AsyncMock(return_value=int(1 * 1e18))
+    web3_client.get_base_fee = AsyncMock(return_value=int(0.1 * 1e9))
+
+    mock_contract = MagicMock()
+    mock_kick_fn = MagicMock()
+    mock_kick_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
+    mock_contract.functions.batchKick = MagicMock(return_value=mock_kick_fn)
+    web3_client.contract = MagicMock(return_value=mock_contract)
+
+    selector = keccak(text="Error(string)")[:4]
+    payload = "0x" + (selector + encode(["string"], ["unauthorized"])).hex()
+    web3_client.estimate_gas = AsyncMock(side_effect=RuntimeError("execution reverted: unauthorized", payload))
+
+    with patch("factory_dashboard.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(session, web3_client=web3_client)
+        candidate = _make_candidate()
+        result = await kicker.kick(candidate, "run-1")
+
+    assert result.status == "ESTIMATE_FAILED"
+    assert result.error_message == "unauthorized"
 
 
 @pytest.mark.asyncio

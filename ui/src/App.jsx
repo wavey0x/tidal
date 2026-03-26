@@ -576,7 +576,7 @@ function AuctionScanTextLink({ kick }) {
 function AuctionScanIconLink({ kick }) {
   const href = getAuctionScanHref(kick);
   if (!href) {
-    return "—";
+    return null;
   }
 
   const target = getAuctionScanTargetLabel(kick);

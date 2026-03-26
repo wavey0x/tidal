@@ -6,6 +6,7 @@ import ast
 import asyncio
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 import structlog
@@ -21,7 +22,11 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.scanner.auction_state import AuctionStateReader
 from tidal.time import utcnow_iso
-from tidal.transaction_service.pricing_policy import AuctionPricingPolicy, AuctionPricingProfile
+from tidal.transaction_service.pricing_policy import (
+    AuctionPricingPolicy,
+    AuctionPricingProfile,
+    TokenSizingPolicy,
+)
 from tidal.transaction_service.signer import TransactionSigner
 from tidal.transaction_service.types import (
     AuctionInspection,
@@ -229,6 +234,17 @@ def _default_pricing_policy(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class SelectedSellSize:
+    full_live_balance_raw: int
+    full_live_balance_normalized: str
+    full_live_usd_value: Decimal
+    selected_sell_raw: int
+    selected_sell_normalized: str
+    selected_sell_usd_value: Decimal
+    max_usd_per_kick: Decimal | None = None
+
+
 class AuctionKicker:
     """Builds, signs, and sends kick and stuck-auction abort transactions."""
 
@@ -254,6 +270,7 @@ class AuctionKicker:
         erc20_reader: ERC20Reader | None = None,
         auction_state_reader: AuctionStateReader | None = None,
         pricing_policy: AuctionPricingPolicy | None = None,
+        token_sizing_policy: TokenSizingPolicy | None = None,
     ):
         self.web3_client = web3_client
         self.signer = signer
@@ -275,6 +292,7 @@ class AuctionKicker:
             min_price_buffer_bps=min_price_buffer_bps,
             step_decay_rate_bps=default_step_decay_rate_bps,
         )
+        self.token_sizing_policy = token_sizing_policy
 
     def _resolve_erc20_reader(self) -> ERC20Reader:
         if self.erc20_reader is not None:
@@ -299,6 +317,39 @@ class AuctionKicker:
             fallback_wei = int(_DEFAULT_PRIORITY_FEE_GWEI * 10**9)
             return min(fallback_wei, cap_wei)
         return min(suggested_wei, cap_wei)
+
+    def _select_sell_size(self, candidate: KickCandidate, live_balance_raw: int) -> SelectedSellSize:
+        full_live_balance_normalized = to_decimal_string(live_balance_raw, candidate.decimals)
+        price_usd = Decimal(candidate.price_usd)
+        full_live_usd_value = Decimal(full_live_balance_normalized) * price_usd
+
+        selected_sell_raw = live_balance_raw
+        max_usd_per_kick: Decimal | None = None
+
+        if self.token_sizing_policy is not None:
+            max_usd_per_kick = self.token_sizing_policy.resolve(candidate.token_address)
+            if max_usd_per_kick is not None:
+                if price_usd <= 0:
+                    raise ValueError("cached token price must be positive for token sizing")
+                usd_cap_raw = int(
+                    ((max_usd_per_kick / price_usd) * (Decimal(10) ** candidate.decimals)).to_integral_value(
+                        rounding=ROUND_FLOOR
+                    )
+                )
+                selected_sell_raw = min(live_balance_raw, max(usd_cap_raw, 0))
+
+        selected_sell_normalized = to_decimal_string(selected_sell_raw, candidate.decimals)
+        selected_sell_usd_value = Decimal(selected_sell_normalized) * price_usd
+
+        return SelectedSellSize(
+            full_live_balance_raw=live_balance_raw,
+            full_live_balance_normalized=full_live_balance_normalized,
+            full_live_usd_value=full_live_usd_value,
+            selected_sell_raw=selected_sell_raw,
+            selected_sell_normalized=selected_sell_normalized,
+            selected_sell_usd_value=selected_sell_usd_value,
+            max_usd_per_kick=max_usd_per_kick,
+        )
 
     def _insert_operation_tx(
         self,
@@ -679,27 +730,63 @@ class AuctionKicker:
                 error_message=f"balance read failed: {exc}",
             )
 
-        normalized_balance = to_decimal_string(live_balance_raw, candidate.decimals)
-        live_usd_value = Decimal(normalized_balance) * Decimal(candidate.price_usd)
+        try:
+            selected_sell = self._select_sell_size(candidate, live_balance_raw)
+        except Exception as exc:  # noqa: BLE001
+            return self._fail(
+                run_id,
+                candidate,
+                now_iso,
+                status=KickStatus.ERROR,
+                error_message=f"token sizing failed: {exc}",
+            )
 
-        if live_usd_value < self.usd_threshold:
+        if selected_sell.full_live_usd_value < self.usd_threshold:
             logger.info(
                 "txn_candidate_below_threshold_live",
                 source=candidate.source_address,
                 token=candidate.token_address,
                 cached_usd=candidate.usd_value,
-                live_usd=live_usd_value,
+                live_usd=selected_sell.full_live_usd_value,
             )
             return KickResult(
                 kick_tx_id=0,
                 status=KickStatus.SKIP,
                 error_message="below threshold on live balance",
                 live_balance_raw=live_balance_raw,
-                usd_value=str(live_usd_value),
+                usd_value=str(selected_sell.full_live_usd_value),
             )
 
         profile = self.pricing_policy.resolve(candidate.auction_address, candidate.token_address)
-        sell_amount = live_balance_raw
+        sell_amount = selected_sell.selected_sell_raw
+
+        if sell_amount <= 0:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.SKIP,
+                error_message="token sizing cap rounds to zero",
+                live_balance_raw=live_balance_raw,
+                sell_amount=str(sell_amount),
+                usd_value=str(selected_sell.selected_sell_usd_value),
+            )
+
+        if selected_sell.selected_sell_usd_value < self.usd_threshold:
+            logger.info(
+                "txn_candidate_below_threshold_after_sizing",
+                source=candidate.source_address,
+                token=candidate.token_address,
+                full_live_usd=selected_sell.full_live_usd_value,
+                selected_usd=selected_sell.selected_sell_usd_value,
+                max_usd_per_kick=selected_sell.max_usd_per_kick,
+            )
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.SKIP,
+                error_message="below threshold after token sizing cap",
+                live_balance_raw=live_balance_raw,
+                sell_amount=str(sell_amount),
+                usd_value=str(selected_sell.selected_sell_usd_value),
+            )
 
         try:
             quote_result = await self.price_provider.quote(
@@ -813,9 +900,9 @@ class AuctionKicker:
             sell_amount_str=str(sell_amount),
             starting_price_str=str(starting_price_raw),
             minimum_price_str=str(minimum_price_raw),
-            usd_value_str=str(live_usd_value),
+            usd_value_str=str(selected_sell.selected_sell_usd_value),
             live_balance_raw=live_balance_raw,
-            normalized_balance=normalized_balance,
+            normalized_balance=selected_sell.selected_sell_normalized,
             quote_amount_str=str(amount_out_normalized),
             quote_response_json=quote_response_json,
             start_price_buffer_bps=profile.start_price_buffer_bps,

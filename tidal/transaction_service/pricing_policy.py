@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import yaml
@@ -37,6 +38,14 @@ class AuctionPricingPolicy:
         return self.profiles[profile_name]
 
 
+@dataclass(frozen=True, slots=True)
+class TokenSizingPolicy:
+    token_overrides: dict[str, Decimal]
+
+    def resolve(self, token_address: str) -> Decimal | None:
+        return self.token_overrides.get(normalize_address(token_address))
+
+
 def _coerce_bps(value: object, *, field_name: str, profile_name: str) -> int:
     try:
         output = int(value)
@@ -44,6 +53,16 @@ def _coerce_bps(value: object, *, field_name: str, profile_name: str) -> int:
         raise ValueError(f"{profile_name}.{field_name} must be an integer") from exc
     if output < 0:
         raise ValueError(f"{profile_name}.{field_name} must be non-negative")
+    return output
+
+
+def _coerce_positive_decimal(value: object, *, field_name: str, scope_name: str) -> Decimal:
+    try:
+        output = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"{scope_name}.{field_name} must be a number") from exc
+    if output <= 0:
+        raise ValueError(f"{scope_name}.{field_name} must be greater than zero")
     return output
 
 
@@ -116,3 +135,22 @@ def load_auction_pricing_policy(policy_path: Path | None = None) -> AuctionPrici
         profiles=profiles,
         auction_profile_overrides=overrides,
     )
+
+
+def load_token_sizing_policy(policy_path: Path | None = None) -> TokenSizingPolicy:
+    resolved_path = policy_path or (Path.cwd() / _DEFAULT_POLICY_PATH)
+    raw = _load_raw_policy(resolved_path)
+
+    raw_limits = raw.get("usd_kick_limit") or {}
+    if not isinstance(raw_limits, dict):
+        raise ValueError("usd_kick_limit must be a mapping")
+
+    token_overrides: dict[str, Decimal] = {}
+    for token_address, raw_limit in raw_limits.items():
+        token_overrides[normalize_address(str(token_address))] = _coerce_positive_decimal(
+            raw_limit,
+            field_name="value",
+            scope_name=f"usd_kick_limit[{token_address}]",
+        )
+
+    return TokenSizingPolicy(token_overrides=token_overrides)

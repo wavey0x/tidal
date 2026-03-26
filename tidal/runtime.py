@@ -41,7 +41,7 @@ from tidal.scanner.reward_token_resolver import RewardTokenResolver
 from tidal.scanner.service import ScannerService
 from tidal.scanner.token_metadata import TokenMetadataService
 from tidal.transaction_service.signer import TransactionSigner
-from tidal.transaction_service.pricing_policy import load_auction_pricing_policy
+from tidal.transaction_service.pricing_policy import load_auction_pricing_policy, load_token_sizing_policy
 
 
 def build_scanner_service(settings: Settings, session) -> ScannerService:
@@ -244,6 +244,7 @@ def build_txn_service(
         multicall_auction_batch_calls=settings.multicall_auction_batch_calls,
     )
     pricing_policy = load_auction_pricing_policy()
+    token_sizing_policy = load_token_sizing_policy()
 
     price_provider = _TPA(
         chain_id=settings.chain_id,
@@ -272,6 +273,7 @@ def build_txn_service(
         erc20_reader=erc20_reader,
         auction_state_reader=auction_state_reader,
         pricing_policy=pricing_policy,
+        token_sizing_policy=token_sizing_policy,
     )
 
     lock_path = settings.resolved_db_path.parent / "txn_daemon.lock"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,11 +11,13 @@ from eth_utils import keccak
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from tidal.normalizers import normalize_address
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
 import json
 
 from tidal.pricing.token_price_agg import QuoteResult
+from tidal.transaction_service.pricing_policy import TokenSizingPolicy
 from tidal.transaction_service.kicker import AuctionKicker, _DEFAULT_PRIORITY_FEE_GWEI
 from tidal.transaction_service.types import KickCandidate, KickResult, PreparedKick, PreparedSweepAndSettle
 
@@ -1202,6 +1205,105 @@ async def test_prepare_kick_success(session):
 
 
 @pytest.mark.asyncio
+async def test_prepare_kick_applies_token_usd_cap(session):
+    web3_client = MagicMock()
+    price_provider = AsyncMock()
+    price_provider.quote = AsyncMock(
+        return_value=QuoteResult(
+            amount_out_raw=1_000_000_000,
+            token_out_decimals=6,
+            provider_statuses={"curve": "ok"},
+            provider_amounts={"curve": 1_000_000_000},
+        )
+    )
+    token_sizing_policy = TokenSizingPolicy(
+        token_overrides={
+            normalize_address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): Decimal("1000")
+        }
+    )
+
+    with patch("tidal.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(
+            session,
+            web3_client=web3_client,
+            price_provider=price_provider,
+            token_sizing_policy=token_sizing_policy,
+        )
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, PreparedKick)
+    assert result.sell_amount == 400 * 10**18
+    assert result.sell_amount_str == str(400 * 10**18)
+    assert result.normalized_balance == "400"
+    assert result.usd_value_str == "1000.0"
+    price_provider.quote.assert_called_once_with(
+        token_in=candidate.token_address,
+        token_out=candidate.want_address,
+        amount_in=str(400 * 10**18),
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_keeps_full_balance_when_token_is_uncapped(session):
+    web3_client = MagicMock()
+    token_sizing_policy = TokenSizingPolicy(token_overrides={})
+
+    with patch("tidal.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(
+            session,
+            web3_client=web3_client,
+            token_sizing_policy=token_sizing_policy,
+        )
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, PreparedKick)
+    assert result.sell_amount == 10**21
+    assert result.normalized_balance == "1000"
+    assert result.usd_value_str == "2500.0"
+
+
+@pytest.mark.asyncio
+async def test_prepare_kick_skips_when_cap_puts_selected_amount_below_threshold(session):
+    web3_client = MagicMock()
+    price_provider = AsyncMock()
+    price_provider.quote = AsyncMock()
+    token_sizing_policy = TokenSizingPolicy(
+        token_overrides={
+            normalize_address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): Decimal("50")
+        }
+    )
+
+    with patch("tidal.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(
+            session,
+            web3_client=web3_client,
+            price_provider=price_provider,
+            token_sizing_policy=token_sizing_policy,
+        )
+        candidate = _make_candidate()
+        result = await kicker.prepare_kick(candidate, "run-1")
+
+    assert isinstance(result, KickResult)
+    assert result.status == "SKIP"
+    assert result.error_message == "below threshold after token sizing cap"
+    price_provider.quote.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_prepare_kick_below_threshold(session):
     """prepare_kick returns KickResult(SKIP) when below threshold."""
     web3_client = MagicMock()
@@ -1898,6 +2000,68 @@ async def test_confirmed_kick_persists_audit_columns(session):
     assert row["want_address"] == "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
     assert row["want_symbol"] == "USDC"
     assert row["normalized_balance"] is not None
+
+
+@pytest.mark.asyncio
+async def test_confirmed_kick_persists_selected_amount_when_token_cap_applies(session):
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_capped")
+    web3_client.get_transaction_receipt = AsyncMock(return_value={
+        "status": 1,
+        "gasUsed": 180000,
+        "effectiveGasPrice": int(12 * 1e9),
+        "blockNumber": 12346,
+    })
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    price_provider = AsyncMock()
+    price_provider.quote = AsyncMock(
+        return_value=QuoteResult(
+            amount_out_raw=1_000_000_000,
+            token_out_decimals=6,
+            provider_statuses={"curve": "ok"},
+            provider_amounts={"curve": 1_000_000_000},
+        )
+    )
+    token_sizing_policy = TokenSizingPolicy(
+        token_overrides={
+            normalize_address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"): Decimal("1000")
+        }
+    )
+
+    with patch("tidal.transaction_service.kicker.ERC20Reader") as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(
+            session,
+            web3_client=web3_client,
+            signer=signer,
+            price_provider=price_provider,
+            token_sizing_policy=token_sizing_policy,
+        )
+        candidate = _make_candidate()
+        result = await kicker.kick(candidate, "run-capped")
+
+    assert result.status == "CONFIRMED"
+    price_provider.quote.assert_called_once_with(
+        token_in=candidate.token_address,
+        token_out=candidate.want_address,
+        amount_in=str(400 * 10**18),
+    )
+
+    rows = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sell_amount"] == str(400 * 10**18)
+    assert row["normalized_balance"] == "400"
+    assert row["usd_value"] == "1000.0"
 
 
 @pytest.mark.asyncio

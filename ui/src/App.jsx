@@ -1536,6 +1536,10 @@ export default function App() {
             };
           })
           .filter((balance) => {
+            const normalizedBalance = parseBig(balance.normalizedBalance);
+            if (normalizedBalance && normalizedBalance.eq(0)) {
+              return false;
+            }
             if (!balance.usdValue) {
               return true;
             }

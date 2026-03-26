@@ -286,6 +286,40 @@ async def test_live_skip_below_threshold_not_counted(session):
 
 
 @pytest.mark.asyncio
+async def test_live_confirm_declined_continues_to_next_candidate(session):
+    """Declining one candidate should not stop later candidates in non-batch mode."""
+    _seed_candidate(session, strategy_address="0xstrategy1", token_address="0xtoken1", auction_address="0xauction1")
+    _seed_candidate(session, strategy_address="0xstrategy2", token_address="0xtoken2", auction_address="0xauction2")
+
+    kicker = MagicMock()
+    kicker.prepare_kick = AsyncMock(side_effect=lambda c, run_id, inspection=None: _make_prepared_kick(c))
+    kicker.execute_single = AsyncMock(side_effect=[
+        KickResult(
+            kick_tx_id=1,
+            status=KickStatus.USER_SKIPPED,
+            error_message="user declined confirmation",
+        ),
+        KickResult(
+            kick_tx_id=2,
+            status=KickStatus.CONFIRMED,
+            tx_hash="0xdef",
+            gas_used=180000,
+            block_number=12346,
+        ),
+    ])
+
+    service = _build_txn_service(session, kicker=kicker)
+    result = await service.run_once(live=True, batch=False)
+
+    assert result.status == "SUCCESS"
+    assert result.candidates_found == 2
+    assert result.kicks_attempted == 1
+    assert result.kicks_succeeded == 1
+    assert result.kicks_failed == 0
+    assert kicker.execute_single.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_submitted_blocks_resend(session):
     """A SUBMITTED kick_txs row should block re-sending for same pair."""
     _seed_candidate(session)

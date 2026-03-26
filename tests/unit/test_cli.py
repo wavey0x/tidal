@@ -72,8 +72,36 @@ def test_echo_txn_text_summary_for_aborted_confirm(capsys):
     )
 
     output = capsys.readouterr().out
-    assert "Aborted. No transaction sent." in output
+    assert "Skipped by operator. No transaction sent." in output
     assert "Run ID:       run-123" in output
     assert "Type:         fee-burner" in output
     assert "Candidates:   1" in output
     assert "Attempted:    0" in output
+    assert "Skipped:      1" in output
+
+
+def test_echo_txn_text_summary_for_mixed_confirm_and_skip(capsys):
+    result = SimpleNamespace(
+        run_id="run-456",
+        candidates_found=2,
+        kicks_attempted=1,
+        kicks_succeeded=1,
+        kicks_failed=0,
+        failure_summary=None,
+    )
+
+    _echo_txn_text_summary(
+        result=result,
+        live=True,
+        source_type="strategy",
+        run_rows=[
+            {"status": "USER_SKIPPED", "tx_hash": None},
+            {"status": "CONFIRMED", "tx_hash": "0xabc"},
+        ],
+        verbose=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Confirmed." in output
+    assert "Skipped:      1" in output
+    assert "Aborted. No transaction sent." not in output

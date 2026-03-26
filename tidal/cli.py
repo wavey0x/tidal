@@ -207,10 +207,11 @@ def _echo_txn_text_summary(
 ) -> None:
     statuses = {str(row["status"]) for row in run_rows}
     tx_hashes = [str(row["tx_hash"]) for row in run_rows if row.get("tx_hash")]
+    skipped_count = sum(1 for row in run_rows if str(row.get("status")) == "USER_SKIPPED")
     type_label = _display_source_type_filter(source_type)
 
-    if "USER_SKIPPED" in statuses:
-        typer.echo("Aborted. No transaction sent.")
+    if skipped_count and skipped_count == len(run_rows):
+        typer.echo("Skipped by operator. No transaction sent.")
     elif result.candidates_found == 0:
         typer.echo("No eligible candidates.")
     elif not live:
@@ -237,6 +238,8 @@ def _echo_txn_text_summary(
         typer.echo(f"Attempted:    {result.kicks_attempted}")
         typer.echo(f"Succeeded:    {result.kicks_succeeded}")
         typer.echo(f"Failed:       {result.kicks_failed}")
+        if skipped_count:
+            typer.echo(f"Skipped:      {skipped_count}")
     else:
         typer.echo(f"Would kick:   {result.kicks_attempted}")
 

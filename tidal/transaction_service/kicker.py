@@ -368,6 +368,7 @@ class AuctionKicker:
         usd_value: str | None = None,
         tx_hash: str | None = None,
         quote_amount: str | None = None,
+        quote_request_url: str | None = None,
         quote_response_json: str | None = None,
         start_price_buffer_bps: int | None = None,
         min_price_buffer_bps: int | None = None,
@@ -407,6 +408,7 @@ class AuctionKicker:
             row["tx_hash"] = tx_hash
         if quote_amount is not None:
             row["quote_amount"] = quote_amount
+        del quote_request_url
         if quote_response_json is not None:
             row["quote_response_json"] = quote_response_json
         if start_price_buffer_bps is not None:
@@ -439,6 +441,7 @@ class AuctionKicker:
         minimum_price: str | None = None,
         usd_value: str | None = None,
         quote_amount: str | None = None,
+        quote_request_url: str | None = None,
         quote_response_json: str | None = None,
         start_price_buffer_bps: int | None = None,
         min_price_buffer_bps: int | None = None,
@@ -461,6 +464,7 @@ class AuctionKicker:
             minimum_price=minimum_price,
             usd_value=usd_value,
             quote_amount=quote_amount,
+            quote_request_url=quote_request_url,
             quote_response_json=quote_response_json,
             start_price_buffer_bps=start_price_buffer_bps,
             min_price_buffer_bps=min_price_buffer_bps,
@@ -490,6 +494,7 @@ class AuctionKicker:
             "minimum_price": pk.minimum_price_str,
             "usd_value": pk.usd_value_str,
             "quote_amount": pk.quote_amount_str,
+            "quote_request_url": pk.quote_request_url,
             "quote_response_json": pk.quote_response_json,
             "start_price_buffer_bps": pk.start_price_buffer_bps,
             "min_price_buffer_bps": pk.min_price_buffer_bps,
@@ -904,6 +909,7 @@ class AuctionKicker:
             live_balance_raw=live_balance_raw,
             normalized_balance=selected_sell.selected_sell_normalized,
             quote_amount_str=str(amount_out_normalized),
+            quote_request_url=quote_result.request_url,
             quote_response_json=quote_response_json,
             start_price_buffer_bps=profile.start_price_buffer_bps,
             min_price_buffer_bps=profile.min_price_buffer_bps,
@@ -1016,9 +1022,9 @@ class AuctionKicker:
                         "sell_amount": pk.normalized_balance,
                         "usd_value": pk.usd_value_str,
                         "starting_price": pk.starting_price_str,
-                        "starting_price_display": f"{pk.starting_price_raw:,} {want_sym} (incl. {buffer_pct:.0f}% buffer)",
+                        "starting_price_display": f"{pk.starting_price_raw:,} {want_sym} (+{buffer_pct:.0f}% buffer)",
                         "minimum_price": pk.minimum_price_str,
-                        "minimum_price_display": f"{pk.minimum_price_raw:,} {want_sym} (minus {min_buffer_pct:.0f}% buffer)",
+                        "minimum_price_display": f"{pk.minimum_price_raw:,} {want_sym} (-{min_buffer_pct:.0f}% buffer)",
                         "sell_price_usd": pk.candidate.price_usd,
                         "want_address": pk.candidate.want_address,
                         "want_symbol": pk.candidate.want_symbol,
@@ -1029,6 +1035,7 @@ class AuctionKicker:
                         "pricing_profile_name": pk.pricing_profile_name,
                         "settle_token": pk.settle_token,
                         "quote_amount": pk.quote_amount_str,
+                        "quote_request_url": pk.quote_request_url,
                     }
                 )
 

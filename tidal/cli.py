@@ -297,12 +297,12 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
                 try:
                     want_price = Decimal(str(want_price_usd))
                     quote_value_usd = quote_amount * want_price
-                    quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym} (~${float(quote_value_usd):,.2f} at cached {want_sym} price)"
+                    quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym} (~${float(quote_value_usd):,.2f})"
                     if usd_value > 0 and quote_value_usd > 0:
                         mismatch_ratio = abs(usd_value - quote_value_usd) / usd_value
                         if mismatch_ratio >= Decimal("0.20"):
                             divergence_line = (
-                                f"  Warning:     cached sell value and quote value differ by {float(mismatch_ratio * 100):,.1f}%"
+                                f"⚠️  Warning: sell value and quote value differ by {float(mismatch_ratio * 100):,.1f}%"
                             )
                 except (InvalidOperation, ValueError, TypeError):
                     quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym}"
@@ -318,26 +318,33 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
                     f"  Rate:        {float(quote_rate):,.4f} quoted | {float(start_rate):,.4f} start | "
                     f"{float(min_rate):,.4f} floor {want_sym}/{token_sym}"
                 )
+            quote_api_line = None
+            quote_request_url = k.get("quote_request_url")
+            if quote_request_url:
+                quote_api_line = f"  Quote API:   {quote_request_url}"
             precision_line = None
             if quote_amount > 0 and Decimal(starting_price) > quote_amount * 2:
                 precision_line = f"               \u21b3 ceiled lot based on {quote_amount:.4f} quote"
 
-            content = [
+            content = []
+            if divergence_line:
+                content.extend([divergence_line, ""])
+            content.extend([
                 "Kick (1 of 1)",
                 f"  Source:      {source_name} ({short_address(k['source'])})",
                 f"  Auction:     {k['auction']}",
-                f"  Sell amount: {amount_str} {token_sym} (cached ~${float(usd_value):,.2f})",
+                f"  Sell amount: {amount_str} {token_sym} (~${float(usd_value):,.2f})",
                 quote_value_line,
                 f"  Start quote: {k['starting_price_display']}",
                 f"  Min price:   {k['minimum_price_display']}",
                 f"  Profile:     {profile_name} | decay {step_decay_str}",
-            ]
+            ])
             if rate_line:
                 content.append(rate_line)
             if precision_line:
                 content.append(precision_line)
-            if divergence_line:
-                content.append(divergence_line)
+            if quote_api_line:
+                content.append(quote_api_line)
             content.extend([
                 f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
                 f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",

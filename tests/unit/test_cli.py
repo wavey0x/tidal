@@ -17,9 +17,9 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
                 "sell_amount": "1000",
                 "usd_value": "2500",
                 "starting_price": "2750",
-                "starting_price_display": "2,750 USDC (incl. 10% buffer)",
+                "starting_price_display": "2,750 USDC (+10% buffer)",
                 "minimum_price": "2375",
-                "minimum_price_display": "2,375 USDC (minus 5% buffer)",
+                "minimum_price_display": "2,375 USDC (-5% buffer)",
                 "want_symbol": "USDC",
                 "want_price_usd": "1",
                 "buffer_bps": 1000,
@@ -27,6 +27,7 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
                 "step_decay_rate_bps": 1,
                 "pricing_profile_name": "stable",
                 "quote_amount": "2500",
+                "quote_request_url": "https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true",
             }
         ],
         "batch_size": 1,
@@ -45,14 +46,15 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
     output = capsys.readouterr().out
     assert result is True
     assert "1 candidate ready for submission" in output
-    assert "Quote out:   2,500.00 USDC (~$2,500.00 at cached USDC price)" in output
+    assert "Quote out:   2,500.00 USDC (~$2,500.00)" in output
     assert "Rate:        2.5000 quoted | 2.7500 start | 2.3750 floor USDC/CRV" in output
+    assert "Quote API:   https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true" in output
     assert "Profile:     stable | decay 0.01%" in output
     assert "Submitting transaction..." in output
     confirm_mock.assert_called_once_with("Send this transaction?", default=False)
 
 
-def test_make_confirm_fn_warns_on_cached_sell_vs_quote_mismatch(capsys):
+def test_make_confirm_fn_warns_on_sell_vs_quote_mismatch(capsys):
     confirm_fn = _make_confirm_fn()
     summary = {
         "kicks": [
@@ -64,9 +66,9 @@ def test_make_confirm_fn_warns_on_cached_sell_vs_quote_mismatch(capsys):
                 "sell_amount": "3473.41",
                 "usd_value": "10000",
                 "starting_price": "1725",
-                "starting_price_display": "1,725 crvUSD (incl. 10% buffer)",
+                "starting_price_display": "1,725 crvUSD (+10% buffer)",
                 "minimum_price": "1489",
-                "minimum_price_display": "1,489 crvUSD (minus 5% buffer)",
+                "minimum_price_display": "1,489 crvUSD (-5% buffer)",
                 "want_symbol": "crvUSD",
                 "want_price_usd": "1",
                 "buffer_bps": 1000,
@@ -74,6 +76,7 @@ def test_make_confirm_fn_warns_on_cached_sell_vs_quote_mismatch(capsys):
                 "step_decay_rate_bps": 50,
                 "pricing_profile_name": "volatile",
                 "quote_amount": "1568",
+                "quote_request_url": "https://prices.example.com/v1/quote?token_in=0xwfrax&token_out=0xcrvusd&amount_in=3473410000000000000000&chain_id=1&use_underlying=true",
             }
         ],
         "batch_size": 1,
@@ -90,9 +93,11 @@ def test_make_confirm_fn_warns_on_cached_sell_vs_quote_mismatch(capsys):
         _ = confirm_fn(summary)
 
     output = capsys.readouterr().out
-    assert "Sell amount: 3,473.41 WFRAX (cached ~$10,000.00)" in output
-    assert "Quote out:   1,568.00 crvUSD (~$1,568.00 at cached crvUSD price)" in output
-    assert "cached sell value and quote value differ by 84.3%" in output
+    assert "Sell amount: 3,473.41 WFRAX (~$10,000.00)" in output
+    assert "Quote out:   1,568.00 crvUSD (~$1,568.00)" in output
+    assert "⚠️  Warning: sell value and quote value differ by 84.3%" in output
+    assert "Quote API:   https://prices.example.com/v1/quote?token_in=0xwfrax&token_out=0xcrvusd&amount_in=3473410000000000000000&chain_id=1&use_underlying=true" in output
+    assert output.index("⚠️  Warning:") < output.index("Kick (1 of 1)")
 
 
 def test_resolve_txn_output_mode_defaults_to_text_for_confirm():

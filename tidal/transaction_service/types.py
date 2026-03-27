@@ -83,6 +83,7 @@ class PreparedKick:
     step_decay_rate_bps: int
     pricing_profile_name: str
     settle_token: str | None = None
+    quote_request_url: str | None = None
     quote_response_json: str | None = None
 
 

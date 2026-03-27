@@ -1178,14 +1178,16 @@ tbody tr:hover td {
 }
 
 .fee-burner-balance-total {
-  display: flex;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: var(--token-icon-size) minmax(0, 1fr) 86px;
   align-items: baseline;
-  gap: 6px;
+  column-gap: 8px;
   margin-top: 8px;
+  width: 100%;
 }
 
 .fee-burner-balance-total-label {
+  grid-column: 2;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1193,6 +1195,9 @@ tbody tr:hover td {
 }
 
 .fee-burner-balance-total-value {
+  grid-column: 3;
+  justify-self: end;
+  text-align: right;
   color: var(--text-primary);
 }
 

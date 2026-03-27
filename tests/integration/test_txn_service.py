@@ -141,6 +141,10 @@ def _make_prepared_kick(candidate: KickCandidate) -> PreparedKick:
     )
 
 
+def _evm_address(char: str) -> str:
+    return f"0x{char * 40}"
+
+
 def _build_txn_service(session, *, kicker=None, lock_path=None):
     txn_run_repo = TxnRunRepository(session)
     kick_tx_repo = KickTxRepository(session)
@@ -489,6 +493,153 @@ async def test_dry_run_filters_to_fee_burner_candidates(session):
     assert kick_txs[0]["source_type"] == "fee_burner"
     assert kick_txs[0]["source_address"] == "0xburner1"
     assert kick_txs[0]["strategy_address"] is None
+
+
+@pytest.mark.asyncio
+async def test_dry_run_filters_to_specific_source_address(session):
+    source_a = _evm_address("1")
+    source_b = _evm_address("2")
+    auction_a = _evm_address("a")
+    auction_b = _evm_address("b")
+
+    _seed_candidate(
+        session,
+        strategy_address=source_a,
+        token_address="0xtoken1",
+        auction_address=auction_a,
+        want_address="0xwant1",
+    )
+    _seed_candidate(
+        session,
+        strategy_address=source_b,
+        token_address="0xtoken2",
+        auction_address=auction_b,
+        want_address="0xwant2",
+    )
+
+    service = _build_txn_service(session)
+    result = await service.run_once(live=False, source_address=source_a)
+
+    assert result.status == "DRY_RUN"
+    assert result.candidates_found == 1
+    assert result.kicks_attempted == 1
+
+    kick_txs = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(kick_txs) == 1
+    assert kick_txs[0]["source_address"] == source_a
+    assert kick_txs[0]["auction_address"] == auction_a
+
+
+@pytest.mark.asyncio
+async def test_dry_run_filters_to_specific_auction_before_dedupe(session):
+    burner_address = _evm_address("3")
+    target_auction = _evm_address("c")
+    other_auction = _evm_address("d")
+
+    _seed_fee_burner_candidate(
+        session,
+        burner_address=burner_address,
+        token_address="0xtokenfb1",
+        auction_address=target_auction,
+        want_address="0xwantfb",
+        price_usd="10.0",
+        normalized_balance="50",
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    session.execute(insert(models.tokens).values(
+        address="0xtokenfb2",
+        chain_id=1,
+        decimals=18,
+        is_core_reward=0,
+        price_usd="2.0",
+        price_status="SUCCESS",
+        price_fetched_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    ))
+    session.execute(insert(models.fee_burner_token_balances_latest).values(
+        fee_burner_address=burner_address,
+        token_address="0xtokenfb2",
+        raw_balance="200000000000000000000",
+        normalized_balance="200",
+        block_number=101,
+        scanned_at=now,
+    ))
+    _seed_fee_burner_candidate(
+        session,
+        burner_address=_evm_address("4"),
+        token_address="0xtokenfb3",
+        auction_address=other_auction,
+        want_address="0xwantfc",
+        price_usd="5.0",
+        normalized_balance="30",
+    )
+
+    service = _build_txn_service(session)
+    result = await service.run_once(live=False, auction_address=target_auction)
+
+    assert result.status == "DRY_RUN"
+    assert result.eligible_candidates_found == 2
+    assert result.candidates_found == 1
+    assert result.deferred_same_auction_count == 1
+    assert result.kicks_attempted == 1
+
+    kick_txs = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(kick_txs) == 1
+    assert kick_txs[0]["auction_address"] == target_auction
+    assert kick_txs[0]["token_address"] == "0xtokenfb1"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_combines_type_and_address_filters(session):
+    shared_source = _evm_address("5")
+    _seed_candidate(
+        session,
+        strategy_address=shared_source,
+        token_address="0xtoken1",
+        auction_address=_evm_address("e"),
+        want_address="0xwant1",
+    )
+    _seed_fee_burner_candidate(
+        session,
+        burner_address=shared_source,
+        token_address="0xtokenfb",
+        auction_address=_evm_address("f"),
+        want_address="0xwantfb",
+    )
+
+    service = _build_txn_service(session)
+    result = await service.run_once(live=False, source_type="fee_burner", source_address=shared_source)
+
+    assert result.status == "DRY_RUN"
+    assert result.candidates_found == 1
+    assert result.kicks_attempted == 1
+
+    kick_txs = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(kick_txs) == 1
+    assert kick_txs[0]["source_type"] == "fee_burner"
+    assert kick_txs[0]["source_address"] == shared_source
+
+
+@pytest.mark.asyncio
+async def test_dry_run_target_filter_with_no_match_returns_zero_candidates(session):
+    _seed_candidate(
+        session,
+        strategy_address=_evm_address("6"),
+        token_address="0xtoken1",
+        auction_address=_evm_address("7"),
+        want_address="0xwant1",
+    )
+
+    service = _build_txn_service(session)
+    result = await service.run_once(live=False, source_address=_evm_address("8"))
+
+    assert result.status == "DRY_RUN"
+    assert result.candidates_found == 0
+    assert result.kicks_attempted == 0
+
+    kick_txs = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(kick_txs) == 0
 
 
 @pytest.mark.asyncio

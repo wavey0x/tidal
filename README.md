@@ -86,12 +86,15 @@ Examples:
 - `tidal txn` — dry-run evaluation of kick candidates
 - `tidal txn --live` — evaluate and send individual kick() transactions per candidate
 - `tidal txn --confirm` — interactive confirmation before each kick (implies `--live`)
+- `tidal txn --live --source 0x...` — target a specific source address
+- `tidal txn --live --auction 0x...` — target a specific auction address
 - `tidal txn --live --batch` — send a single batchKick() transaction (all-or-nothing)
 - `tidal txn daemon --live` — run the transaction service continuously (uses batchKick by default)
 - `tidal txn daemon --live --no-batch` — daemon with individual kick() per candidate
 - `tidal healthcheck`
 
 Shortlist behavior: only the highest-USD token per auction is kickable in a single evaluation cycle. Additional above-threshold tokens on the same auction stay deferred until a later run, because the auction can only carry one active lot at a time.
+Targeted `--source` and `--auction` filters are applied before that per-auction collapse.
 
 ## UI Dashboard
 

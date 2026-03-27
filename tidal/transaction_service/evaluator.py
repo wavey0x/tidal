@@ -50,12 +50,16 @@ def shortlist_candidates(
     usd_threshold: float,
     max_data_age_seconds: int,
     source_type: SourceType | None = None,
+    source_address: str | None = None,
+    auction_address: str | None = None,
 ) -> list[KickCandidate]:
     return build_shortlist(
         session,
         usd_threshold=usd_threshold,
         max_data_age_seconds=max_data_age_seconds,
         source_type=source_type,
+        source_address=source_address,
+        auction_address=auction_address,
     ).selected_candidates
 
 
@@ -65,6 +69,8 @@ def build_shortlist(
     usd_threshold: float,
     max_data_age_seconds: int,
     source_type: SourceType | None = None,
+    source_address: str | None = None,
+    auction_address: str | None = None,
 ) -> ShortlistResult:
     """Query SQLite for source-token pairs above threshold with fresh data."""
 
@@ -207,6 +213,10 @@ def build_shortlist(
 
     if source_type is not None:
         candidates = [candidate for candidate in candidates if candidate.source_type == source_type]
+    if source_address is not None:
+        candidates = [candidate for candidate in candidates if candidate.source_address.lower() == source_address]
+    if auction_address is not None:
+        candidates = [candidate for candidate in candidates if candidate.auction_address.lower() == auction_address]
 
     selected_candidates = _best_candidate_per_auction(candidates)
     return ShortlistResult(

@@ -114,6 +114,8 @@ def test_echo_txn_text_summary_for_aborted_confirm(capsys):
         result=result,
         live=True,
         source_type="fee_burner",
+        source_address=None,
+        auction_address=None,
         run_rows=[{"status": "USER_SKIPPED", "tx_hash": None}],
         verbose=False,
     )
@@ -141,6 +143,8 @@ def test_echo_txn_text_summary_for_mixed_confirm_and_skip(capsys):
         result=result,
         live=True,
         source_type="strategy",
+        source_address=None,
+        auction_address=None,
         run_rows=[
             {"status": "USER_SKIPPED", "tx_hash": None},
             {"status": "CONFIRMED", "tx_hash": "0xabc"},
@@ -170,6 +174,8 @@ def test_echo_txn_text_summary_reports_deferred_same_auction_tokens(capsys):
         result=result,
         live=True,
         source_type="fee_burner",
+        source_address=None,
+        auction_address=None,
         run_rows=[{"status": "CONFIRMED", "tx_hash": "0xabc"}],
         verbose=False,
     )
@@ -179,3 +185,28 @@ def test_echo_txn_text_summary_reports_deferred_same_auction_tokens(capsys):
     assert "Candidates:   1" in output
     assert "Deferred:     3" in output
     assert "only one lot per auction can be kicked at a time" in output
+
+
+def test_echo_txn_text_summary_reports_target_filters(capsys):
+    result = SimpleNamespace(
+        run_id="run-999",
+        candidates_found=1,
+        kicks_attempted=1,
+        kicks_succeeded=1,
+        kicks_failed=0,
+        failure_summary=None,
+    )
+
+    _echo_txn_text_summary(
+        result=result,
+        live=True,
+        source_type="strategy",
+        source_address="0x1111111111111111111111111111111111111111",
+        auction_address="0x2222222222222222222222222222222222222222",
+        run_rows=[{"status": "CONFIRMED", "tx_hash": "0xabc"}],
+        verbose=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Source:       0x1111111111111111111111111111111111111111" in output
+    assert "Auction:      0x2222222222222222222222222222222222222222" in output

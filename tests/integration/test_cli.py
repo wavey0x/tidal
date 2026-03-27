@@ -38,3 +38,19 @@ def test_txn_confirm_rejects_json_output() -> None:
 
     assert result.exit_code != 0
     assert "interactive confirmation requires --output text" in result.output
+
+
+def test_txn_rejects_invalid_source_address() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["txn", "--source", "not-an-address"])
+
+    assert result.exit_code != 0
+    assert "invalid address" in result.output
+
+
+def test_txn_rejects_invalid_auction_address() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["txn", "--auction", "not-an-address"])
+
+    assert result.exit_code != 0
+    assert "invalid address" in result.output

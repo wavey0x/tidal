@@ -13,11 +13,12 @@ import typer
 from sqlalchemy import select
 
 from tidal.config import load_settings
+from tidal.errors import AddressNormalizationError
 from tidal.errors import ConfigurationError
 from tidal.health import run_healthcheck
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
-from tidal.normalizers import short_address
+from tidal.normalizers import normalize_address, short_address
 from tidal.persistence import models
 from tidal.persistence.db import Database
 from tidal.runtime import build_scanner_service, build_txn_service, build_web3_client
@@ -169,6 +170,16 @@ def _display_source_type_filter(source_type: SourceType | None) -> str:
     return source_type.replace("_", "-")
 
 
+def _normalize_address_filter(value: str | None, *, param_hint: str) -> str | None:
+    if value is None:
+        return None
+
+    try:
+        return normalize_address(value.strip())
+    except AddressNormalizationError as exc:
+        raise typer.BadParameter(str(exc), param_hint=param_hint) from exc
+
+
 def _resolve_txn_output_mode(
     *,
     requested: OutputMode | None,
@@ -184,9 +195,22 @@ def _resolve_txn_output_mode(
     return OutputMode.JSON
 
 
-def _txn_scope_label(source_type: SourceType | None) -> str:
+def _txn_scope_label(
+    source_type: SourceType | None,
+    *,
+    source_address: str | None = None,
+    auction_address: str | None = None,
+) -> str:
     source_label = _display_source_type_filter(source_type)
-    return f"{source_label} candidates" if source_label else "candidates"
+    scope = f"{source_label} candidates" if source_label else "candidates"
+    filters: list[str] = []
+    if source_address:
+        filters.append(f"source {short_address(source_address)}")
+    if auction_address:
+        filters.append(f"auction {short_address(auction_address)}")
+    if not filters:
+        return scope
+    return f"{scope} for {' and '.join(filters)}"
 
 
 def _load_run_rows(session, run_id: str) -> list[dict[str, object]]:
@@ -203,6 +227,8 @@ def _echo_txn_text_summary(
     result,
     live: bool,
     source_type: SourceType | None,
+    source_address: str | None,
+    auction_address: str | None,
     run_rows: list[dict[str, object]],
     verbose: bool,
 ) -> None:
@@ -236,6 +262,10 @@ def _echo_txn_text_summary(
     typer.echo(f"Run ID:       {result.run_id}")
     if type_label:
         typer.echo(f"Type:         {type_label}")
+    if source_address:
+        typer.echo(f"Source:       {source_address}")
+    if auction_address:
+        typer.echo(f"Auction:      {auction_address}")
     if eligible_candidates_found is not None and eligible_candidates_found != result.candidates_found:
         typer.echo(f"Eligible:     {eligible_candidates_found}")
     typer.echo(f"Candidates:   {result.candidates_found}")
@@ -399,6 +429,8 @@ def _run_txn_once(
     batch: bool,
     verbose: bool = False,
     source_type: SourceType | None = None,
+    source_address: str | None = None,
+    auction_address: str | None = None,
     output: OutputMode | None = None,
 ) -> None:
     """Execute a single transaction evaluation cycle."""
@@ -421,7 +453,9 @@ def _run_txn_once(
         raise typer.Exit(code=1) from exc
 
     if output_mode is OutputMode.TEXT:
-        typer.echo(f"Evaluating {_txn_scope_label(source_type)}...")
+        typer.echo(
+            f"Evaluating {_txn_scope_label(source_type, source_address=source_address, auction_address=auction_address)}..."
+        )
 
     confirm_fn = _make_confirm_fn() if confirm else None
 
@@ -445,13 +479,23 @@ def _run_txn_once(
             skip_base_fee_check=skip_base_fee_check,
             web3_client=web3_client,
         )
-        result = asyncio.run(txn_service.run_once(live=live, batch=batch, source_type=source_type))
+        result = asyncio.run(
+            txn_service.run_once(
+                live=live,
+                batch=batch,
+                source_type=source_type,
+                source_address=source_address,
+                auction_address=auction_address,
+            )
+        )
         if output_mode is OutputMode.TEXT:
             run_rows = _load_run_rows(session, result.run_id)
             _echo_txn_text_summary(
                 result=result,
                 live=live,
                 source_type=source_type,
+                source_address=source_address,
+                auction_address=auction_address,
                 run_rows=run_rows,
                 verbose=verbose,
             )
@@ -464,6 +508,8 @@ def txn(
     confirm: bool = typer.Option(default=False, help="Interactive confirmation before each kick (implies --live)"),
     batch: bool = typer.Option(default=False, help="Send a single batchKick() instead of individual kick() per candidate"),
     source_type: str | None = typer.Option(None, "--type", help="Filter candidates by source type: strategy or fee-burner"),
+    source_address: str | None = typer.Option(None, "--source", "--source-address", help="Filter candidates to a specific source address"),
+    auction_address: str | None = typer.Option(None, "--auction", "--auction-address", help="Filter candidates to a specific auction address"),
     config: Path | None = typer.Option(default=None, exists=True, file_okay=True, dir_okay=False),
     output: OutputMode | None = typer.Option(default=None, help="Output mode: text for operators, json for automation"),
     verbose: bool = typer.Option(default=False, help="Show per-candidate failure details and grouped summary"),
@@ -472,6 +518,8 @@ def txn(
     if ctx.invoked_subcommand is not None:
         return
     normalized_source_type = _normalize_source_type_filter(source_type)
+    normalized_source_address = _normalize_address_filter(source_address, param_hint="--source")
+    normalized_auction_address = _normalize_address_filter(auction_address, param_hint="--auction")
     _run_txn_once(
         live=live,
         confirm=confirm,
@@ -479,6 +527,8 @@ def txn(
         batch=batch,
         verbose=verbose,
         source_type=normalized_source_type,
+        source_address=normalized_source_address,
+        auction_address=normalized_auction_address,
         output=output,
     )
 
@@ -489,6 +539,8 @@ def txn_daemon(
     batch: bool = typer.Option(default=True, help="Use batchKick (default) or individual kick() per candidate"),
     interval_seconds: int | None = typer.Option(default=None, min=1),
     source_type: str | None = typer.Option(None, "--type", help="Filter candidates by source type: strategy or fee-burner"),
+    source_address: str | None = typer.Option(None, "--source", "--source-address", help="Filter candidates to a specific source address"),
+    auction_address: str | None = typer.Option(None, "--auction", "--auction-address", help="Filter candidates to a specific auction address"),
     config: Path | None = typer.Option(default=None, exists=True, file_okay=True, dir_okay=False),
     output: OutputMode | None = typer.Option(default=None, help="Output mode: text for operators, json for automation"),
     verbose: bool = typer.Option(default=False, help="Show per-candidate failure details and grouped summary"),
@@ -507,6 +559,8 @@ def txn_daemon(
         raise typer.Exit(code=1) from exc
 
     normalized_source_type = _normalize_source_type_filter(source_type)
+    normalized_source_address = _normalize_address_filter(source_address, param_hint="--source")
+    normalized_auction_address = _normalize_address_filter(auction_address, param_hint="--auction")
     sleep_seconds = interval_seconds or 1800
 
     async def _run() -> None:
@@ -530,13 +584,21 @@ def txn_daemon(
             db = Database(settings.database_url)
             with db.session() as session:
                 txn_service = build_txn_service(settings, session, web3_client=web3_client)
-                result = await txn_service.run_once(live=live, batch=batch, source_type=normalized_source_type)
+                result = await txn_service.run_once(
+                    live=live,
+                    batch=batch,
+                    source_type=normalized_source_type,
+                    source_address=normalized_source_address,
+                    auction_address=normalized_auction_address,
+                )
                 if output_mode is OutputMode.TEXT:
                     run_rows = _load_run_rows(session, result.run_id)
                     _echo_txn_text_summary(
                         result=result,
                         live=live,
                         source_type=normalized_source_type,
+                        source_address=normalized_source_address,
+                        auction_address=normalized_auction_address,
                         run_rows=run_rows,
                         verbose=verbose,
                     )

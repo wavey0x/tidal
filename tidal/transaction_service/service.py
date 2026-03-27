@@ -78,7 +78,15 @@ class TxnService:
         self.max_batch_kick_size = max_batch_kick_size
         self.batch_kick_delay_seconds = batch_kick_delay_seconds
 
-    async def run_once(self, *, live: bool, batch: bool = True, source_type: SourceType | None = None) -> TxnRunResult:
+    async def run_once(
+        self,
+        *,
+        live: bool,
+        batch: bool = True,
+        source_type: SourceType | None = None,
+        source_address: str | None = None,
+        auction_address: str | None = None,
+    ) -> TxnRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
 
@@ -97,7 +105,15 @@ class TxnService:
                 )
 
         try:
-            return await self._run(run_id=run_id, started_at=started_at, live=live, batch=batch, source_type=source_type)
+            return await self._run(
+                run_id=run_id,
+                started_at=started_at,
+                live=live,
+                batch=batch,
+                source_type=source_type,
+                source_address=source_address,
+                auction_address=auction_address,
+            )
         finally:
             if lock_file is not None:
                 self._release_lock(lock_file)
@@ -110,6 +126,8 @@ class TxnService:
         live: bool,
         batch: bool = True,
         source_type: SourceType | None = None,
+        source_address: str | None = None,
+        auction_address: str | None = None,
     ) -> TxnRunResult:
         # 1. INSERT txn_runs with status=RUNNING.
         self.txn_run_repository.create({
@@ -129,6 +147,8 @@ class TxnService:
             usd_threshold=self.usd_threshold,
             max_data_age_seconds=self.max_data_age_seconds,
             source_type=source_type,
+            source_address=source_address,
+            auction_address=auction_address,
         )
         candidates = shortlist.selected_candidates
 
@@ -137,6 +157,8 @@ class TxnService:
             run_id=run_id,
             live=live,
             source_type=source_type,
+            source_address=source_address,
+            auction_address=auction_address,
             candidates_shortlisted=len(candidates),
             candidates_eligible=len(shortlist.eligible_candidates),
             deferred_same_auction_count=shortlist.deferred_same_auction_count,
@@ -166,6 +188,8 @@ class TxnService:
                 "txn_candidates_ranked",
                 run_id=run_id,
                 source_type=source_type,
+                source_address=source_address,
+                auction_address=auction_address,
                 candidates=_candidate_order_log(candidates_to_prepare),
             )
 

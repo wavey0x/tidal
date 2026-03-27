@@ -2,190 +2,155 @@
 
 ## Goal
 
-Block kicks when the live quote is materially worse than a live spot-value estimate for the same sell size.
+If we add a slippage guard, keep it small.
 
-This should be enforced in the transaction service, not onchain.
+It should:
 
-## Config shape
+- be token-keyed, not profile-keyed
+- be opt-in per token
+- run after `usd_kick_limit` sizing
+- use the existing live quote call
+- avoid extra external API calls
 
-Put the config in `auction_pricing_policy.yaml`, inside each pricing profile.
+This is a follow-on guard, not a replacement for [`SIZING.md`](SIZING.md).
 
-Recommended shape:
+## Why The Previous Plan Was Wrong
+
+The earlier version was too complex for this codebase because it:
+
+- moved control back to pricing profiles
+- added two extra live `/v1/price` calls per guarded kick
+- added too much audit and logging machinery for a first cut
+
+That is not the right tradeoff.
+
+## Simple Direction
+
+If we do this at all, the guard should compare:
+
+- the live quote for the already-sized sell amount
+- against a cached spot-value estimate for that same size
+
+If the quote is too far below the cached estimate, skip the kick.
+
+## Config
+
+Keep using [`auction_pricing_policy.yaml`](auction_pricing_policy.yaml).
+
+Use one flat token map, similar to `usd_kick_limit`:
 
 ```yaml
-default_profile: volatile
-
-profiles:
-  volatile:
-    start_price_buffer_bps: 1000
-    min_price_buffer_bps: 500
-    step_decay_rate_bps: 50
-    max_price_impact_bps: 1500
-
-  stable:
-    start_price_buffer_bps: 100
-    min_price_buffer_bps: 50
-    step_decay_rate_bps: 1
-    max_price_impact_bps: 100
+max_quote_discount_bps:
+  "0x04ACaF8D2865c0714F79da09645C13FD2888977f": 1000
 ```
 
-Why this is the best fit:
+Meaning:
 
-- slippage tolerance is naturally profile-level, just like buffers and decay
-- we already classify `(auction, sell_token)` into a profile
-- no extra override map is needed
-- if a pair needs looser or tighter handling later, add a new profile instead of inventing pair-specific slippage config
+- for this token, block the kick if the quoted output is more than `1000` bps below the cached spot-implied output
+- if a token is not present, no slippage guard is applied
 
-Behavior:
+This stays token-keyed and opt-in.
 
-- omitted or `null` `max_price_impact_bps` means slippage blocking is disabled for that profile
-- manual `auctions` overrides keep working exactly as they do now
+## Data Inputs
 
-## Comparison method
+Use:
 
-Use a live quote and live spot prices from the same API family during `prepare_kick()`.
+- `selected_sell_raw` from the sizing flow
+- the existing live quote from `TokenPriceAggProvider.quote()`
+- cached scanner prices, not new live `/v1/price` calls
 
-Do not use the scanner-cached `candidate.price_usd` for enforcement.
+To make that work cleanly, the txn path needs both:
 
-Algorithm:
+- cached sell-token USD price
+- cached want-token USD price
 
-1. Resolve the pricing profile for `(auction, sell_token)`.
-2. Get the sell quote exactly as we do today.
-3. After the quote passes existing gating, fetch live USD spot prices for:
-   - `sell_token`
-   - `want_token`
-4. Compute the spot-implied output for the exact quoted sell size:
+The sell-token cached price already exists as `candidate.price_usd`.
 
-   `expected_out_at_spot = sell_amount_normalized * sell_token_usd / want_token_usd`
+For the want token, the simplest path is to add cached `want_price_usd` to `KickCandidate` during shortlist construction, rather than fetching another live price during `prepare_kick()`.
 
-5. Compute price impact:
+## Comparison
 
-   `price_impact_bps = max(0, (expected_out_at_spot - quoted_out) / expected_out_at_spot * 10_000)`
+After `usd_kick_limit` sizing has selected the final sell amount:
 
-6. If `price_impact_bps > max_price_impact_bps`, block the kick.
-7. If the quote is better than spot, treat impact as `0`.
+1. Convert `selected_sell_raw` to normalized sell amount.
+2. Compute cached spot-implied output:
 
-This is the cleanest implementation because it compares like-for-like:
+   `expected_out_at_cached_spot = selected_sell_normalized * sell_price_usd / want_price_usd`
 
-- exact sell size
-- exact token pair
-- live quote vs live spot
+3. Compute quoted output from the live quote result.
+4. Compute discount:
 
-## False-positive controls
+   `quote_discount_bps = max(0, (expected_out_at_cached_spot - quoted_out) / expected_out_at_cached_spot * 10_000)`
 
-To keep findings accurate and avoid noisy blocking:
+5. If `quote_discount_bps > max_quote_discount_bps[token]`, skip the kick.
 
-- Use live `/v1/price` results from `TokenPriceAggProvider`, not cached DB prices.
-- Fetch both spot prices during the same prepare cycle.
-- Fail open if either spot price is missing, zero, malformed, or the API call fails.
-- Keep the existing `require_curve_quote` gate ahead of the slippage check.
-- Compare against the quoted sell size, not a unit price.
-- Keep thresholds on profiles so we can create a dedicated profile for problematic pairs instead of sprinkling exceptions through the config.
+If the quote is better than cached spot, treat the discount as `0`.
 
-V1 should not try to infer provider quality beyond this.
+## Failure Mode
 
-If we later need even fewer false positives, the next clean extension is:
+Fail open.
 
-- only enforce when the price API exposes a narrow enough provider spread
-- otherwise log `slippage check skipped: low confidence`
+If any of these are missing or invalid:
 
-That should be a future refinement, not part of the first cut.
+- cached sell token price
+- cached want token price
+- quote amount
 
-## Enforcement behavior
+do not block the kick. Just skip the slippage check.
 
-Blocked kicks should be recorded as normal kick attempts with:
+That keeps this as a safety guard, not a new source of fragility.
 
-- `status = ERROR`
-- a very explicit `error_message`
+## Enforcement
 
-Recommended message format:
+Blocked kicks should be recorded as:
 
-`blocked by slippage guard: quote 12.34% below spot (1234 bps > 800 bps threshold)`
+- `status = SKIP`
+- explicit `error_message`
 
-This is better than a generic skip because:
+Example:
 
-- it is operationally obvious
-- it shows up clearly in existing log surfaces
-- it preserves the fact that the pair was considered but rejected
+`blocked by slippage guard: quote 12.34% below cached spot (1234 bps > 1000 bps threshold)`
 
-## Log detail
+`SKIP` is the correct behavior because this is expected market protection, not a system failure.
+
+## Persistence
 
 Do not add new DB columns in v1.
 
-Instead:
+If we want audit detail, the smallest acceptable option is:
 
 - keep the human-readable reason in `kick_txs.error_message`
-- attach a `slippageCheck` object inside `quote_response_json`
+- optionally attach a small `slippageCheck` object inside `quote_response_json`
 
-Recommended `slippageCheck` payload:
+Do not build a large audit schema for this.
 
-```json
-{
-  "evaluated": true,
-  "blocked": true,
-  "profile": "stable",
-  "thresholdBps": 100,
-  "priceImpactBps": 184,
-  "sellTokenPriceUsd": "0.9998",
-  "wantTokenPriceUsd": "1.0001",
-  "expectedOutAtSpot": "999.70",
-  "quotedOut": "981.30",
-  "reason": "quote_below_spot_threshold"
-}
-```
+## Code Changes
 
-Also add structured logger events:
+If implemented, the minimal touchpoints are:
 
-- `txn_slippage_check_passed`
-- `txn_slippage_check_skipped`
-- `txn_slippage_check_blocked`
-
-Each should include:
-
-- source
-- auction
-- sell token
-- want token
-- profile
-- threshold bps
-- computed impact bps
-- spot-implied output
-- quoted output
-- quote request URL when available
-
-## Code changes
-
-Minimal implementation surface:
-
-- `tidal/transaction_service/pricing_policy.py`
-  - add `max_price_impact_bps` to `AuctionPricingProfile`
-  - load and validate the new optional field
-- `tidal/pricing/token_price_agg.py`
-  - reuse `quote_usd()` for live sell/want spot prices
-- `tidal/transaction_service/kicker.py`
-  - add a helper to fetch sell/want spot prices concurrently
-  - add a helper to evaluate slippage and return structured audit data
-  - enforce the check after quote validation and before building `PreparedKick`
-  - persist the slippage audit object in `quote_response_json`
+- [`tidal/transaction_service/pricing_policy.py`](tidal/transaction_service/pricing_policy.py)
+  - load `max_quote_discount_bps` as a flat token map
+- [`tidal/transaction_service/evaluator.py`](tidal/transaction_service/evaluator.py)
+  - include cached `want_price_usd` in `KickCandidate`
+- [`tidal/transaction_service/types.py`](tidal/transaction_service/types.py)
+  - add `want_price_usd` to `KickCandidate`
+- [`tidal/transaction_service/kicker.py`](tidal/transaction_service/kicker.py)
+  - after sizing and after quote validation, evaluate quote discount for guarded tokens
+  - block with `SKIP` when over threshold
 - tests
-  - profile parsing
-  - quote better than spot
-  - quote within threshold
-  - quote above threshold blocks
-  - missing spot price does not block
+  - guarded token within threshold passes
+  - guarded token over threshold skips
+  - missing cached want price does not block
+  - unguarded token keeps current behavior
 
-## Rollout
+## Recommendation
 
-Best rollout:
+Do not implement this immediately unless we see real cases where `usd_kick_limit` is still not enough.
 
-1. implement the guard
-2. start with conservative thresholds
-3. watch blocked events in logs
-4. tighten only after reviewing real blocked examples
+Order of operations should be:
 
-Recommended initial values:
+1. run with `usd_kick_limit`
+2. observe real outcomes
+3. only add this guard for specific problematic tokens
 
-- `volatile.max_price_impact_bps = 1500`
-- `stable.max_price_impact_bps = 100`
-
-Those are starting points, not hard rules.
+That keeps the system simple and avoids solving a theoretical problem with a complicated mechanism.

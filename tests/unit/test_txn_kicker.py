@@ -57,7 +57,6 @@ def _make_prepared_kick(**overrides):
         "step_decay_rate_bps": 50,
         "pricing_profile_name": "volatile",
         "settle_token": None,
-        "quote_request_url": "https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true",
     }
     defaults.update(overrides)
     return PreparedKick(**defaults)
@@ -508,7 +507,6 @@ async def test_kick_confirm_fn_declined(session):
     assert "minimum_price_display" in kick
     assert "buffer_bps" in kick
     assert "min_buffer_bps" in kick
-    assert "quote_request_url" in kick
     assert isinstance(kick["buffer_bps"], int)
     assert isinstance(kick["min_buffer_bps"], int)
     # quote_amount is per-kick, gas fields are top-level.
@@ -1712,7 +1710,6 @@ async def test_execute_batch_confirm_summary_schema(session):
     assert "starting_price_display" in kick
     assert "minimum_price_display" in kick
     assert "quote_amount" in kick
-    assert "quote_request_url" in kick
     assert "buffer_bps" in kick
     assert "min_buffer_bps" in kick
     assert kick["pricing_profile_name"] == "volatile"

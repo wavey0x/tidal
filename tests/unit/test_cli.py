@@ -27,7 +27,6 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
                 "step_decay_rate_bps": 1,
                 "pricing_profile_name": "stable",
                 "quote_amount": "2500",
-                "quote_request_url": "https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true",
             }
         ],
         "batch_size": 1,
@@ -48,7 +47,6 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
     assert "1 candidate ready for submission" in output
     assert "Quote out:   2,500.00 USDC (~$2,500.00)" in output
     assert "Rate:        2.5000 quoted | 2.7500 start | 2.3750 floor USDC/CRV" in output
-    assert "Quote API:   https://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true" in output
     assert "Profile:     stable | decay 0.01%" in output
     assert "Submitting transaction..." in output
     confirm_mock.assert_called_once_with("Send this transaction?", default=False)
@@ -76,7 +74,6 @@ def test_make_confirm_fn_warns_on_sell_vs_quote_mismatch(capsys):
                 "step_decay_rate_bps": 50,
                 "pricing_profile_name": "volatile",
                 "quote_amount": "1568",
-                "quote_request_url": "https://prices.example.com/v1/quote?token_in=0xwfrax&token_out=0xcrvusd&amount_in=3473410000000000000000&chain_id=1&use_underlying=true",
             }
         ],
         "batch_size": 1,
@@ -96,7 +93,6 @@ def test_make_confirm_fn_warns_on_sell_vs_quote_mismatch(capsys):
     assert "Sell amount: 3,473.41 WFRAX (~$10,000.00)" in output
     assert "Quote out:   1,568.00 crvUSD (~$1,568.00)" in output
     assert "⚠️  Warning: sell value and quote value differ by 84.3%" in output
-    assert "Quote API:   https://prices.example.com/v1/quote?token_in=0xwfrax&token_out=0xcrvusd&amount_in=3473410000000000000000&chain_id=1&use_underlying=true" in output
     assert output.index("⚠️  Warning:") < output.index("Kick (1 of 1)")
 
 

@@ -318,10 +318,6 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
                     f"  Rate:        {float(quote_rate):,.4f} quoted | {float(start_rate):,.4f} start | "
                     f"{float(min_rate):,.4f} floor {want_sym}/{token_sym}"
                 )
-            quote_api_line = None
-            quote_request_url = k.get("quote_request_url")
-            if quote_request_url:
-                quote_api_line = f"  Quote API:   {quote_request_url}"
             precision_line = None
             if quote_amount > 0 and Decimal(starting_price) > quote_amount * 2:
                 precision_line = f"               \u21b3 ceiled lot based on {quote_amount:.4f} quote"
@@ -343,8 +339,6 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
                 content.append(rate_line)
             if precision_line:
                 content.append(precision_line)
-            if quote_api_line:
-                content.append(quote_api_line)
             content.extend([
                 f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
                 f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",

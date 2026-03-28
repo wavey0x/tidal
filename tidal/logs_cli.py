@@ -6,24 +6,13 @@ from dataclasses import asdict
 
 import typer
 
-from tidal.cli_context import CLIContext
+from tidal.cli_context import CLIContext, normalize_cli_address
 from tidal.cli_exit_codes import simple_list_exit_code
 from tidal.cli_options import AuctionAddressOption, ConfigOption, JsonOption, LimitOption, SourceAddressOption
 from tidal.cli_renderers import emit_json, render_kick_logs, render_run_detail, render_scan_runs
-from tidal.errors import AddressNormalizationError
-from tidal.normalizers import normalize_address
 from tidal.ops.logs import get_run_detail, list_kick_logs, list_scan_runs
 
 app = typer.Typer(help="Historical log inspection commands", no_args_is_help=True)
-
-
-def _normalize_optional_address(value: str | None) -> str | None:
-    if value is None:
-        return None
-    try:
-        return normalize_address(value)
-    except AddressNormalizationError as exc:
-        raise typer.BadParameter(str(exc)) from exc
 
 
 @app.command("kicks")
@@ -38,8 +27,8 @@ def logs_kicks(
     """Show recent kick attempts."""
 
     cli_ctx = CLIContext(config)
-    normalized_source = _normalize_optional_address(source_address)
-    normalized_auction = _normalize_optional_address(auction_address)
+    normalized_source = normalize_cli_address(source_address)
+    normalized_auction = normalize_cli_address(auction_address)
     with cli_ctx.session() as session:
         records = list_kick_logs(
             session,

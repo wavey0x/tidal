@@ -15,7 +15,8 @@ from tidal.auction_settlement import (
     inspect_auction_settlement,
     normalize_settlement_method,
 )
-from tidal.cli_context import CLIContext
+from tidal.cli_context import CLIContext, normalize_cli_address
+from tidal.cli_exit_codes import EXECUTION_ERROR, NOOP
 from tidal.cli_options import (
     AccountOption,
     BroadcastOption,
@@ -27,9 +28,8 @@ from tidal.cli_options import (
     SenderOption,
 )
 from tidal.cli_renderers import BroadcastRecord, emit_json, render_broadcast_records
-from tidal.errors import AddressNormalizationError, ConfigurationError
+from tidal.errors import ConfigurationError
 from tidal.logging import OutputMode, configure_logging
-from tidal.normalizers import normalize_address
 from tidal.ops.auction_enable import (
     AuctionInspection,
     AuctionTokenEnabler,
@@ -53,15 +53,8 @@ from tidal.transaction_service.kicker import _DEFAULT_PRIORITY_FEE_GWEI, _format
 app = typer.Typer(help="Auction operator commands", no_args_is_help=True)
 
 
-def _normalize_address_value(value: str, *, param_hint: str) -> str:
-    try:
-        return normalize_address(value.strip())
-    except AddressNormalizationError as exc:
-        raise typer.BadParameter(str(exc), param_hint=param_hint) from exc
-
-
 def _normalize_address_list(values: list[str] | None, *, param_hint: str) -> list[str]:
-    return [_normalize_address_value(value, param_hint=param_hint) for value in values or []]
+    return [normalize_cli_address(value, param_hint=param_hint) for value in values or []]
 
 
 def _print_auction_summary(inspection: AuctionInspection) -> None:
@@ -304,33 +297,23 @@ def deploy(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
-    normalized_want = _normalize_address_value(want, param_hint="--want")
-    normalized_receiver = _normalize_address_value(receiver, param_hint="--receiver")
-    normalized_factory = _normalize_address_value(factory, param_hint="--factory") if factory else default_factory_address(cli_ctx.settings)
+    normalized_want = normalize_cli_address(want, param_hint="--want")
+    normalized_receiver = normalize_cli_address(receiver, param_hint="--receiver")
+    normalized_factory = normalize_cli_address(factory, param_hint="--factory") if factory else default_factory_address(cli_ctx.settings)
     normalized_governance = (
-        _normalize_address_value(governance, param_hint="--governance")
+        normalize_cli_address(governance, param_hint="--governance")
         if governance
         else default_governance_address()
     )
-    normalized_sender = _normalize_address_value(sender, param_hint="--sender") if sender else None
-    signer = cli_ctx.resolve_signer(
-        required=broadcast,
+    exec_ctx = cli_ctx.resolve_execution(
+        broadcast=broadcast,
         required_for="broadcast auction deployment",
+        sender=normalize_cli_address(sender, param_hint="--sender"),
         account_name=account,
         keystore_path=keystore,
         password_file=password_file,
     )
-    normalized_sender = cli_ctx.validate_sender(
-        sender=normalized_sender,
-        signer=signer,
-        required_for="broadcast auction deployment",
-    )
-    preview_sender = cli_ctx.resolve_sender(
-        sender=normalized_sender,
-        account_name=account,
-        keystore_path=keystore,
-        signer=signer,
-    )
+    preview_sender = exec_ctx.sender
 
     resolved_salt = salt or build_default_salt(normalized_want, normalized_receiver, normalized_governance)
     resolved_starting_price = starting_price
@@ -380,11 +363,11 @@ def deploy(
             else "Broadcast deployment?"
         )
         if bypass_confirmation or typer.confirm(prompt, default=False):
-            if signer is None:
+            if exec_ctx.signer is None:
                 raise SystemExit("Signer is required for broadcast deployment.")
             execution = send_live_deployment(
                 w3,
-                signer=signer,
+                signer=exec_ctx.signer,
                 factory_address=initial_preview.factory_address,
                 want=initial_preview.want,
                 receiver=initial_preview.receiver,
@@ -434,11 +417,11 @@ def deploy(
             )
 
     if execution is not None and execution.receipt_status != 1:
-        raise typer.Exit(code=4)
+        raise typer.Exit(code=EXECUTION_ERROR)
     if status == "error":
-        raise typer.Exit(code=4)
+        raise typer.Exit(code=EXECUTION_ERROR)
     if status == "noop":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=NOOP)
 
 
 @app.command("enable-tokens")
@@ -470,9 +453,17 @@ def enable_tokens(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
-    normalized_auction_address = _normalize_address_value(auction_address, param_hint="AUCTION")
+    normalized_auction_address = normalize_cli_address(auction_address, param_hint="AUCTION")
     normalized_extra_tokens = _normalize_address_list(extra_token, param_hint="--extra-token")
-    normalized_sender = _normalize_address_value(sender, param_hint="--sender") if sender is not None else None
+    exec_ctx = cli_ctx.resolve_execution(
+        broadcast=broadcast,
+        required_for="broadcast enable-tokens execution",
+        sender=normalize_cli_address(sender, param_hint="--sender"),
+        account_name=account,
+        keystore_path=keystore,
+        password_file=password_file,
+    )
+    preview_sender = exec_ctx.sender
 
     enabler = AuctionTokenEnabler(w3, cli_ctx.settings)
     inspection = enabler.inspect_auction(normalized_auction_address)
@@ -489,25 +480,6 @@ def enable_tokens(
     )
     eligible = [probe for probe in probes if probe.status == "eligible"]
     selected_addresses = [probe.token_address for probe in eligible]
-
-    signer = cli_ctx.resolve_signer(
-        required=broadcast,
-        required_for="broadcast enable-tokens execution",
-        account_name=account,
-        keystore_path=keystore,
-        password_file=password_file,
-    )
-    normalized_sender = cli_ctx.validate_sender(
-        sender=normalized_sender,
-        signer=signer,
-        required_for="broadcast enable-tokens execution",
-    )
-    preview_sender = cli_ctx.resolve_sender(
-        sender=normalized_sender,
-        account_name=account,
-        keystore_path=keystore,
-        signer=signer,
-    )
 
     if selected_addresses:
         commands, state = enabler.build_enable_plan(
@@ -548,10 +520,10 @@ def enable_tokens(
             else "Broadcast enable-tokens transaction?"
         )
         if bypass_confirmation or typer.confirm(prompt, default=False):
-            if signer is None:
+            if exec_ctx.signer is None:
                 raise SystemExit("Signer is required for broadcast execution.")
             tx_hash, tx_gas_estimate = enabler.send_execute_transaction(
-                signer=signer,
+                signer=exec_ctx.signer,
                 trade_handler_address=inspection.governance,
                 commands=commands,
                 state=state,
@@ -633,9 +605,9 @@ def enable_tokens(
             )
 
     if status == "error":
-        raise typer.Exit(code=4)
+        raise typer.Exit(code=EXECUTION_ERROR)
     if status == "noop":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=NOOP)
 
 
 @app.command("settle")
@@ -665,31 +637,21 @@ def settle(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
-    normalized_auction_address = _normalize_address_value(auction_address, param_hint="AUCTION")
-    normalized_token_address = _normalize_address_value(token_address, param_hint="--token") if token_address else None
+    normalized_auction_address = normalize_cli_address(auction_address, param_hint="AUCTION")
+    normalized_token_address = normalize_cli_address(token_address, param_hint="--token")
     try:
         normalized_method = normalize_settlement_method(method)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--method") from exc
-    normalized_sender = _normalize_address_value(sender, param_hint="--sender") if sender else None
-    signer = cli_ctx.resolve_signer(
-        required=broadcast,
+    exec_ctx = cli_ctx.resolve_execution(
+        broadcast=broadcast,
         required_for="broadcast settlement execution",
+        sender=normalize_cli_address(sender, param_hint="--sender"),
         account_name=account,
         keystore_path=keystore,
         password_file=password_file,
     )
-    normalized_sender = cli_ctx.validate_sender(
-        sender=normalized_sender,
-        signer=signer,
-        required_for="broadcast settlement execution",
-    )
-    preview_sender = cli_ctx.resolve_sender(
-        sender=normalized_sender,
-        account_name=account,
-        keystore_path=keystore,
-        signer=signer,
-    )
+    preview_sender = exec_ctx.sender
     inspection = asyncio.run(
         inspect_auction_settlement(
             build_web3_client(cli_ctx.settings),
@@ -713,7 +675,7 @@ def settle(
                 decision=decision,
                 sender_address=preview_sender,
                 broadcast=False,
-                signer=signer,
+                signer=exec_ctx.signer,
                 receipt_timeout=receipt_timeout,
             )
         )
@@ -741,7 +703,7 @@ def settle(
                     decision=decision,
                     sender_address=preview_sender,
                     broadcast=True,
-                    signer=signer,
+                    signer=exec_ctx.signer,
                     receipt_timeout=receipt_timeout,
                 )
             )
@@ -768,6 +730,6 @@ def settle(
         )
 
     if status == "error":
-        raise typer.Exit(code=4)
+        raise typer.Exit(code=EXECUTION_ERROR)
     if status == "noop":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=NOOP)

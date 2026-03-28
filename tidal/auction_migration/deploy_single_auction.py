@@ -27,15 +27,17 @@ from tidal.chain.contracts.abis import (
     ERC20_ABI,
     MULTICALL3_ABI,
 )
-from tidal.cli_support import (
-    build_sync_web3,
-    discover_local_keystore_path,
-    maybe_load_signer,
+from tidal.auction_migration.prompts import (
     prompt_address,
     prompt_bool,
     prompt_optional_address,
     prompt_text,
     prompt_uint,
+)
+from tidal.cli_support import (
+    build_sync_web3,
+    discover_local_keystore_path,
+    maybe_load_signer,
     read_keystore_address,
 )
 from tidal.config import load_settings

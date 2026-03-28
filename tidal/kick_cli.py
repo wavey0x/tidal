@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 import typer
 from sqlalchemy import select
 
-from tidal.cli_context import CLIContext
+from tidal.cli_context import CLIContext, normalize_cli_address
 from tidal.cli_exit_codes import kick_exit_code
 from tidal.cli_options import (
     AccountOption,
@@ -30,9 +30,9 @@ from tidal.cli_options import (
     VerboseOption,
 )
 from tidal.cli_renderers import emit_json, kick_scope_label, render_kick_inspect, render_kick_run_summary
-from tidal.errors import AddressNormalizationError, ConfigurationError
+from tidal.errors import ConfigurationError
 from tidal.logging import OutputMode, configure_logging
-from tidal.normalizers import normalize_address, short_address
+from tidal.normalizers import short_address
 from tidal.ops.kick_inspect import inspect_kick_candidates
 from tidal.persistence import models
 from tidal.runtime import build_txn_service
@@ -56,15 +56,6 @@ def _normalize_source_type_filter(value: str | None) -> SourceType | None:
     if normalized in {"strategy", "fee_burner"}:
         return normalized  # type: ignore[return-value]
     raise typer.BadParameter("expected 'strategy' or 'fee-burner'", param_hint="--source-type")
-
-
-def _normalize_address_filter(value: str | None, *, param_hint: str) -> str | None:
-    if value is None:
-        return None
-    try:
-        return normalize_address(value.strip())
-    except AddressNormalizationError as exc:
-        raise typer.BadParameter(str(exc), param_hint=param_hint) from exc
 
 
 def _load_run_rows(session, run_id: str) -> list[dict[str, object]]:
@@ -226,29 +217,16 @@ def kick_run(
         raise typer.Exit(code=1) from exc
 
     normalized_source_type = _normalize_source_type_filter(source_type)
-    normalized_source_address = _normalize_address_filter(source_address, param_hint="--source")
-    normalized_auction_address = _normalize_address_filter(auction_address, param_hint="--auction")
-    normalized_sender = _normalize_address_filter(sender, param_hint="--sender")
-    signer = cli_ctx.resolve_signer(
-        required=broadcast,
+    normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
+    normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
+    exec_ctx = cli_ctx.resolve_execution(
+        broadcast=broadcast,
         required_for="broadcast kick execution",
+        sender=normalize_cli_address(sender, param_hint="--sender"),
         account_name=account,
         keystore_path=keystore,
         password_file=password_file,
     )
-    cli_ctx.validate_sender(
-        sender=normalized_sender,
-        signer=signer,
-        required_for="broadcast kick execution",
-    )
-    execution_sender = None
-    if broadcast:
-        execution_sender = cli_ctx.resolve_sender(
-            sender=normalized_sender,
-            account_name=account,
-            keystore_path=keystore,
-            signer=signer,
-        )
 
     inspection_data = None
     if explain:
@@ -287,7 +265,7 @@ def kick_run(
             require_curve_quote=require_curve_quote,
             skip_base_fee_check=skip_base_fee_check,
             web3_client=web3_client,
-            signer=signer,
+            signer=exec_ctx.signer,
         )
         result = asyncio.run(
             txn_service.run_once(
@@ -309,6 +287,7 @@ def kick_run(
     elif broadcast and result.kicks_failed:
         status = "error"
 
+    execution_sender = exec_ctx.sender if broadcast else None
     if json_output:
         data = {
             "run": _to_dict(result),
@@ -373,29 +352,17 @@ def kick_daemon(
         raise typer.Exit(code=1) from exc
 
     normalized_source_type = _normalize_source_type_filter(source_type)
-    normalized_source_address = _normalize_address_filter(source_address, param_hint="--source")
-    normalized_auction_address = _normalize_address_filter(auction_address, param_hint="--auction")
-    normalized_sender = _normalize_address_filter(sender, param_hint="--sender")
-    signer = cli_ctx.resolve_signer(
-        required=broadcast,
+    normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
+    normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
+    exec_ctx = cli_ctx.resolve_execution(
+        broadcast=broadcast,
         required_for="broadcast kick daemon execution",
+        sender=normalize_cli_address(sender, param_hint="--sender"),
         account_name=account,
         keystore_path=keystore,
         password_file=password_file,
     )
-    cli_ctx.validate_sender(
-        sender=normalized_sender,
-        signer=signer,
-        required_for="broadcast kick daemon execution",
-    )
-    execution_sender = None
-    if broadcast:
-        execution_sender = cli_ctx.resolve_sender(
-            sender=normalized_sender,
-            account_name=account,
-            keystore_path=keystore,
-            signer=signer,
-        )
+    execution_sender = exec_ctx.sender if broadcast else None
     sleep_seconds = interval_seconds or 1800
 
     async def run_loop() -> None:
@@ -417,7 +384,7 @@ def kick_daemon(
                     session,
                     require_curve_quote=require_curve_quote,
                     web3_client=web3_client,
-                    signer=signer,
+                    signer=exec_ctx.signer,
                     skip_base_fee_check=broadcast and base_fee_gwei > cli_ctx.settings.txn_max_base_fee_gwei,
                 )
                 result = await txn_service.run_once(
@@ -466,8 +433,8 @@ def kick_inspect(
     configure_logging(output_mode=OutputMode.TEXT)
     cli_ctx = CLIContext(config)
     normalized_source_type = _normalize_source_type_filter(source_type)
-    normalized_source_address = _normalize_address_filter(source_address, param_hint="--source")
-    normalized_auction_address = _normalize_address_filter(auction_address, param_hint="--auction")
+    normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
+    normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
 
     with cli_ctx.session() as session:
         result = inspect_kick_candidates(

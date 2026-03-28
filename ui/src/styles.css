@@ -9,6 +9,8 @@
   --divider-row: #f0f1f3;
   --hover: rgba(0, 0, 0, 0.04);
   --success: #217f46;
+  --warning: #8a4b00;
+  --warning-bg: #fff4e0;
   --error: #C62828;
   --token-icon-size: calc(14px * 1.1);
   --token-summary-icon-size: calc(16px * 1.1);
@@ -25,6 +27,8 @@
   --divider-row: #212121;
   --hover: rgba(255, 255, 255, 0.04);
   --success: #5bc47d;
+  --warning: #ffb55c;
+  --warning-bg: rgba(255, 181, 92, 0.12);
   --error: #EF5350;
 }
 
@@ -40,6 +44,8 @@
     --divider-row: #212121;
     --hover: rgba(255, 255, 255, 0.04);
     --success: #5bc47d;
+    --warning: #ffb55c;
+    --warning-bg: rgba(255, 181, 92, 0.12);
     --error: #EF5350;
   }
 }
@@ -1334,6 +1340,24 @@ tbody tr:hover td {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.deploy-modal-warnings {
+  margin: -4px 0 20px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: 6px;
+  background: var(--warning-bg);
+}
+
+.deploy-modal-warning {
+  margin: 0;
+  font-size: 11px;
+  color: var(--warning);
+}
+
+.deploy-modal-warning + .deploy-modal-warning {
+  margin-top: 6px;
 }
 
 .deploy-modal-btn {

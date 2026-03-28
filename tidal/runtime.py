@@ -206,6 +206,7 @@ def build_txn_service(
     session,
     *,
     confirm_fn=None,
+    require_curve_quote: bool | None = None,
     skip_base_fee_check: bool = False,
     web3_client: Web3Client | None = None,
 ):
@@ -245,6 +246,11 @@ def build_txn_service(
     )
     pricing_policy = load_auction_pricing_policy()
     token_sizing_policy = load_token_sizing_policy()
+    resolved_require_curve_quote = (
+        settings.txn_require_curve_quote
+        if require_curve_quote is None
+        else require_curve_quote
+    )
 
     price_provider = _TPA(
         chain_id=settings.chain_id,
@@ -269,7 +275,7 @@ def build_txn_service(
         min_price_buffer_bps=settings.txn_min_price_buffer_bps,
         chain_id=settings.chain_id,
         confirm_fn=confirm_fn,
-        require_curve_quote=settings.txn_require_curve_quote,
+        require_curve_quote=resolved_require_curve_quote,
         erc20_reader=erc20_reader,
         auction_state_reader=auction_state_reader,
         pricing_policy=pricing_policy,

@@ -12,6 +12,7 @@ import structlog
 import typer
 from sqlalchemy import select
 
+from tidal.auction_cli import app as auction_app
 from tidal.config import load_settings
 from tidal.errors import AddressNormalizationError
 from tidal.errors import ConfigurationError
@@ -26,7 +27,7 @@ from tidal.transaction_service.types import SourceType
 
 logger = structlog.get_logger(__name__)
 
-app = typer.Typer(help="Tidal scanner CLI")
+app = typer.Typer(help="Tidal CLI")
 db_app = typer.Typer(help="Database commands")
 scan_app = typer.Typer(help="Scanner commands", invoke_without_command=True)
 txn_app = typer.Typer(help="Transaction service commands", invoke_without_command=True)
@@ -34,6 +35,7 @@ txn_app = typer.Typer(help="Transaction service commands", invoke_without_comman
 app.add_typer(db_app, name="db")
 app.add_typer(scan_app, name="scan")
 app.add_typer(txn_app, name="txn")
+app.add_typer(auction_app, name="auction")
 
 
 def _require_rpc_url(settings) -> None:
@@ -150,7 +152,7 @@ def scan_daemon(
 
 def _require_keystore(settings) -> None:
     if not settings.txn_keystore_path or not settings.txn_keystore_passphrase:
-        raise ConfigurationError("TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for txn commands")
+        raise ConfigurationError("TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for transaction commands")
 
 
 def _normalize_source_type_filter(value: str | None) -> SourceType | None:
@@ -427,6 +429,7 @@ def _run_txn_once(
     confirm: bool,
     config: Path | None,
     batch: bool,
+    require_curve_quote: bool | None = None,
     verbose: bool = False,
     source_type: SourceType | None = None,
     source_address: str | None = None,
@@ -474,8 +477,10 @@ def _run_txn_once(
     db = Database(settings.database_url)
     with db.session() as session:
         txn_service = build_txn_service(
-            settings, session,
+            settings,
+            session,
             confirm_fn=confirm_fn,
+            require_curve_quote=require_curve_quote,
             skip_base_fee_check=skip_base_fee_check,
             web3_client=web3_client,
         )
@@ -507,6 +512,11 @@ def txn(
     live: bool = typer.Option(default=False, help="Send transactions (default: dry-run)"),
     confirm: bool = typer.Option(default=False, help="Interactive confirmation before each kick (implies --live)"),
     batch: bool = typer.Option(default=False, help="Send a single batchKick() instead of individual kick() per candidate"),
+    require_curve_quote: bool | None = typer.Option(
+        None,
+        "--require-curve-quote/--allow-missing-curve-quote",
+        help="Override Curve quote strictness for this run",
+    ),
     source_type: str | None = typer.Option(None, "--type", help="Filter candidates by source type: strategy or fee-burner"),
     source_address: str | None = typer.Option(None, "--source", "--source-address", help="Filter candidates to a specific source address"),
     auction_address: str | None = typer.Option(None, "--auction", "--auction-address", help="Filter candidates to a specific auction address"),
@@ -525,6 +535,7 @@ def txn(
         confirm=confirm,
         config=config,
         batch=batch,
+        require_curve_quote=require_curve_quote,
         verbose=verbose,
         source_type=normalized_source_type,
         source_address=normalized_source_address,
@@ -538,6 +549,11 @@ def txn_daemon(
     live: bool = typer.Option(default=False, help="Send transactions (default: dry-run)"),
     batch: bool = typer.Option(default=True, help="Use batchKick (default) or individual kick() per candidate"),
     interval_seconds: int | None = typer.Option(default=None, min=1),
+    require_curve_quote: bool | None = typer.Option(
+        None,
+        "--require-curve-quote/--allow-missing-curve-quote",
+        help="Override Curve quote strictness for this run",
+    ),
     source_type: str | None = typer.Option(None, "--type", help="Filter candidates by source type: strategy or fee-burner"),
     source_address: str | None = typer.Option(None, "--source", "--source-address", help="Filter candidates to a specific source address"),
     auction_address: str | None = typer.Option(None, "--auction", "--auction-address", help="Filter candidates to a specific auction address"),
@@ -583,7 +599,12 @@ def txn_daemon(
 
             db = Database(settings.database_url)
             with db.session() as session:
-                txn_service = build_txn_service(settings, session, web3_client=web3_client)
+                txn_service = build_txn_service(
+                    settings,
+                    session,
+                    require_curve_quote=require_curve_quote,
+                    web3_client=web3_client,
+                )
                 result = await txn_service.run_once(
                     live=live,
                     batch=batch,

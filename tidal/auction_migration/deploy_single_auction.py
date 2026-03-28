@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
-import json
 import sys
 import time
 from dataclasses import dataclass
@@ -15,7 +13,7 @@ from typing import Any
 from eth_abi import decode as abi_decode
 from eth_utils import to_checksum_address
 from hexbytes import HexBytes
-from web3 import HTTPProvider, Web3
+from web3 import Web3
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
@@ -28,6 +26,17 @@ from tidal.chain.contracts.abis import (
     AUCTION_FACTORY_ABI,
     ERC20_ABI,
     MULTICALL3_ABI,
+)
+from tidal.cli_support import (
+    build_sync_web3,
+    discover_local_keystore_path,
+    maybe_load_signer,
+    prompt_address,
+    prompt_bool,
+    prompt_optional_address,
+    prompt_text,
+    prompt_uint,
+    read_keystore_address,
 )
 from tidal.config import load_settings
 from tidal.constants import (
@@ -83,77 +92,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--config", type=Path, default=None, help="Optional config.yaml path.")
     return parser.parse_args()
-
-
-def build_sync_web3(settings: Any) -> Web3:
-    if not settings.rpc_url:
-        raise SystemExit("RPC_URL is required")
-    return Web3(
-        HTTPProvider(
-            settings.rpc_url,
-            request_kwargs={"timeout": settings.rpc_timeout_seconds},
-        )
-    )
-
-
-def prompt_text(label: str, *, default: str | None = None, required: bool = True) -> str:
-    while True:
-        suffix = f" [{default}]" if default not in {None, ""} else ""
-        raw = input(f"{label}{suffix}: ").strip()
-        if raw:
-            return raw
-        if default is not None:
-            return default
-        if not required:
-            return ""
-        print("Value is required.")
-
-
-def prompt_address(label: str, *, default: str | None = None) -> str:
-    while True:
-        value = prompt_text(label, default=default)
-        try:
-            return normalize_address(value)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Invalid address: {exc}")
-
-
-def prompt_optional_address(label: str, *, default: str | None = None) -> str | None:
-    while True:
-        value = prompt_text(label, default=default, required=False)
-        if not value:
-            return None
-        try:
-            return normalize_address(value)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Invalid address: {exc}")
-
-
-def prompt_uint(label: str, *, default: int | None = None) -> int:
-    while True:
-        raw = prompt_text(label, default=str(default) if default is not None else None)
-        try:
-            value = int(raw, 10)
-        except ValueError:
-            print("Enter a base-10 integer.")
-            continue
-        if value < 0:
-            print("Value must be non-negative.")
-            continue
-        return value
-
-
-def prompt_bool(label: str, *, default: bool = False) -> bool:
-    hint = "Y/n" if default else "y/N"
-    while True:
-        raw = input(f"{label} [{hint}]: ").strip().lower()
-        if not raw:
-            return default
-        if raw in {"y", "yes"}:
-            return True
-        if raw in {"n", "no"}:
-            return False
-        print("Enter y or n.")
 
 
 def chunked(items: list[Any], size: int) -> list[list[Any]]:
@@ -344,69 +282,6 @@ def prompt_token_address(w3: Web3, label: str) -> str:
         else:
             print("Resolved token symbol: <unavailable>")
         return token_address
-
-
-def discover_local_keystore_path(settings: Any) -> Path | None:
-    if settings.txn_keystore_path:
-        configured = Path(settings.txn_keystore_path).expanduser()
-        if configured.is_file():
-            return configured
-
-    foundry_dir = Path.home() / ".foundry" / "keystores"
-    if not foundry_dir.is_dir():
-        return None
-
-    for preferred_name in ("wavey3", "wavey2"):
-        candidate = foundry_dir / preferred_name
-        if candidate.is_file():
-            return candidate
-
-    keystores = sorted(path for path in foundry_dir.iterdir() if path.is_file())
-    if len(keystores) == 1:
-        return keystores[0]
-    return None
-
-
-def read_keystore_address(keystore_path: Path | None) -> str | None:
-    if keystore_path is None or not keystore_path.is_file():
-        return None
-    try:
-        payload = json.loads(keystore_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
-
-    address = payload.get("address")
-    if not address:
-        return None
-    if not str(address).startswith("0x"):
-        address = f"0x{address}"
-    try:
-        return normalize_address(address)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def maybe_load_signer(settings: Any, *, required: bool) -> TransactionSigner | None:
-    discovered_keystore = discover_local_keystore_path(settings)
-    keystore_path = str(discovered_keystore) if discovered_keystore is not None else settings.txn_keystore_path
-    passphrase = settings.txn_keystore_passphrase
-
-    if not keystore_path and required:
-        keystore_path = prompt_text("Keystore path", required=True)
-    elif keystore_path and required:
-        print(f"Using keystore: {keystore_path}")
-    if keystore_path and not passphrase:
-        passphrase = getpass.getpass("Keystore passphrase: ")
-
-    if keystore_path and passphrase:
-        return TransactionSigner(keystore_path, passphrase)
-
-    if required:
-        raise SystemExit("Keystore path and passphrase are required for live deployment.")
-
-    return None
-
-
 def derive_fee_settings(w3: Web3) -> tuple[int, int]:
     latest_block = w3.eth.get_block("latest")
     base_fee = int(latest_block.get("baseFeePerGas") or 0)
@@ -565,7 +440,7 @@ def main() -> None:
     if default_keystore_path is not None:
         print("Local keystore detected. Live deployment will use it by default.")
     use_live = prompt_bool("Broadcast a live deployment transaction?", default=default_keystore_path is not None)
-    signer = maybe_load_signer(settings, required=use_live)
+    signer = maybe_load_signer(settings, required=use_live, required_for="live deployment")
 
     if signer is not None:
         caller_address = signer.address

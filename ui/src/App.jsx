@@ -677,6 +677,7 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   }, [onCancel]);
 
   const spec = payload || {};
+  const warnings = Array.isArray(spec.warnings) ? spec.warnings.filter(Boolean) : [];
   const rows = [
     ["Factory", shortenAddress(spec.factoryAddress)],
     ["Receiver", shortenAddress(spec.receiverAddress)],
@@ -709,6 +710,15 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
             </div>
           ))}
         </dl>
+        {warnings.length ? (
+          <div className="deploy-modal-warnings" role="status" aria-live="polite">
+            {warnings.map((warning) => (
+              <p key={warning} className="deploy-modal-warning">
+                {warning}
+              </p>
+            ))}
+          </div>
+        ) : null}
         <div className="deploy-modal-actions">
           <button type="button" className="deploy-modal-btn deploy-modal-btn-cancel" onClick={onCancel}>
             Cancel

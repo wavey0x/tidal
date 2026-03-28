@@ -91,6 +91,8 @@ Examples:
 - `tidal txn --live --batch` — send a single batchKick() transaction (all-or-nothing)
 - `tidal txn daemon --live` — run the transaction service continuously (uses batchKick by default)
 - `tidal txn daemon --live --no-batch` — daemon with individual kick() per candidate
+- `tidal auction enable-tokens 0x...` — inspect an auction and interactively queue `enable(address)` calls for relevant sell tokens
+- `tidal auction sweep-and-settle 0xAuction 0xToken` — preview or broadcast a manual `sweepAndSettle()` transaction
 - `tidal healthcheck`
 
 Shortlist behavior: only the highest-USD token per auction is kickable in a single evaluation cycle. Additional above-threshold tokens on the same auction stay deferred until a later run, because the auction can only carry one active lot at a time.

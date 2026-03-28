@@ -14,8 +14,6 @@ from tidal.cli_support import (
     discover_local_keystore_path,
     maybe_load_signer,
     prompt_bool,
-    prompt_optional_address,
-    prompt_text,
     read_keystore_address,
 )
 from tidal.config import load_settings
@@ -27,7 +25,6 @@ from tidal.ops.auction_enable import (
     AuctionTokenEnabler,
     TokenProbe,
     format_probe_reason,
-    parse_manual_token_input,
 )
 from tidal.runtime import build_web3_client
 from tidal.transaction_service.kicker import _DEFAULT_PRIORITY_FEE_GWEI, _format_execution_error
@@ -76,59 +73,6 @@ def _print_probe_table(probes: list[TokenProbe]) -> None:
             f"balance={balance} | origins={origins} | {format_probe_reason(probe.reason)}{detail}"
         )
     typer.echo()
-
-
-def _prompt_token_selection(eligible: list[TokenProbe]) -> list[TokenProbe]:
-    if not eligible:
-        return []
-
-    typer.echo("Eligible tokens:")
-    for index, probe in enumerate(eligible, 1):
-        balance = probe.normalized_balance or "?"
-        typer.echo(f"  [{index:02d}] {probe.display_label} | balance={balance} | origins={','.join(probe.origins)}")
-    typer.echo()
-
-    while True:
-        raw = prompt_text(
-            "Skip any eligible token numbers (comma-separated, blank keeps all)",
-            required=False,
-        )
-        if not raw:
-            return eligible
-
-        try:
-            skip_indexes = {
-                int(chunk.strip(), 10)
-                for chunk in raw.split(",")
-                if chunk.strip()
-            }
-        except ValueError:
-            typer.echo("Enter token numbers like 1,3 or leave blank.")
-            continue
-
-        if any(index < 1 or index > len(eligible) for index in skip_indexes):
-            typer.echo("One or more token numbers are out of range.")
-            continue
-
-        return [
-            probe
-            for index, probe in enumerate(eligible, 1)
-            if index not in skip_indexes
-        ]
-
-
-def _prompt_manual_tokens() -> list[str]:
-    while True:
-        raw = prompt_text(
-            "Additional token addresses to probe (comma-separated, blank for none)",
-            required=False,
-        )
-        if not raw:
-            return []
-        try:
-            return parse_manual_token_input(raw)
-        except Exception as exc:  # noqa: BLE001
-            typer.echo(f"Invalid token list: {exc}")
 
 
 async def _run_sweep_and_settle(
@@ -228,12 +172,26 @@ def enable_tokens(
         "--extra-token",
         help="Extra token address to probe. Can be supplied multiple times.",
     ),
+    keystore: Path | None = typer.Option(
+        None,
+        "--keystore",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help="Override signer keystore path for live execution.",
+    ),
+    caller: str | None = typer.Option(
+        None,
+        "--caller",
+        help="Override caller address for execute() preview when not sending live.",
+    ),
 ) -> None:
     """Inspect an auction and queue enable(address) calls for relevant tokens."""
 
     configure_logging()
     normalized_auction_address = _normalize_address_value(auction_address, param_hint="AUCTION")
     normalized_extra_tokens = _normalize_address_list(extra_token, param_hint="--extra-token")
+    normalized_caller = _normalize_address_value(caller, param_hint="--caller") if caller is not None else None
 
     settings = load_settings(config)
     w3 = build_sync_web3(settings)
@@ -268,13 +226,10 @@ def enable_tokens(
         if source.warnings:
             typer.echo()
 
-        manual_tokens = list(normalized_extra_tokens)
-        manual_tokens.extend(_prompt_manual_tokens())
-
         discovery = enabler.discover_tokens(
             inspection=inspection,
             source=source,
-            manual_tokens=manual_tokens,
+            manual_tokens=normalized_extra_tokens,
         )
         typer.echo(f"Discovered {len(discovery.tokens_by_address)} unique token candidate(s).")
         for note in discovery.notes:
@@ -294,18 +249,13 @@ def enable_tokens(
             typer.echo("No enable() calls need to be queued.")
             return
 
-        selected = _prompt_token_selection(eligible)
-        if not selected:
-            typer.echo("All eligible tokens were removed from the plan.")
-            return
-
-        selected_addresses = [probe.token_address for probe in selected]
+        selected_addresses = [probe.token_address for probe in eligible]
         commands, state = enabler.build_enable_plan(
             inspection=inspection,
             tokens=selected_addresses,
         )
 
-        default_keystore_path = discover_local_keystore_path(settings)
+        default_keystore_path = keystore.expanduser() if keystore is not None else discover_local_keystore_path(settings)
         default_preview_caller = read_keystore_address(default_keystore_path)
 
         typer.echo("Wei-roll plan:")
@@ -315,20 +265,25 @@ def enable_tokens(
         typer.echo()
 
         if default_keystore_path is not None:
-            typer.echo(f"Detected local keystore: {default_keystore_path}")
+            keystore_label = "Selected keystore" if keystore is not None else "Detected local keystore"
+            typer.echo(f"{keystore_label}: {default_keystore_path}")
         use_live = prompt_bool(
             "Broadcast a live trade handler transaction?",
             default=default_keystore_path is not None,
         )
-        signer = maybe_load_signer(settings, required=use_live, required_for="live enable-tokens execution")
+        signer = maybe_load_signer(
+            settings,
+            required=use_live,
+            required_for="live enable-tokens execution",
+            keystore_path=default_keystore_path,
+        )
 
         if signer is not None:
             preview_caller = signer.address
+            if normalized_caller is not None and normalized_caller != signer.address:
+                typer.echo(f"Note: ignoring --caller and previewing with signer address {to_checksum_address(signer.address)}")
         else:
-            preview_caller = prompt_optional_address(
-                "Caller address for execute() preview",
-                default=default_preview_caller,
-            )
+            preview_caller = normalized_caller or default_preview_caller
 
         if preview_caller:
             is_mech = enabler.is_authorized_mech(inspection.governance, preview_caller)

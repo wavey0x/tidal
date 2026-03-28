@@ -182,6 +182,23 @@ def test_auction_enable_tokens_rejects_invalid_extra_token() -> None:
     assert "invalid address" in result.output
 
 
+def test_auction_enable_tokens_rejects_invalid_caller() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "auction",
+            "enable-tokens",
+            "0x1111111111111111111111111111111111111111",
+            "--caller",
+            "not-an-address",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "invalid address" in result.output
+
+
 def test_auction_sweep_and_settle_requires_keystore(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("RPC_URL", "https://example-rpc.invalid")
     monkeypatch.delenv("TXN_KEYSTORE_PATH", raising=False)

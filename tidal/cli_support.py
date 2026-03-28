@@ -129,20 +129,28 @@ def maybe_load_signer(
     *,
     required: bool,
     required_for: str = "live execution",
+    keystore_path: str | Path | None = None,
+    passphrase: str | None = None,
 ) -> TransactionSigner | None:
-    discovered_keystore = discover_local_keystore_path(settings)
-    keystore_path = str(discovered_keystore) if discovered_keystore is not None else settings.txn_keystore_path
-    passphrase = settings.txn_keystore_passphrase
+    resolved_keystore_path = None
+    if keystore_path is not None:
+        resolved_keystore_path = str(Path(keystore_path).expanduser())
+    else:
+        discovered_keystore = discover_local_keystore_path(settings)
+        resolved_keystore_path = str(discovered_keystore) if discovered_keystore is not None else settings.txn_keystore_path
 
-    if not keystore_path and required:
-        keystore_path = prompt_text("Keystore path", required=True)
-    elif keystore_path and required:
-        print(f"Using keystore: {keystore_path}")
-    if keystore_path and not passphrase:
+    if passphrase is None:
+        passphrase = settings.txn_keystore_passphrase
+
+    if not resolved_keystore_path and required:
+        resolved_keystore_path = prompt_text("Keystore path", required=True)
+    elif resolved_keystore_path and required:
+        print(f"Using keystore: {resolved_keystore_path}")
+    if resolved_keystore_path and not passphrase:
         passphrase = getpass.getpass("Keystore passphrase: ")
 
-    if keystore_path and passphrase:
-        return TransactionSigner(keystore_path, passphrase)
+    if resolved_keystore_path and passphrase:
+        return TransactionSigner(resolved_keystore_path, passphrase)
 
     if required:
         raise SystemExit(f"Keystore path and passphrase are required for {required_for}.")

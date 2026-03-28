@@ -142,10 +142,6 @@ class Settings(BaseSettings):
         default_factory=list,
         alias="TIDAL_API_CORS_ALLOWED_ORIGINS",
     )
-    tidal_api_operator_tokens: dict[str, str] = Field(
-        default_factory=dict,
-        alias="TIDAL_API_OPERATOR_TOKENS",
-    )
 
     @field_validator("tidal_api_cors_allowed_origins", mode="before")
     @classmethod

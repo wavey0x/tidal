@@ -7,6 +7,7 @@ import uvicorn
 
 from tidal.api.app import create_app
 from tidal.auction_cli import app as auction_app
+from tidal.auth_cli import app as auth_app
 from tidal.cli_context import CLIContext
 from tidal.cli_options import ConfigOption
 from tidal.kick_cli import app as kick_app
@@ -25,6 +26,7 @@ app.add_typer(auction_app, name="auction")
 app.add_typer(kick_app, name="kick")
 app.add_typer(logs_app, name="logs")
 app.add_typer(api_app, name="api")
+app.add_typer(auth_app, name="auth")
 
 
 @db_app.command("migrate")

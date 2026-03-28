@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -9,11 +10,12 @@ from tidal.api.services.action_audit import create_prepared_action
 from tidal.config import Settings
 from tidal.persistence import models
 
+_TEST_API_KEY = "secret-token"
+
 
 def _make_settings(tmp_path: Path) -> Settings:
     return Settings(
         db_path=tmp_path / "tidal.db",
-        tidal_api_operator_tokens={"tester": "secret-token"},
         rpc_url="",
     )
 
@@ -21,6 +23,16 @@ def _make_settings(tmp_path: Path) -> Settings:
 def _init_db(settings: Settings) -> None:
     engine = create_engine(settings.database_url, future=True)
     models.metadata.create_all(engine)
+    with Session(engine, future=True) as session:
+        session.execute(
+            models.api_keys.insert().values(
+                label="tester",
+                key_hash=hashlib.sha256(_TEST_API_KEY.encode()).hexdigest(),
+                key_prefix=_TEST_API_KEY[:8],
+                created_at="2026-03-28T00:00:00+00:00",
+            )
+        )
+        session.commit()
 
 
 def _seed_dashboard_data(settings: Settings) -> None:

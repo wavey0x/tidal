@@ -28,7 +28,6 @@ def get_session(database: Database = Depends(get_database)) -> Iterator[Session]
 
 def get_operator(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    settings: Settings = Depends(get_settings),
+    session: Session = Depends(get_session),
 ) -> OperatorIdentity:
-    return authenticate_operator(credentials, settings)
-
+    return authenticate_operator(credentials, session)

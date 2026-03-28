@@ -14,6 +14,7 @@ from web3 import Web3
 from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_FACTORY_ABI, ERC20_ABI, MULTICALL3_ABI
 from tidal.constants import YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS
 from tidal.normalizers import normalize_address, short_address
+from tidal.time import utcnow_iso
 from tidal.transaction_service.signer import TransactionSigner
 
 NEW_AUCTION_FACTORY_ADDRESS = "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
@@ -76,8 +77,10 @@ class AuctionDeployPreview:
 @dataclass(slots=True)
 class AuctionDeployExecution:
     tx_hash: str
+    broadcast_at: str
     receipt_status: int
     block_number: int | None
+    gas_used: int | None
 
 
 def chunked(items: list[Any], size: int) -> list[list[Any]]:
@@ -382,11 +385,14 @@ def send_live_deployment(
     tx_hash = w3.eth.send_raw_transaction(signed_tx).hex()
     if not tx_hash.startswith("0x"):
         tx_hash = "0x" + tx_hash
+    broadcast_at = utcnow_iso()
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=receipt_timeout)
     return AuctionDeployExecution(
         tx_hash=tx_hash,
+        broadcast_at=broadcast_at,
         receipt_status=int(receipt["status"]),
         block_number=receipt.get("blockNumber"),
+        gas_used=receipt.get("gasUsed"),
     )
 
 

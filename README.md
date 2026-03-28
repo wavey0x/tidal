@@ -91,7 +91,8 @@ Examples:
 - `tidal kick daemon --broadcast` — run the kick service continuously
 - `tidal auction deploy --want 0xWant --receiver 0xReceiver` — preview or broadcast a single auction deployment
 - `tidal auction enable-tokens 0x...` — inspect an auction and queue `enable(address)` calls for relevant sell tokens
-- `tidal auction sweep-and-settle 0xAuction 0xToken` — preview or broadcast a manual `sweepAndSettle()` transaction
+- `tidal auction settle 0xAuction` — inspect the active lot and preview the correct settlement action
+- `tidal auction settle 0xAuction --broadcast` — broadcast `settle()` or `sweepAndSettle()` when the active lot is currently settleable
 - `tidal logs kicks --limit 20` — inspect recent kick attempts, including failures and quote URLs
 - `tidal logs scans --limit 20` — inspect recent scan runs
 - `tidal logs show <run_id>` — inspect one kick or scan run in detail

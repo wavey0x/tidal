@@ -241,6 +241,14 @@ def kick_run(
         signer=signer,
         required_for="broadcast kick execution",
     )
+    execution_sender = None
+    if broadcast:
+        execution_sender = cli_ctx.resolve_sender(
+            sender=normalized_sender,
+            account_name=account,
+            keystore_path=keystore,
+            signer=signer,
+        )
 
     inspection_data = None
     if explain:
@@ -305,6 +313,7 @@ def kick_run(
         data = {
             "run": _to_dict(result),
             "rows": run_rows,
+            "sender": execution_sender,
         }
         if inspection_data is not None:
             data["inspection"] = asdict(inspection_data)
@@ -318,6 +327,7 @@ def kick_run(
             auction_address=normalized_auction_address,
             run_rows=run_rows,
             verbose=verbose,
+            sender=execution_sender,
         )
         if inspection_data is not None:
             typer.echo()
@@ -378,6 +388,14 @@ def kick_daemon(
         signer=signer,
         required_for="broadcast kick daemon execution",
     )
+    execution_sender = None
+    if broadcast:
+        execution_sender = cli_ctx.resolve_sender(
+            sender=normalized_sender,
+            account_name=account,
+            keystore_path=keystore,
+            signer=signer,
+        )
     sleep_seconds = interval_seconds or 1800
 
     async def run_loop() -> None:
@@ -412,7 +430,11 @@ def kick_daemon(
                 )
                 run_rows = _load_run_rows(session, result.run_id)
             if json_output:
-                emit_json("kick.daemon", status="ok" if result.candidates_found else "noop", data={"run": asdict(result), "rows": run_rows})
+                emit_json(
+                    "kick.daemon",
+                    status="ok" if result.candidates_found else "noop",
+                    data={"run": asdict(result), "rows": run_rows, "sender": execution_sender},
+                )
             else:
                 render_kick_run_summary(
                     result=result,
@@ -422,6 +444,7 @@ def kick_daemon(
                     auction_address=normalized_auction_address,
                     run_rows=run_rows,
                     verbose=verbose,
+                    sender=execution_sender,
                 )
             await asyncio.sleep(sleep_seconds)
 

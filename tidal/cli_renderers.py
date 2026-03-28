@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -14,6 +14,18 @@ from tidal.normalizers import short_address
 from tidal.ops.kick_inspect import KickInspectEntry, KickInspectResult
 from tidal.ops.logs import KickLogRecord, RunDetail, ScanRunRecord, ScanRunDetail, TxnRunDetail
 from tidal.transaction_service.types import SourceType
+
+
+@dataclass(slots=True)
+class BroadcastRecord:
+    operation: str | None
+    sender: str | None
+    tx_hash: str
+    broadcast_at: str | None
+    receipt_status: str | None = None
+    block_number: int | None = None
+    gas_used: int | None = None
+    gas_estimate: int | None = None
 
 
 def _jsonable(value: Any) -> Any:
@@ -69,6 +81,68 @@ def render_scan_summary(result: Any) -> None:
     )
 
 
+def _format_broadcast_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, int):
+        return f"{value:,}"
+    return str(value)
+
+
+def render_broadcast_records(records: list[BroadcastRecord]) -> None:
+    if not records:
+        return
+
+    for index, record in enumerate(records, 1):
+        if index > 1:
+            typer.echo()
+        heading = "Transaction:" if len(records) == 1 else f"Transaction {index}:"
+        typer.echo(heading)
+        if record.operation:
+            typer.echo(f"  Operation:    {record.operation}")
+        typer.echo(f"  Sender:       {_format_broadcast_value(record.sender)}")
+        typer.echo(f"  Tx hash:      {record.tx_hash}")
+        typer.echo(f"  Broadcast at: {_format_broadcast_value(record.broadcast_at)}")
+        if record.receipt_status is not None:
+            typer.echo(f"  Receipt:      {record.receipt_status}")
+        if record.block_number is not None:
+            typer.echo(f"  Block:        {_format_broadcast_value(record.block_number)}")
+        if record.gas_used is not None:
+            typer.echo(f"  Gas used:     {_format_broadcast_value(record.gas_used)}")
+        if record.gas_estimate is not None:
+            typer.echo(f"  Gas estimate: {_format_broadcast_value(record.gas_estimate)}")
+
+
+def kick_broadcast_records(run_rows: list[dict[str, object]], *, sender: str | None) -> list[BroadcastRecord]:
+    records: list[BroadcastRecord] = []
+    seen_tx_hashes: set[str] = set()
+    for row in run_rows:
+        tx_hash = row.get("tx_hash")
+        if not tx_hash:
+            continue
+        tx_hash_str = str(tx_hash)
+        if tx_hash_str in seen_tx_hashes:
+            continue
+        seen_tx_hashes.add(tx_hash_str)
+        operation_type = str(row.get("operation_type") or "kick").replace("_", "-")
+        block_number = row.get("block_number")
+        gas_used = row.get("gas_used")
+        gas_estimate = row.get("gas_estimate")
+        records.append(
+            BroadcastRecord(
+                operation=operation_type,
+                sender=sender,
+                tx_hash=tx_hash_str,
+                broadcast_at=str(row.get("created_at")) if row.get("created_at") else None,
+                receipt_status=str(row.get("status")) if row.get("status") else None,
+                block_number=int(block_number) if block_number is not None else None,
+                gas_used=int(gas_used) if gas_used is not None else None,
+                gas_estimate=int(gas_estimate) if gas_estimate is not None else None,
+            )
+        )
+    return records
+
+
 def render_kick_run_summary(
     *,
     result: Any,
@@ -78,9 +152,9 @@ def render_kick_run_summary(
     auction_address: str | None,
     run_rows: list[dict[str, object]],
     verbose: bool,
+    sender: str | None = None,
 ) -> None:
     statuses = {str(row["status"]) for row in run_rows}
-    tx_hashes = [str(row["tx_hash"]) for row in run_rows if row.get("tx_hash")]
     skipped_count = sum(1 for row in run_rows if str(row.get("status")) == "USER_SKIPPED")
     type_label = source_type.replace("_", "-") if source_type else None
     eligible_candidates_found = getattr(result, "eligible_candidates_found", None)
@@ -103,9 +177,6 @@ def render_kick_run_summary(
         typer.echo("Failed.")
     else:
         typer.echo("Completed.")
-
-    if tx_hashes:
-        typer.echo(f"Tx hash:      {tx_hashes[0]}")
 
     typer.echo(f"Run ID:       {result.run_id}")
     if type_label:
@@ -150,6 +221,12 @@ def render_kick_run_summary(
         if quote_url:
             typer.echo("Quote URL:")
             typer.echo(quote_url)
+
+    if live:
+        broadcast_records = kick_broadcast_records(run_rows, sender=sender)
+        if broadcast_records:
+            typer.echo()
+            render_broadcast_records(broadcast_records)
 
     if verbose and result.failure_summary:
         typer.echo("Failure summary:")

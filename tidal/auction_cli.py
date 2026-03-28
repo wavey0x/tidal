@@ -8,7 +8,13 @@ from dataclasses import asdict
 import typer
 from eth_utils import to_checksum_address
 
-from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
+from tidal.auction_settlement import (
+    build_auction_settlement_call,
+    decide_auction_settlement,
+    format_operation_type,
+    inspect_auction_settlement,
+    normalize_settlement_method,
+)
 from tidal.cli_context import CLIContext
 from tidal.cli_options import (
     AccountOption,
@@ -20,7 +26,7 @@ from tidal.cli_options import (
     PasswordFileOption,
     SenderOption,
 )
-from tidal.cli_renderers import emit_json
+from tidal.cli_renderers import BroadcastRecord, emit_json, render_broadcast_records
 from tidal.errors import AddressNormalizationError, ConfigurationError
 from tidal.logging import OutputMode, configure_logging
 from tidal.normalizers import normalize_address
@@ -41,6 +47,7 @@ from tidal.ops.deploy import (
     summarize_matches,
 )
 from tidal.runtime import build_web3_client
+from tidal.time import utcnow_iso
 from tidal.transaction_service.kicker import _DEFAULT_PRIORITY_FEE_GWEI, _format_execution_error
 
 app = typer.Typer(help="Auction operator commands", no_args_is_help=True)
@@ -120,30 +127,31 @@ def _render_deploy_preview(preview) -> None:
         typer.echo(f"Gas estimate failed: {preview.gas_error}")
 
 
-async def _preview_sweep_and_settle(
+async def _preview_settlement_execution(
     *,
     settings,
     auction_address: str,
-    token_address: str,
+    decision,
     sender_address: str | None,
     broadcast: bool,
     signer,
     receipt_timeout: int,
 ) -> dict[str, object]:
     web3_client = build_web3_client(settings)
-    kicker_address = to_checksum_address(settings.auction_kicker_address)
-    contract = web3_client.contract(kicker_address, AUCTION_KICKER_ABI)
-    tx_data = contract.functions.sweepAndSettle(
-        to_checksum_address(auction_address),
-        to_checksum_address(token_address),
-    )._encode_transaction_data()
+    settlement_call = build_auction_settlement_call(
+        settings=settings,
+        web3_client=web3_client,
+        auction_address=auction_address,
+        decision=decision,
+    )
 
     result: dict[str, object] = {
-        "auction_kicker": kicker_address,
+        "operation_type": settlement_call.operation_type,
         "auction": to_checksum_address(auction_address),
-        "token": to_checksum_address(token_address),
+        "token": to_checksum_address(settlement_call.token_address),
         "sender": to_checksum_address(sender_address) if sender_address else None,
-        "data": tx_data,
+        "target": to_checksum_address(settlement_call.target_address),
+        "data": settlement_call.data,
     }
 
     gas_estimate = None
@@ -154,8 +162,8 @@ async def _preview_sweep_and_settle(
             gas_estimate = await web3_client.estimate_gas(
                 {
                     "from": to_checksum_address(sender_address),
-                    "to": kicker_address,
-                    "data": tx_data,
+                    "to": to_checksum_address(settlement_call.target_address),
+                    "data": settlement_call.data,
                     "chainId": settings.chain_id,
                 }
             )
@@ -183,11 +191,11 @@ async def _preview_sweep_and_settle(
         return result
 
     if signer is None:
-        raise SystemExit("Signer is required for broadcast sweep-and-settle execution.")
+        raise SystemExit("Signer is required for broadcast settlement execution.")
 
     tx = {
-        "to": kicker_address,
-        "data": tx_data,
+        "to": to_checksum_address(settlement_call.target_address),
+        "data": settlement_call.data,
         "chainId": settings.chain_id,
         "gas": gas_limit or settings.txn_max_gas_limit,
         "maxFeePerGas": int((max(settings.txn_max_base_fee_gwei, base_fee_gwei) + settings.txn_max_priority_fee_gwei) * 10**9),
@@ -197,12 +205,74 @@ async def _preview_sweep_and_settle(
     }
     signed_tx = signer.sign_transaction(tx)
     tx_hash = await web3_client.send_raw_transaction(signed_tx)
+    result["broadcast_at"] = utcnow_iso()
     receipt = await web3_client.get_transaction_receipt(tx_hash, timeout_seconds=receipt_timeout)
     result["tx_hash"] = tx_hash
     result["receipt_status"] = "CONFIRMED" if receipt.get("status") == 1 else "REVERTED"
     result["block_number"] = receipt.get("blockNumber")
     result["gas_used"] = receipt.get("gasUsed")
     return result
+
+
+def _render_settlement_summary(
+    *,
+    inspection,
+    decision,
+    execution: dict[str, object] | None,
+    warnings: list[str],
+    broadcast: bool,
+    status: str,
+) -> None:
+    typer.echo(f"Auction:       {to_checksum_address(inspection.auction_address)}")
+    typer.echo(f"Method:        {format_operation_type(decision.operation_type)}")
+    typer.echo(f"Reason:        {decision.reason}")
+    typer.echo(f"Active:        {'yes' if inspection.is_active_auction else 'no' if inspection.is_active_auction is False else 'unknown'}")
+    typer.echo(f"Active token:  {to_checksum_address(inspection.active_token) if inspection.active_token else '-'}")
+    typer.echo(
+        "Active tokens: "
+        + (", ".join(to_checksum_address(token) for token in inspection.active_tokens) if inspection.active_tokens else "-")
+    )
+    typer.echo(f"Available:     {inspection.active_available_raw if inspection.active_available_raw is not None else 'unavailable'}")
+    typer.echo(f"Price:         {inspection.active_price_raw if inspection.active_price_raw is not None else 'unavailable'}")
+    typer.echo(f"Min price:     {inspection.minimum_price_raw if inspection.minimum_price_raw is not None else 'unavailable'}")
+
+    if execution is not None:
+        typer.echo(f"Sender:        {execution.get('sender') or '-'}")
+        typer.echo(f"Target:        {execution.get('target') or '-'}")
+        typer.echo(f"Data:          {execution.get('data') or '-'}")
+        typer.echo(f"Gas estimate:  {execution.get('gas_estimate') or 'unavailable'}")
+        typer.echo(f"Gas limit:     {execution.get('gas_limit') or 'unavailable'}")
+        typer.echo(f"Base fee:      {float(execution['base_fee_gwei']):.4f} gwei")
+        typer.echo(f"Priority fee:  {float(execution['priority_fee_gwei']):.4f} gwei")
+
+    for warning in warnings:
+        typer.echo(f"Warning:       {warning}")
+
+    if decision.status == "noop":
+        typer.echo("No settlement action is currently available.")
+    elif decision.status == "error":
+        typer.echo("Settlement inspection failed.")
+    elif not broadcast:
+        typer.echo("Dry run only. No transaction was sent.")
+    elif status == "noop":
+        typer.echo("Aborted before broadcast.")
+
+    if execution is not None and execution.get("tx_hash"):
+        typer.echo()
+        render_broadcast_records(
+            [
+                BroadcastRecord(
+                    operation=format_operation_type(decision.operation_type),
+                    sender=str(execution.get("sender")) if execution.get("sender") else None,
+                    tx_hash=str(execution["tx_hash"]),
+                    broadcast_at=str(execution.get("broadcast_at")) if execution.get("broadcast_at") else None,
+                    receipt_status=str(execution.get("receipt_status")) if execution.get("receipt_status") else None,
+                    block_number=int(execution["block_number"]) if execution.get("block_number") is not None else None,
+                    gas_used=int(execution["gas_used"]) if execution.get("gas_used") is not None else None,
+                    gas_estimate=int(execution["gas_estimate"]) if execution.get("gas_estimate") is not None else None,
+                )
+            ]
+        )
 
 
 @app.command("deploy")
@@ -325,10 +395,14 @@ def deploy(
         else:
             status = "noop"
 
+    execution_data = None
+    if execution is not None:
+        execution_data = asdict(execution)
+        execution_data["sender"] = preview_sender
     data = {
         "preview": asdict(initial_preview),
         "want_symbol": want_symbol,
-        "execution": asdict(execution) if execution is not None else None,
+        "execution": execution_data,
     }
     if json_output:
         emit_json("auction.deploy", status=status, data=data, warnings=warnings)
@@ -343,9 +417,21 @@ def deploy(
         elif status == "noop":
             typer.echo("Aborted before broadcast.")
         elif execution is not None:
-            typer.echo(f"Submitted tx: {execution.tx_hash}")
-            typer.echo(f"Receipt status: {execution.receipt_status}")
-            typer.echo(f"Block number: {execution.block_number}")
+            typer.echo()
+            render_broadcast_records(
+                [
+                    BroadcastRecord(
+                        operation="deploy",
+                        sender=preview_sender,
+                        tx_hash=execution.tx_hash,
+                        broadcast_at=execution.broadcast_at,
+                        receipt_status="CONFIRMED" if execution.receipt_status == 1 else "REVERTED",
+                        block_number=execution.block_number,
+                        gas_used=execution.gas_used,
+                        gas_estimate=initial_preview.gas_estimate,
+                    )
+                ]
+            )
 
     if execution is not None and execution.receipt_status != 1:
         raise typer.Exit(code=4)
@@ -451,6 +537,7 @@ def enable_tokens(
     status = "ok"
     tx_hash = None
     tx_gas_estimate = None
+    tx_broadcast_at = None
 
     if not eligible:
         status = "noop"
@@ -469,6 +556,7 @@ def enable_tokens(
                 commands=commands,
                 state=state,
             )
+            tx_broadcast_at = utcnow_iso()
         else:
             status = "noop"
     elif preview is not None and not preview.call_succeeded:
@@ -487,6 +575,8 @@ def enable_tokens(
         "state_slots": len(state),
         "tx_hash": tx_hash,
         "tx_gas_estimate": tx_gas_estimate,
+        "tx_sender": preview_sender,
+        "tx_broadcast_at": tx_broadcast_at,
     }
     if json_output:
         emit_json("auction.enable-tokens", status=status, data=data, warnings=warnings)
@@ -529,9 +619,18 @@ def enable_tokens(
         elif status == "noop":
             typer.echo("Aborted before broadcast.")
         elif tx_hash is not None:
-            typer.echo("Transaction sent:")
-            typer.echo(f"  tx hash       {tx_hash}")
-            typer.echo(f"  gas estimate  {tx_gas_estimate}")
+            typer.echo()
+            render_broadcast_records(
+                [
+                    BroadcastRecord(
+                        operation="enable-tokens",
+                        sender=preview_sender,
+                        tx_hash=tx_hash,
+                        broadcast_at=tx_broadcast_at,
+                        gas_estimate=tx_gas_estimate,
+                    )
+                ]
+            )
 
     if status == "error":
         raise typer.Exit(code=4)
@@ -539,13 +638,14 @@ def enable_tokens(
         raise typer.Exit(code=2)
 
 
-@app.command("sweep-and-settle")
-def sweep_and_settle(
+@app.command("settle")
+def settle(
     auction_address: str = typer.Argument(..., metavar="AUCTION", help="Auction contract address."),
-    token_address: str = typer.Argument(..., metavar="TOKEN", help="Sell token to sweep and settle."),
     config: ConfigOption = None,
     broadcast: BroadcastOption = False,
     bypass_confirmation: BypassConfirmationOption = False,
+    token_address: str | None = typer.Option(None, "--token", help="Expected active token address."),
+    method: str = typer.Option("auto", "--method", help="Settlement method: auto, settle, or sweep-and-settle."),
     sender: SenderOption = None,
     account: AccountOption = None,
     keystore: KeystoreOption = None,
@@ -553,7 +653,7 @@ def sweep_and_settle(
     json_output: JsonOption = False,
     receipt_timeout: int = typer.Option(120, "--receipt-timeout", min=1, help="Seconds to wait for a receipt after broadcasting."),
 ) -> None:
-    """Call AuctionKicker.sweepAndSettle() for a specific auction token."""
+    """Resolve the current active lot if it is settleable."""
 
     configure_logging(output_mode=OutputMode.TEXT)
     if bypass_confirmation and not broadcast:
@@ -566,11 +666,15 @@ def sweep_and_settle(
         raise typer.Exit(code=1) from exc
 
     normalized_auction_address = _normalize_address_value(auction_address, param_hint="AUCTION")
-    normalized_token_address = _normalize_address_value(token_address, param_hint="TOKEN")
+    normalized_token_address = _normalize_address_value(token_address, param_hint="--token") if token_address else None
+    try:
+        normalized_method = normalize_settlement_method(method)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--method") from exc
     normalized_sender = _normalize_address_value(sender, param_hint="--sender") if sender else None
     signer = cli_ctx.resolve_signer(
         required=broadcast,
-        required_for="broadcast sweep-and-settle execution",
+        required_for="broadcast settlement execution",
         account_name=account,
         keystore_path=keystore,
         password_file=password_file,
@@ -578,7 +682,7 @@ def sweep_and_settle(
     normalized_sender = cli_ctx.validate_sender(
         sender=normalized_sender,
         signer=signer,
-        required_for="broadcast sweep-and-settle execution",
+        required_for="broadcast settlement execution",
     )
     preview_sender = cli_ctx.resolve_sender(
         sender=normalized_sender,
@@ -586,67 +690,82 @@ def sweep_and_settle(
         keystore_path=keystore,
         signer=signer,
     )
-    result = asyncio.run(
-        _preview_sweep_and_settle(
-            settings=cli_ctx.settings,
-            auction_address=normalized_auction_address,
-            token_address=normalized_token_address,
-            sender_address=preview_sender,
-            broadcast=False,
-            signer=signer,
-            receipt_timeout=receipt_timeout,
+    inspection = asyncio.run(
+        inspect_auction_settlement(
+            build_web3_client(cli_ctx.settings),
+            cli_ctx.settings,
+            normalized_auction_address,
         )
     )
+    decision = decide_auction_settlement(
+        inspection,
+        token_address=normalized_token_address,
+        method=normalized_method,
+    )
+
+    warnings: list[str] = []
+    execution = None
+    if decision.status == "actionable":
+        execution = asyncio.run(
+            _preview_settlement_execution(
+                settings=cli_ctx.settings,
+                auction_address=normalized_auction_address,
+                decision=decision,
+                sender_address=preview_sender,
+                broadcast=False,
+                signer=signer,
+                receipt_timeout=receipt_timeout,
+            )
+        )
+        if execution.get("warning"):
+            warnings.append(str(execution["warning"]))
 
     status = "ok"
-    if result.get("warning"):
+    if decision.status == "noop":
+        status = "noop"
+    elif decision.status == "error":
         status = "error"
 
-    if broadcast:
+    if broadcast and decision.status == "actionable":
+        action_label = format_operation_type(decision.operation_type)
         prompt = (
-            "Preview failed. Broadcast sweep-and-settle transaction anyway?"
-            if result.get("warning")
-            else "Broadcast sweep-and-settle transaction?"
+            f"Preview failed. Broadcast {action_label} transaction anyway?"
+            if warnings
+            else f"Broadcast {action_label} transaction?"
         )
         if bypass_confirmation or typer.confirm(prompt, default=False):
-            result = asyncio.run(
-                _preview_sweep_and_settle(
+            execution = asyncio.run(
+                _preview_settlement_execution(
                     settings=cli_ctx.settings,
                     auction_address=normalized_auction_address,
-                    token_address=normalized_token_address,
+                    decision=decision,
                     sender_address=preview_sender,
                     broadcast=True,
                     signer=signer,
                     receipt_timeout=receipt_timeout,
                 )
             )
-            status = "ok" if result.get("receipt_status") == "CONFIRMED" else "error"
+            status = "ok" if execution.get("receipt_status") == "CONFIRMED" else "error"
+            warnings = [str(execution["warning"])] if execution.get("warning") else warnings
         else:
             status = "noop"
 
+    data = {
+        "inspection": asdict(inspection),
+        "decision": asdict(decision),
+        "execution": execution,
+    }
     if json_output:
-        emit_json("auction.sweep-and-settle", status=status, data=result, warnings=[str(result["warning"])] if result.get("warning") else [])
+        emit_json("auction.settle", status=status, data=data, warnings=warnings)
     else:
-        typer.echo(f"AuctionKicker: {result['auction_kicker']}")
-        typer.echo(f"Auction:       {result['auction']}")
-        typer.echo(f"Sell token:    {result['token']}")
-        typer.echo(f"Sender:        {result['sender'] or '-'}")
-        typer.echo(f"Gas estimate:  {result.get('gas_estimate') or 'unavailable'}")
-        typer.echo(f"Gas limit:     {result.get('gas_limit') or 'unavailable'}")
-        typer.echo(f"Base fee:      {float(result['base_fee_gwei']):.4f} gwei")
-        typer.echo(f"Priority fee:  {float(result['priority_fee_gwei']):.4f} gwei")
-        typer.echo(f"Data:          {result['data']}")
-        if result.get("warning"):
-            typer.echo(f"Warning:       {result['warning']}")
-        if not broadcast:
-            typer.echo("Dry run only. No transaction was sent.")
-        elif status == "noop":
-            typer.echo("Aborted before broadcast.")
-        else:
-            typer.echo(f"Submitted:     {result['tx_hash']}")
-            typer.echo(f"Receipt:       {result['receipt_status']}")
-            typer.echo(f"Block:         {result.get('block_number')}")
-            typer.echo(f"Gas used:      {result.get('gas_used')}")
+        _render_settlement_summary(
+            inspection=inspection,
+            decision=decision,
+            execution=execution,
+            warnings=warnings,
+            broadcast=broadcast,
+            status=status,
+        )
 
     if status == "error":
         raise typer.Exit(code=4)

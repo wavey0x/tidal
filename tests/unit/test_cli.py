@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tidal.cli_renderers import render_kick_run_summary
+from tidal.cli_renderers import BroadcastRecord, render_broadcast_records, render_kick_run_summary
 from tidal.kick_cli import _make_confirm_fn
 
 
@@ -207,6 +207,73 @@ def test_render_kick_run_summary_reports_target_filters(capsys):
     output = capsys.readouterr().out
     assert "Source:       0x1111111111111111111111111111111111111111" in output
     assert "Auction:      0x2222222222222222222222222222222222222222" in output
+
+
+def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
+    render_broadcast_records(
+        [
+            BroadcastRecord(
+                operation="settle",
+                sender="0x1111111111111111111111111111111111111111",
+                tx_hash="0xabc",
+                broadcast_at="2026-03-28T15:04:05+00:00",
+                receipt_status="CONFIRMED",
+                block_number=12345,
+                gas_used=210000,
+                gas_estimate=240000,
+            )
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "Transaction:" in output
+    assert "Operation:    settle" in output
+    assert "Sender:       0x1111111111111111111111111111111111111111" in output
+    assert "Tx hash:      0xabc" in output
+    assert "Broadcast at: 2026-03-28T15:04:05+00:00" in output
+    assert "Receipt:      CONFIRMED" in output
+    assert "Block:        12,345" in output
+    assert "Gas used:     210,000" in output
+    assert "Gas estimate: 240,000" in output
+
+
+def test_render_kick_run_summary_shows_transaction_block(capsys):
+    result = SimpleNamespace(
+        run_id="run-tx",
+        candidates_found=1,
+        kicks_attempted=1,
+        kicks_succeeded=1,
+        kicks_failed=0,
+        failure_summary=None,
+    )
+
+    render_kick_run_summary(
+        result=result,
+        live=True,
+        source_type="strategy",
+        source_address=None,
+        auction_address=None,
+        run_rows=[
+            {
+                "status": "CONFIRMED",
+                "tx_hash": "0xabc",
+                "operation_type": "kick",
+                "block_number": 12345,
+                "gas_used": 180000,
+                "created_at": "2026-03-28T15:04:05+00:00",
+            }
+        ],
+        verbose=False,
+        sender="0x1111111111111111111111111111111111111111",
+    )
+
+    output = capsys.readouterr().out
+    assert "Transaction:" in output
+    assert "Operation:    kick" in output
+    assert "Sender:       0x1111111111111111111111111111111111111111" in output
+    assert "Tx hash:      0xabc" in output
+    assert "Broadcast at: 2026-03-28T15:04:05+00:00" in output
+    assert "Receipt:      CONFIRMED" in output
 
 
 def test_render_kick_run_summary_reports_single_failure_detail_and_quote_url(capsys):

@@ -52,11 +52,12 @@ tidal auction enable-tokens AUCTION [--extra-token TOKEN ...]
                             [--account NAME | --keystore FILE]
                             [--password-file FILE] [--json]
 
-tidal auction sweep-and-settle AUCTION TOKEN
-                               [--broadcast] [--bypass-confirmation]
-                               [--sender ADDRESS]
-                               [--account NAME | --keystore FILE]
-                               [--password-file FILE] [--json]
+tidal auction settle AUCTION [--token TOKEN]
+                            [--method auto|settle|sweep-and-settle]
+                            [--broadcast] [--bypass-confirmation]
+                            [--sender ADDRESS]
+                            [--account NAME | --keystore FILE]
+                            [--password-file FILE] [--json]
 
 tidal kick run [--source ADDRESS] [--auction ADDRESS] [--limit N]
                [--broadcast] [--bypass-confirmation]
@@ -262,7 +263,7 @@ File responsibilities:
 - `tidal/auction_cli.py`
   - `auction deploy`
   - `auction enable-tokens`
-  - `auction sweep-and-settle`
+  - `auction settle`
   - no large business-logic blocks
 
 - `tidal/ops/deploy.py`
@@ -484,22 +485,35 @@ Make the remaining auction mutation commands look and behave like the rest of th
    - execution result
    - warnings
    - per-token detail
-3. Normalize `sweep-and-settle` around the same flags:
+3. Add semantic `auction settle` orchestration around the same flags:
    - `--broadcast`
    - `--bypass-confirmation`
+   - `--token`
+   - `--method`
    - `--sender`
    - `--account`
    - `--keystore`
    - `--password-file`
    - `--json`
-4. Keep prompts minimal:
+4. Make `auction settle` pick the correct action automatically:
+   - no active lot -> noop
+   - sold-out active lot -> `settle()`
+   - active lot at or below floor -> `sweepAndSettle()`
+   - active lot above floor -> noop
+5. Standardize live-send output for every mutating command:
+   - sender
+   - tx hash
+   - broadcast timestamp
+   - receipt status when available
+   - block and gas-used when available
+6. Keep prompts minimal:
    - confirmation only
    - password only
-5. Ensure both commands have machine-readable output that does not require text scraping.
+7. Ensure both commands have machine-readable output that does not require text scraping.
 
 ### Done when
 
-- deploy, enable, sweep, and kick all use one safety and output model
+- deploy, enable, settle, and kick all use one safety and output model
 - automation can call any mutation command in JSON mode
 
 ## Phase 6: Docs, Cleanup, and Removal of Legacy Surface
@@ -583,7 +597,7 @@ At the end of the refactor, manually verify:
 1. `tidal kick inspect` explains an ineligible source clearly.
 2. `tidal logs show <run_id>` displays full quote URL and full failure reason.
 3. `tidal auction deploy` works in preview mode with only flags and no unnecessary prompts.
-4. `tidal auction enable-tokens` and `tidal auction sweep-and-settle` follow the same broadcast/confirmation/signer pattern.
+4. `tidal auction enable-tokens` and `tidal auction settle` follow the same broadcast/confirmation/signer pattern.
 
 ## Execution Order
 

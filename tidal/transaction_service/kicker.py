@@ -14,6 +14,7 @@ from eth_abi import decode as abi_decode
 from eth_utils import keccak, to_checksum_address
 from hexbytes import HexBytes
 
+from tidal.auction_settlement import decide_auction_settlement
 from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.chain.contracts.erc20 import ERC20Reader
 from tidal.chain.web3_client import Web3Client
@@ -666,59 +667,25 @@ class AuctionKicker:
             )
 
         if inspection.is_active_auction is True:
-            if len(inspection.active_tokens) > 1:
+            settlement_decision = decide_auction_settlement(inspection)
+            if settlement_decision.status == "error":
                 return self._fail(
                     run_id,
                     candidate,
                     now_iso,
                     status=KickStatus.ERROR,
-                    error_message="multiple active tokens detected for auction",
+                    error_message=settlement_decision.reason,
                 )
-
-            if inspection.active_token is None:
-                return self._fail(
-                    run_id,
-                    candidate,
-                    now_iso,
-                    status=KickStatus.ERROR,
-                    error_message="active auction token inspection failed",
-                )
-
-            if inspection.active_available_raw is None:
-                return self._fail(
-                    run_id,
-                    candidate,
-                    now_iso,
-                    status=KickStatus.ERROR,
-                    error_message="active auction available() read failed",
-                )
-
-            if inspection.minimum_price_raw is None:
-                return self._fail(
-                    run_id,
-                    candidate,
-                    now_iso,
-                    status=KickStatus.ERROR,
-                    error_message="auction minimumPrice() read failed",
-                )
-
-            if inspection.active_available_raw == 0:
-                settle_token = inspection.active_token
-            else:
-                if inspection.active_price_raw is None:
-                    return self._fail(
-                        run_id,
-                        candidate,
-                        now_iso,
-                        status=KickStatus.ERROR,
-                        error_message="active auction price() read failed",
-                    )
-                if inspection.active_price_raw <= inspection.minimum_price_raw:
+            if settlement_decision.status == "actionable":
+                if settlement_decision.operation_type == "settle":
+                    settle_token = settlement_decision.token_address
+                else:
                     return await self._prepare_sweep_and_settle(candidate, inspection)
+            else:
                 return KickResult(
                     kick_tx_id=0,
                     status=KickStatus.SKIP,
-                    error_message="auction already active",
+                    error_message=settlement_decision.reason,
                 )
 
         try:

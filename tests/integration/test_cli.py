@@ -1,11 +1,14 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+import tidal.auction_cli as auction_cli_module
 import tidal.kick_cli as kick_cli_module
 from tidal.cli import app
+from tidal.transaction_service.types import AuctionInspection
 
 
 def _write_txn_config(tmp_path: Path) -> Path:
@@ -218,3 +221,142 @@ def test_auction_enable_tokens_rejects_bypass_confirmation_without_broadcast() -
     assert result.exit_code != 0
     assert "Invalid value for --bypass-confirmation" in result.output
     assert "--broadcast" in result.output
+
+
+def test_auction_settle_requires_rpc_url(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RPC_URL", "")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("db_path: ./test.db\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["auction", "settle", "0x1111111111111111111111111111111111111111", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "RPC_URL is required" in result.output
+
+
+def test_auction_settle_rejects_invalid_token() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "auction",
+            "settle",
+            "0x1111111111111111111111111111111111111111",
+            "--token",
+            "not-an-address",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "invalid address" in result.output
+
+
+def test_auction_settle_rejects_invalid_method() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "auction",
+            "settle",
+            "0x1111111111111111111111111111111111111111",
+            "--method",
+            "liquidate",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for --method" in result.output
+    assert "expected 'auto', 'settle', or 'sweep-and-settle'" in result.output
+
+
+def test_auction_settle_rejects_bypass_confirmation_without_broadcast() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "auction",
+            "settle",
+            "0x1111111111111111111111111111111111111111",
+            "--bypass-confirmation",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for --bypass-confirmation" in result.output
+    assert "--broadcast" in result.output
+
+
+def test_auction_settle_json_dry_run_uses_auto_method(tmp_path, monkeypatch) -> None:
+    config_path = _write_txn_config(tmp_path)
+
+    async def fake_inspect_auction_settlement(web3_client, settings, auction_address):  # noqa: ANN001, ANN201
+        del web3_client, settings
+        return AuctionInspection(
+            auction_address=auction_address,
+            is_active_auction=True,
+            active_tokens=("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",),
+            active_token="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            active_available_raw=0,
+            active_price_raw=123,
+            minimum_price_raw=100,
+        )
+
+    async def fake_preview_settlement_execution(**kwargs):  # noqa: ANN003, ANN201
+        del kwargs
+        return {
+            "operation_type": "settle",
+            "auction": "0x1111111111111111111111111111111111111111",
+            "token": "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa",
+            "sender": None,
+            "target": "0x1111111111111111111111111111111111111111",
+            "data": "0xdeadbeef",
+            "gas_estimate": None,
+            "gas_limit": None,
+            "base_fee_gwei": 0.0,
+            "priority_fee_gwei": 0.0,
+        }
+
+    monkeypatch.setattr(auction_cli_module, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auction_cli_module, "build_web3_client", lambda settings: object())
+    monkeypatch.setattr(auction_cli_module, "inspect_auction_settlement", fake_inspect_auction_settlement)
+    monkeypatch.setattr(auction_cli_module, "_preview_settlement_execution", fake_preview_settlement_execution)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "auction",
+            "settle",
+            "0x1111111111111111111111111111111111111111",
+            "--json",
+            "--config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["command"] == "auction.settle"
+    assert payload["status"] == "ok"
+    assert payload["data"]["decision"]["operation_type"] == "settle"
+    assert payload["data"]["execution"]["data"] == "0xdeadbeef"
+
+
+def test_auction_legacy_sweep_and_settle_command_is_removed() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "auction",
+            "sweep-and-settle",
+            "0x1111111111111111111111111111111111111111",
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such command 'sweep-and-settle'" in result.output

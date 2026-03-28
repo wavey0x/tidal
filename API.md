@@ -248,7 +248,7 @@ GET  /health
 
 Outside the versioned prefix. Returns 200 when the server is ready to accept requests. Needed for deployment readiness checks.
 
-### Read endpoints
+### Read endpoints (public, no auth)
 
 ```text
 GET  /api/v1/tidal/dashboard
@@ -260,7 +260,7 @@ GET  /api/v1/tidal/strategies/{strategy}/deploy-defaults
 POST /api/v1/tidal/kick/inspect
 ```
 
-### Prepare endpoints
+### Prepare endpoints (auth required)
 
 ```text
 POST /api/v1/tidal/kick/prepare
@@ -275,7 +275,7 @@ Notes:
 - `auctions/deploy/prepare` is the generic CLI/operator endpoint
 - the UI should fetch defaults first, then call the generic deploy prepare endpoint
 
-### Action lifecycle endpoints
+### Action lifecycle endpoints (auth required)
 
 ```text
 GET  /api/v1/tidal/actions?limit=&offset=&operator=&status=&action_type=

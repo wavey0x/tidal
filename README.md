@@ -25,16 +25,20 @@ Monorepo for the Yearn tidal. It contains the scanner that builds the dataset, t
    ```bash
    pip install -e ".[dev]"
    ```
-3. Edit `config.yaml` to configure operational settings. Copy `.env.example` to `.env` and set `RPC_URL`.
+3. Edit `config.yaml` to configure operational settings. Create `.env` and set `RPC_URL`.
 4. Run migrations:
    ```bash
    tidal-server db migrate
    ```
-5. Run one scan:
+5. Create an API key:
+   ```bash
+   tidal-server auth create --label yourname
+   ```
+6. Run one scan:
    ```bash
    tidal-server scan run
    ```
-6. Start the control-plane API:
+7. Start the control-plane API:
    ```bash
    tidal-server api serve
    ```
@@ -42,8 +46,8 @@ Monorepo for the Yearn tidal. It contains the scanner that builds the dataset, t
 Operator CLI installs use `tidal`, not `tidal-server`. Configure them with:
 
 ```bash
-export TIDAL_API_BASE_URL=http://localhost:8787
-export TIDAL_API_KEY=your-key
+export TIDAL_API_BASE_URL=https://api.tidal.wavey.info
+export TIDAL_API_KEY=<key from step 5>
 ```
 
 ## Auction Pricing Policy
@@ -109,6 +113,9 @@ Server/admin CLI:
 - `tidal-server scan daemon --interval-seconds 300`
 - `tidal-server kick daemon --broadcast`
 - `tidal-server api serve`
+- `tidal-server auth create --label <name>`
+- `tidal-server auth list`
+- `tidal-server auth revoke <label>`
 
 Broadcasting commands use a Foundry-style wallet surface: `--sender`, `--account`, `--keystore`, and `--password-file`.
 
@@ -141,8 +148,7 @@ For local dev, either:
 
 - set `VITE_TIDAL_API_BASE_URL` to your deployed control-plane API, for example `https://api.tidal.wavey.info/api/v1/tidal`, or
 - keep the default `/api/v1/tidal` base path and point the Vite proxy at your local API with `TIDAL_API_PROXY_TARGET`
-- set `VITE_TIDAL_API_KEY` when the UI should attach a bearer token to API requests
-  Legacy `VITE_TIDAL_API_TOKEN` is still accepted by the frontend for compatibility.
+- set `VITE_TIDAL_API_KEY` if the UI needs to call authenticated endpoints (prepare/broadcast). Dashboard and log reads are public and do not require a key.
 
 ## Multicall Batching
 
@@ -181,34 +187,34 @@ The `auction_version` field tracks the factory that produced each auction.
 
 Tuning knobs: `auction_factory_address` and `multicall_auction_batch_calls` in `config.yaml`.
 
-## Dashboard API
+## API
 
-The scanner writes all dashboard state to SQLite. The monorepo FastAPI control plane serves it at:
+The scanner writes all dashboard state to SQLite. The monorepo FastAPI control plane serves it at `/api/v1/tidal`.
+
+Public endpoints (no auth required):
 
 - `GET /health`
 - `GET /api/v1/tidal/dashboard`
 - `GET /api/v1/tidal/logs/kicks`
 - `GET /api/v1/tidal/logs/scans`
 - `GET /api/v1/tidal/logs/runs/{run_id}`
-- `GET /api/v1/tidal/actions`
+- `POST /api/v1/tidal/kick/inspect`
+- `GET /api/v1/tidal/kicks/{kick_id}/auctionscan`
+- `GET /api/v1/tidal/strategies/{strategy}/deploy-defaults`
+
+Authenticated endpoints (require `Authorization: Bearer <key>`):
+
 - `POST /api/v1/tidal/kick/prepare`
 - `POST /api/v1/tidal/auctions/deploy/prepare`
 - `POST /api/v1/tidal/auctions/{auction}/enable-tokens/prepare`
 - `POST /api/v1/tidal/auctions/{auction}/settle/prepare`
+- `GET /api/v1/tidal/actions`
+- `POST /api/v1/tidal/actions/{action_id}/broadcast`
+- `POST /api/v1/tidal/actions/{action_id}/receipt`
 
-Key tables the API reads:
-
-| Table | Purpose |
-|-------|---------|
-| `vaults` | Vault name and symbol |
-| `strategies` | Strategy name, vault FK, `auction_address` |
-| `fee_burners` | Fee burner name, `want_address`, `auction_address` |
-| `tokens` | Symbol, name, `price_usd`, `logo_url` |
-| `strategy_token_balances_latest` | Latest normalized balances per strategy-token pair |
-| `fee_burner_token_balances_latest` | Latest normalized balances per fee burner-token pair |
-| `scan_runs` | Scan metadata for diagnostics |
+API keys are stored in the database and managed via `tidal-server auth create/list/revoke`.
 
 SQLite concurrency:
 
 - WAL mode is enabled by this repo's migration.
-- The API should open the database in read-only mode with `busy_timeout` set.
+- The API opens the database with `busy_timeout` set.

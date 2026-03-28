@@ -36,13 +36,11 @@ or by keeping the default `/api/v1/tidal` base path and proxying locally:
 TIDAL_API_PROXY_TARGET=http://localhost:8787 npm run dev
 ```
 
-If the API expects a bearer token, also set:
+Dashboard and log reads are public. To call authenticated endpoints (prepare/broadcast), set:
 
 ```bash
 VITE_TIDAL_API_KEY=your-key npm run dev
 ```
-
-Legacy `VITE_TIDAL_API_TOKEN` is still accepted by the frontend for compatibility.
 
 ## Endpoints
 

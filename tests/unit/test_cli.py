@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -210,3 +211,43 @@ def test_echo_txn_text_summary_reports_target_filters(capsys):
     output = capsys.readouterr().out
     assert "Source:       0x1111111111111111111111111111111111111111" in output
     assert "Auction:      0x2222222222222222222222222222222222222222" in output
+
+
+def test_echo_txn_text_summary_reports_single_failure_detail_and_quote_url(capsys):
+    result = SimpleNamespace(
+        run_id="run-fail",
+        candidates_found=1,
+        kicks_attempted=1,
+        kicks_succeeded=0,
+        kicks_failed=1,
+        failure_summary={"curve quote unavailable (status: error)": 1},
+    )
+
+    _echo_txn_text_summary(
+        result=result,
+        live=True,
+        source_type="strategy",
+        source_address="0x1111111111111111111111111111111111111111",
+        auction_address=None,
+        run_rows=[
+            {
+                "status": "ERROR",
+                "tx_hash": None,
+                "error_message": "curve quote unavailable (status: error)",
+                "quote_response_json": json.dumps(
+                    {
+                        "requestUrl": (
+                            "https://prices.example.com/v1/quote"
+                            "?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true"
+                        )
+                    }
+                ),
+            }
+        ],
+        verbose=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Failed." in output
+    assert "Failure:      curve quote unavailable (status: error)" in output
+    assert "Quote URL:\nhttps://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true" in output

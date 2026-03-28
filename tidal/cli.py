@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
@@ -224,6 +225,25 @@ def _load_run_rows(session, run_id: str) -> list[dict[str, object]]:
     return [dict(row) for row in session.execute(stmt).mappings().all()]
 
 
+def _extract_quote_request_url(row: dict[str, object]) -> str | None:
+    raw_payload = row.get("quote_response_json")
+    if not raw_payload:
+        return None
+
+    try:
+        payload = json.loads(str(raw_payload))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    request_url = payload.get("requestUrl")
+    if not request_url:
+        return None
+    return str(request_url)
+
+
 def _echo_txn_text_summary(
     *,
     result,
@@ -283,6 +303,17 @@ def _echo_txn_text_summary(
     if deferred_same_auction_count:
         typer.echo(f"Deferred:     {deferred_same_auction_count}")
         typer.echo("Note:         only one lot per auction can be kicked at a time; deferred tokens stay pending for later runs.")
+
+    detailed_failure_rows = [row for row in run_rows if row.get("error_message")]
+    if len(detailed_failure_rows) == 1:
+        typer.echo(f"Failure:      {detailed_failure_rows[0]['error_message']}")
+
+    detailed_rows = [row for row in run_rows if row.get("operation_type", "kick") == "kick"]
+    if len(detailed_rows) == 1:
+        quote_request_url = _extract_quote_request_url(detailed_rows[0])
+        if quote_request_url:
+            typer.echo("Quote URL:")
+            typer.echo(quote_request_url)
 
     if verbose and result.failure_summary:
         typer.echo("Failure summary:")

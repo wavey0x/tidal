@@ -1,14 +1,17 @@
 import hashlib
+import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from tidal.api.app import create_app
 from tidal.api.services.action_audit import create_prepared_action
 from tidal.config import Settings
 from tidal.persistence import models
+from tidal.persistence.repositories import APIActionRepository
 
 _TEST_API_KEY = "secret-token"
 
@@ -187,3 +190,60 @@ def test_actions_broadcast_and_receipt_routes_update_status(tmp_path: Path) -> N
     assert list_response.status_code == 200
     assert list_response.json()["data"]["items"][0]["actionId"] == action_id
 
+
+def test_actions_broadcast_route_returns_json_when_database_is_locked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    app = create_app(settings)
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        action_id = create_prepared_action(
+            session,
+            operator_id="tester",
+            action_type="deploy",
+            sender="0x6000000000000000000000000000000000000006",
+            request_payload={"receiver": "0x6000000000000000000000000000000000000006"},
+            preview_payload={"receiver": "0x6000000000000000000000000000000000000006"},
+            transactions=[
+                {
+                    "operation": "deploy",
+                    "to": "0x7000000000000000000000000000000000000007",
+                    "data": "0xdeadbeef",
+                    "value": "0x0",
+                    "chainId": 1,
+                    "gasEstimate": 210000,
+                    "gasLimit": 252000,
+                }
+            ],
+            resource_address="0x6000000000000000000000000000000000000006",
+        )
+
+    def always_locked(self, action_id: str, *, tx_index: int, tx_hash: str, broadcast_at: str) -> None:
+        del self, action_id, tx_index, tx_hash, broadcast_at
+        raise OperationalError(
+            "UPDATE api_action_transactions SET tx_hash=?",
+            {},
+            sqlite3.OperationalError("database is locked"),
+        )
+
+    monkeypatch.setattr(APIActionRepository, "update_transaction_broadcast", always_locked)
+
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret-token"}
+    response = client.post(
+        f"/api/v1/tidal/actions/{action_id}/broadcast",
+        headers=headers,
+        json={
+            "sender": "0x6000000000000000000000000000000000000006",
+            "txHash": "0xabc",
+            "broadcastAt": "2026-03-28T00:01:00+00:00",
+            "txIndex": 0,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "error"
+    assert response.json()["detail"] == "database is locked; retry the request"

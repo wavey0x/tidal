@@ -47,6 +47,9 @@ class ControlPlaneClient:
         try:
             payload = response.json()
         except ValueError as exc:
+            if not response.is_success:
+                message = response.text.strip() or f"API returned HTTP {response.status_code}"
+                raise ControlPlaneError(f"API returned {response.status_code}: {message}") from exc
             raise ControlPlaneError(f"API returned invalid JSON ({response.status_code})") from exc
 
         if not response.is_success:
@@ -131,4 +134,3 @@ class ControlPlaneClient:
 
     def report_receipt(self, action_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", f"/api/v1/tidal/actions/{action_id}/receipt", json=body)
-

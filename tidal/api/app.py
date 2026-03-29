@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from tidal.api.errors import APIError
 from tidal.api.routes.actions import router as actions_router
@@ -18,6 +20,13 @@ from tidal.api.routes.logs import router as logs_router
 from tidal.api.services.action_audit import run_receipt_reconciler
 from tidal.config import Settings, load_settings
 from tidal.persistence.db import Database
+
+
+def _is_sqlite_locked_error(exc: OperationalError) -> bool:
+    original = getattr(exc, "orig", None)
+    if isinstance(original, sqlite3.OperationalError) and "database is locked" in str(original).lower():
+        return True
+    return "database is locked" in str(exc).lower()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -59,6 +68,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content={"status": "error", "warnings": [], "data": None, "detail": exc.message},
         )
 
+    @app.exception_handler(OperationalError)
+    async def handle_operational_error(_request: Request, exc: OperationalError) -> JSONResponse:
+        if _is_sqlite_locked_error(exc):
+            detail = "database is locked; retry the request"
+            status_code = 503
+        else:
+            detail = "database operation failed"
+            status_code = 500
+        return JSONResponse(
+            status_code=status_code,
+            content={"status": "error", "warnings": [], "data": None, "detail": detail},
+        )
+
     @app.get("/health")
     async def health() -> dict[str, object]:
         return {"status": "ok", "warnings": [], "data": {"ready": True}}
@@ -73,4 +95,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
-

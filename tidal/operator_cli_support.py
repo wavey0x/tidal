@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import typer
+from eth_utils import to_checksum_address
 
 from tidal.cli_renderers import BroadcastRecord, render_broadcast_records
 from tidal.control_plane.client import ControlPlaneClient
@@ -52,12 +53,9 @@ async def broadcast_prepared_action(
     receipt_timeout_seconds: int = 120,
 ) -> list[dict[str, Any]]:  # noqa: ANN001
     web3_client = build_web3_client(settings)
-    nonce = await web3_client.get_transaction_count(sender)
-    results: list[dict[str, Any]] = []
-    for tx_index, tx in enumerate(transactions):
-        tx_sender = str(tx.get("sender") or sender)
-        if tx_sender.lower() != sender.lower():
-            raise RuntimeError(f"prepared sender {tx_sender} does not match local sender {sender}")
+    try:
+        nonce = await web3_client.get_transaction_count(sender)
+        checksum_sender = to_checksum_address(sender)
 
         try:
             base_fee_wei = await web3_client.get_base_fee()
@@ -69,97 +67,115 @@ async def broadcast_prepared_action(
         except Exception:
             priority_fee_wei = int(settings.txn_max_priority_fee_gwei * 10**9)
         priority_fee_wei = min(priority_fee_wei, int(settings.txn_max_priority_fee_gwei * 10**9))
-        max_fee_wei = int((max(settings.txn_max_base_fee_gwei, base_fee_gwei) + settings.txn_max_priority_fee_gwei) * 10**9)
-        gas_limit = tx.get("gasLimit")
-        if gas_limit is None:
-            gas_limit = await web3_client.estimate_gas(
-                {
-                    "from": sender,
-                    "to": tx["to"],
-                    "data": tx["data"],
-                    "value": int(str(tx.get("value") or "0x0"), 16) if str(tx.get("value") or "0").startswith("0x") else int(tx.get("value") or 0),
-                    "chainId": settings.chain_id,
-                }
+        max_fee_wei = int(
+            (max(settings.txn_max_base_fee_gwei, base_fee_gwei) + settings.txn_max_priority_fee_gwei) * 10**9
+        )
+
+        results: list[dict[str, Any]] = []
+        for tx_index, tx in enumerate(transactions):
+            tx_sender = str(tx.get("sender") or sender)
+            if tx_sender.lower() != sender.lower():
+                raise RuntimeError(f"prepared sender {tx_sender} does not match local sender {sender}")
+
+            checksum_to = to_checksum_address(str(tx["to"]))
+            value = (
+                int(str(tx.get("value") or "0x0"), 16)
+                if str(tx.get("value") or "0").startswith("0x")
+                else int(tx.get("value") or 0)
             )
 
-        full_tx = {
-            "to": tx["to"],
-            "data": tx["data"],
-            "value": int(str(tx.get("value") or "0x0"), 16) if str(tx.get("value") or "0").startswith("0x") else int(tx.get("value") or 0),
-            "chainId": settings.chain_id,
-            "gas": int(gas_limit),
-            "maxFeePerGas": max_fee_wei,
-            "maxPriorityFeePerGas": priority_fee_wei,
-            "nonce": nonce,
-            "type": 2,
-        }
-        try:
-            signed_tx = signer.sign_transaction(full_tx)
-            tx_hash = await web3_client.send_raw_transaction(signed_tx)
-        except Exception as exc:  # noqa: BLE001
+            gas_limit = tx.get("gasLimit")
+            if gas_limit is None:
+                gas_limit = await web3_client.estimate_gas(
+                    {
+                        "from": checksum_sender,
+                        "to": checksum_to,
+                        "data": tx["data"],
+                        "value": value,
+                        "chainId": settings.chain_id,
+                    }
+                )
+
+            full_tx = {
+                "to": checksum_to,
+                "data": tx["data"],
+                "value": value,
+                "chainId": settings.chain_id,
+                "gas": int(gas_limit),
+                "maxFeePerGas": max_fee_wei,
+                "maxPriorityFeePerGas": priority_fee_wei,
+                "nonce": nonce,
+                "type": 2,
+            }
+            try:
+                signed_tx = signer.sign_transaction(full_tx)
+                tx_hash = await web3_client.send_raw_transaction(signed_tx)
+            except Exception as exc:  # noqa: BLE001
+                observed_at = utcnow_iso()
+                client.report_receipt(
+                    action_id,
+                    {
+                        "txIndex": tx_index,
+                        "receiptStatus": "FAILED",
+                        "observedAt": observed_at,
+                        "errorMessage": str(exc),
+                    },
+                )
+                raise RuntimeError(f"transaction {tx_index + 1} failed: {exc}") from exc
+
+            broadcast_at = utcnow_iso()
+            client.report_broadcast(
+                action_id,
+                {
+                    "txIndex": tx_index,
+                    "sender": sender,
+                    "txHash": tx_hash,
+                    "broadcastAt": broadcast_at,
+                },
+            )
+            record: dict[str, Any] = {
+                "operation": tx.get("operation"),
+                "sender": sender,
+                "txHash": tx_hash,
+                "broadcastAt": broadcast_at,
+                "gasEstimate": tx.get("gasEstimate"),
+            }
+            try:
+                receipt = await web3_client.get_transaction_receipt(tx_hash, timeout_seconds=receipt_timeout_seconds)
+            except Exception:
+                results.append(record)
+                nonce += 1
+                continue
+
+            effective_gas_price = receipt.get("effectiveGasPrice")
+            gas_price_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
+            receipt_status = "CONFIRMED" if receipt.get("status") == 1 else "REVERTED"
             observed_at = utcnow_iso()
             client.report_receipt(
                 action_id,
                 {
                     "txIndex": tx_index,
-                    "receiptStatus": "FAILED",
+                    "receiptStatus": receipt_status,
+                    "blockNumber": receipt.get("blockNumber"),
+                    "gasUsed": receipt.get("gasUsed"),
+                    "gasPriceGwei": gas_price_gwei,
                     "observedAt": observed_at,
-                    "errorMessage": str(exc),
                 },
             )
-            raise RuntimeError(f"transaction {tx_index + 1} failed: {exc}") from exc
-
-        broadcast_at = utcnow_iso()
-        client.report_broadcast(
-            action_id,
-            {
-                "txIndex": tx_index,
-                "sender": sender,
-                "txHash": tx_hash,
-                "broadcastAt": broadcast_at,
-            },
-        )
-        record: dict[str, Any] = {
-            "operation": tx.get("operation"),
-            "sender": sender,
-            "txHash": tx_hash,
-            "broadcastAt": broadcast_at,
-            "gasEstimate": tx.get("gasEstimate"),
-        }
-        try:
-            receipt = await web3_client.get_transaction_receipt(tx_hash, timeout_seconds=receipt_timeout_seconds)
-        except Exception:
+            record.update(
+                {
+                    "receiptStatus": receipt_status,
+                    "blockNumber": receipt.get("blockNumber"),
+                    "gasUsed": receipt.get("gasUsed"),
+                }
+            )
             results.append(record)
             nonce += 1
-            continue
-
-        effective_gas_price = receipt.get("effectiveGasPrice")
-        gas_price_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
-        receipt_status = "CONFIRMED" if receipt.get("status") == 1 else "REVERTED"
-        observed_at = utcnow_iso()
-        client.report_receipt(
-            action_id,
-            {
-                "txIndex": tx_index,
-                "receiptStatus": receipt_status,
-                "blockNumber": receipt.get("blockNumber"),
-                "gasUsed": receipt.get("gasUsed"),
-                "gasPriceGwei": gas_price_gwei,
-                "observedAt": observed_at,
-            },
-        )
-        record.update(
-            {
-                "receiptStatus": receipt_status,
-                "blockNumber": receipt.get("blockNumber"),
-                "gasUsed": receipt.get("gasUsed"),
-            }
-        )
-        results.append(record)
-        nonce += 1
-        if receipt_status != "CONFIRMED":
-            break
-    return results
+            if receipt_status != "CONFIRMED":
+                break
+        return results
+    finally:
+        await web3_client.close()
 
 
 def execute_prepared_action_sync(
@@ -200,4 +216,3 @@ def render_broadcast_result(records: list[dict[str, Any]]) -> None:
             if record.get("txHash")
         ]
     )
-

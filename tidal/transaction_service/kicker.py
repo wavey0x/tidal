@@ -981,6 +981,7 @@ class AuctionKicker:
                         "source": pk.candidate.source_address,
                         "source_name": pk.candidate.source_name,
                         "source_type": pk.candidate.source_type,
+                        "sender": signer.checksum_address,
                         "strategy": pk.candidate.source_address,
                         "strategy_name": pk.candidate.source_name,
                         "token": pk.candidate.token_address,

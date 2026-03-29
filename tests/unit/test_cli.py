@@ -46,7 +46,11 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
     output = capsys.readouterr().out
     assert result is True
     assert "1 candidate ready for submission" in output
+    assert "Auction details" in output
+    assert "Send details" in output
     assert "Quote out:   2,500.00 USDC (~$2,500.00)" in output
+    assert "From:        -" in output
+    assert "Gas limit:   252,000" in output
     assert "Rate:        2.5000 quoted | 2.7500 start | 2.3750 floor USDC/CRV" in output
     assert "Profile:     stable | decay 0.01%" in output
     assert "Submitting transaction..." in output

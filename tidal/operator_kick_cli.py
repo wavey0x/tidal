@@ -108,12 +108,15 @@ def _resolve_preview_fee_context(cli_ctx: CLIContext) -> dict[str, float]:
         web3_client = None
 
     if web3_client is not None:
-        async def _fetch_fees():
-            return await asyncio.gather(
-                web3_client.get_base_fee(),
-                web3_client.get_max_priority_fee(),
-                return_exceptions=True,
-            )
+        async def _fetch_fees() -> tuple[object, object]:
+            try:
+                return await asyncio.gather(
+                    web3_client.get_base_fee(),
+                    web3_client.get_max_priority_fee(),
+                    return_exceptions=True,
+                )
+            finally:
+                await web3_client.close()
 
         try:
             base_result, priority_result = asyncio.run(_fetch_fees())
@@ -190,6 +193,7 @@ def _kick_submission_summary(
                 "source": source_address,
                 "source_name": source_name,
                 "source_type": prepared.get("sourceType"),
+                "sender": transaction.get("sender"),
                 "strategy": source_address,
                 "strategy_name": source_name,
                 "token": token_address,

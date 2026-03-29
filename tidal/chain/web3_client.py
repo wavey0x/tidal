@@ -23,6 +23,9 @@ class Web3Client:
     def contract(self, address: str, abi: list[dict[str, Any]]) -> Any:
         return self.w3.eth.contract(address=to_checksum_address(address), abi=abi)
 
+    async def close(self) -> None:
+        await self.w3.provider.disconnect()
+
     async def call(self, call_fn: Any, **call_kwargs: Any) -> Any:
         async def _call() -> Any:
             return await asyncio.wait_for(call_fn.call(**call_kwargs), timeout=self.timeout_seconds)

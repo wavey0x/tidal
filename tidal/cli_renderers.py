@@ -86,6 +86,7 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
 
     if batch_size == 1:
         k = kicks[0]
+        sender = k.get("sender")
         source_name = k.get("source_name") or "Unknown"
         token_sym = k.get("token_symbol") or "???"
         want_sym = k.get("want_symbol") or "???"
@@ -137,6 +138,8 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
             content.extend([divergence_line, ""])
         content.extend([
             str(summary.get("single_title") or "Kick (1 of 1)"),
+            "",
+            "  Auction details",
             f"  Source:      {source_name} ({short_address(k['source'])})",
             f"  Auction:     {k['auction']}",
             f"  Sell amount: {amount_str} {token_sym} (~${float(usd_value):,.2f})",
@@ -150,7 +153,12 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
         if precision_line:
             content.append(precision_line)
         content.extend([
+            "",
+            "  Send details",
+            f"  From:        {sender or '-'}",
             f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
+            f"  Gas limit:   {summary.get('gas_limit', gas_estimate):,}",
+            f"  Base fee:    {summary.get('base_fee_gwei', 0):.2f} gwei",
             f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee_str} gwei",
         ])
     else:

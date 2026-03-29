@@ -241,7 +241,11 @@ def test_operator_kick_run_broadcast_prepares_candidates_one_by_one(tmp_path, mo
     assert [action_id for action_id, _ in prepared_actions] == ["action-1", "action-2"]
     assert "1 candidate ready for submission" in result.output
     assert "Kick (1 of 2)" in result.output
+    assert "Auction details" in result.output
+    assert "Send details" in result.output
+    assert "From:        0x9999999999999999999999999999999999999999" in result.output
     assert "Quote out:   2,500.00 USDC" in result.output
     assert "Start quote: 2,750 USDC (+10% buffer)" in result.output
     assert "Min price:   2,375 USDC (-5% buffer)" in result.output
+    assert "Gas limit:   252,000" in result.output
     assert "max 2.50 gwei" in result.output

@@ -280,6 +280,7 @@ def build_txn_service(
         max_gas_limit=settings.txn_max_gas_limit,
         start_price_buffer_bps=settings.txn_start_price_buffer_bps,
         min_price_buffer_bps=settings.txn_min_price_buffer_bps,
+        quote_spot_warning_threshold_pct=settings.txn_quote_spot_warning_threshold_pct,
         chain_id=settings.chain_id,
         confirm_fn=confirm_fn,
         require_curve_quote=resolved_require_curve_quote,

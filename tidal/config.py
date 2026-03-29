@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     txn_max_gas_limit: int = Field(default=500000, alias="TXN_MAX_GAS_LIMIT")
     txn_start_price_buffer_bps: int = Field(default=1000, alias="TXN_START_PRICE_BUFFER_BPS")
     txn_min_price_buffer_bps: int = Field(default=500, alias="TXN_MIN_PRICE_BUFFER_BPS")
+    txn_quote_spot_warning_threshold_pct: float = Field(
+        default=2.0,
+        alias="TXN_QUOTE_SPOT_WARNING_THRESHOLD_PCT",
+    )
     txn_max_data_age_seconds: int = Field(default=600, alias="TXN_MAX_DATA_AGE_SECONDS")
     txn_keystore_path: str | None = Field(default=None, alias="TXN_KEYSTORE_PATH")
     txn_keystore_passphrase: str | None = Field(default=None, alias="TXN_KEYSTORE_PASSPHRASE")

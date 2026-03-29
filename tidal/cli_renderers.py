@@ -90,6 +90,10 @@ def _display_gas_value(value: Any, *, suffix: str | None = None) -> str:
     return f"{int(value):,}"
 
 
+def _format_decimal_amount(value: Decimal) -> str:
+    return f"{float(value):,.4f}" if value < 1 else f"{float(value):,.2f}"
+
+
 def render_kick_submission_summary(summary: dict[str, Any]) -> None:
     kicks = summary["kicks"]
     batch_size = summary["batch_size"]
@@ -119,21 +123,32 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
         minimum_price = int(k["minimum_price"])
         step_decay_rate_bps = k.get("step_decay_rate_bps")
         step_decay_str = f"{step_decay_rate_bps / 100:.2f}%" if step_decay_rate_bps is not None else "—"
-        quote_amount_str = f"{float(quote_amount):,.4f}" if quote_amount < 1 else f"{float(quote_amount):,.2f}"
+        quote_amount_str = _format_decimal_amount(quote_amount)
         quote_value_line = None
         divergence_line = None
         want_price_usd = k.get("want_price_usd")
         if want_price_usd is not None:
             try:
                 want_price = Decimal(str(want_price_usd))
-                quote_value_usd = quote_amount * want_price
-                quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym} (~${float(quote_value_usd):,.2f})"
-                if usd_value > 0 and quote_value_usd > 0:
-                    mismatch_ratio = abs(usd_value - quote_value_usd) / usd_value
-                    if mismatch_ratio >= Decimal("0.20"):
-                        divergence_line = (
-                            f"⚠️  Warning: sell value and quote value differ by {float(mismatch_ratio * 100):,.1f}%"
-                        )
+                if want_price > 0:
+                    quote_value_usd = quote_amount * want_price
+                    quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym} (~${float(quote_value_usd):,.2f})"
+                    if usd_value > 0 and quote_amount > 0:
+                        spot_quote_amount = usd_value / want_price
+                        if spot_quote_amount > 0:
+                            deviation_ratio = (quote_amount - spot_quote_amount) / spot_quote_amount
+                            threshold_pct = Decimal(str(summary.get("quote_spot_warning_threshold_pct", 2)))
+                            threshold_ratio = threshold_pct / Decimal("100")
+                            if abs(deviation_ratio) >= threshold_ratio:
+                                direction = "higher" if deviation_ratio > 0 else "lower"
+                                spot_quote_amount_str = _format_decimal_amount(spot_quote_amount)
+                                divergence_line = (
+                                    f"⚠️  Warning: live quote is {float(abs(deviation_ratio) * 100):,.1f}% "
+                                    f"{direction} than evaluated spot ({quote_amount_str} {want_sym} quoted vs "
+                                    f"{spot_quote_amount_str} {want_sym} at spot)"
+                                )
+                else:
+                    quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym}"
             except (InvalidOperation, ValueError, TypeError):
                 quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym}"
         else:

@@ -48,6 +48,7 @@ txn_max_priority_fee_gwei: 2
 txn_max_gas_limit: 500000
 txn_start_price_buffer_bps: 1000
 txn_min_price_buffer_bps: 500
+txn_quote_spot_warning_threshold_pct: 2
 txn_max_data_age_seconds: 6000
 txn_cooldown_seconds: 3600
 txn_require_curve_quote: true

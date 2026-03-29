@@ -147,7 +147,6 @@ def build_shortlist(
             models.vaults.c.symbol.label("context_symbol"),
             models.tokens.c.symbol.label("token_symbol"),
             want_tokens.c.symbol.label("want_symbol"),
-            want_tokens.c.price_usd.label("want_price_usd"),
         )
         .select_from(
             models.strategy_token_balances_latest.join(
@@ -195,7 +194,6 @@ def build_shortlist(
             null().label("context_symbol"),
             models.tokens.c.symbol.label("token_symbol"),
             want_tokens.c.symbol.label("want_symbol"),
-            want_tokens.c.price_usd.label("want_price_usd"),
         )
         .select_from(
             models.fee_burner_token_balances_latest.join(
@@ -254,7 +252,6 @@ def build_shortlist(
                 context_symbol=row["context_symbol"],
                 token_symbol=row["token_symbol"],
                 want_symbol=row["want_symbol"],
-                want_price_usd=row["want_price_usd"],
             )
         )
 

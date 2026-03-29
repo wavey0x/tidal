@@ -717,7 +717,7 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
             "tokenSymbol": item.candidate.token_symbol,
             "wantAddress": item.candidate.want_address,
             "wantSymbol": item.candidate.want_symbol,
-            "wantPriceUsd": item.candidate.want_price_usd,
+            "wantPriceUsd": item.want_price_usd_str,
             "sellAmount": item.normalized_balance,
             "startingPrice": item.starting_price_str,
             "startingPriceDisplay": (

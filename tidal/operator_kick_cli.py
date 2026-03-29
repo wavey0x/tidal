@@ -144,6 +144,7 @@ def _kick_submission_summary(
     fee_context: dict[str, float],
     default_buffer_bps: int,
     default_min_buffer_bps: int,
+    quote_spot_warning_threshold_pct: float,
 ) -> dict[str, object] | None:
     preview = data.get("preview")
     transactions = data.get("transactions")
@@ -226,6 +227,7 @@ def _kick_submission_summary(
         "priority_fee_gwei": fee_context["priority_fee_gwei"],
         "max_fee_per_gas_gwei": fee_context["max_fee_per_gas_gwei"],
         "gas_cost_eth": (gas_estimate * base_fee_gwei / 1e9) if gas_estimate is not None else None,
+        "quote_spot_warning_threshold_pct": quote_spot_warning_threshold_pct,
     }
 
 
@@ -345,6 +347,9 @@ def kick_run(
                             },
                             default_buffer_bps=cli_ctx.settings.txn_start_price_buffer_bps,
                             default_min_buffer_bps=cli_ctx.settings.txn_min_price_buffer_bps,
+                            quote_spot_warning_threshold_pct=(
+                                cli_ctx.settings.txn_quote_spot_warning_threshold_pct
+                            ),
                         )
                         if summary is not None:
                             render_kick_submission_summary(summary)

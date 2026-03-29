@@ -16,7 +16,7 @@ from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
 import json
 
-from tidal.pricing.token_price_agg import QuoteResult
+from tidal.pricing.token_price_agg import QuoteResult, TokenPriceQuote
 from tidal.transaction_service.pricing_policy import TokenSizingPolicy
 from tidal.transaction_service.kicker import AuctionKicker, _DEFAULT_PRIORITY_FEE_GWEI
 from tidal.transaction_service.types import KickCandidate, KickResult, PreparedKick, PreparedSweepAndSettle
@@ -87,6 +87,11 @@ def _make_kicker(session, *, web3_client=None, signer=None, price_provider=None,
         # Default: 2500 USDC (6 decimals) → with 10% buffer → startingPrice = 2750.
         price_provider.quote = AsyncMock(
             return_value=QuoteResult(amount_out_raw=2_500_000_000, token_out_decimals=6, provider_statuses={"curve": "ok"}, provider_amounts={"curve": 2_500_000_000})
+        )
+    quote_usd = getattr(price_provider, "quote_usd", None)
+    if not isinstance(quote_usd, AsyncMock) or isinstance(quote_usd.return_value, AsyncMock):
+        price_provider.quote_usd = AsyncMock(
+            return_value=TokenPriceQuote(price_usd=Decimal("1"), quote_amount_in_raw=1)
         )
     if auction_state_reader is None:
         auction_state_reader = MagicMock()
@@ -1183,6 +1188,18 @@ async def test_minimum_price_clamps_to_zero(session):
 async def test_prepare_kick_success(session):
     """prepare_kick returns PreparedKick with correct computed prices."""
     web3_client = MagicMock()
+    price_provider = AsyncMock()
+    price_provider.quote = AsyncMock(
+        return_value=QuoteResult(
+            amount_out_raw=2_500_000_000,
+            token_out_decimals=6,
+            provider_statuses={"curve": "ok"},
+            provider_amounts={"curve": 2_500_000_000},
+        )
+    )
+    price_provider.quote_usd = AsyncMock(
+        return_value=TokenPriceQuote(price_usd=Decimal("1"), quote_amount_in_raw=1)
+    )
 
     with patch(
         "tidal.transaction_service.kicker.ERC20Reader"
@@ -1191,7 +1208,7 @@ async def test_prepare_kick_success(session):
         mock_erc20.read_balance = AsyncMock(return_value=10**21)
         MockERC20.return_value = mock_erc20
 
-        kicker = _make_kicker(session, web3_client=web3_client)
+        kicker = _make_kicker(session, web3_client=web3_client, price_provider=price_provider)
         candidate = _make_candidate()
         result = await kicker.prepare_kick(candidate, "run-1")
 
@@ -1202,6 +1219,8 @@ async def test_prepare_kick_success(session):
     assert result.candidate is candidate
     assert result.step_decay_rate_bps == 50
     assert result.settle_token is None
+    assert result.want_price_usd_str == "1"
+    price_provider.quote_usd.assert_called_once_with(candidate.want_address, 6)
 
 
 @pytest.mark.asyncio
@@ -1700,6 +1719,7 @@ async def test_execute_batch_confirm_summary_schema(session):
     assert "priority_fee_gwei" in summary
     assert "max_fee_per_gas_gwei" in summary
     assert "gas_cost_eth" in summary
+    assert summary["quote_spot_warning_threshold_pct"] == 2.0
 
     # Per-kick list.
     assert len(summary["kicks"]) == 2

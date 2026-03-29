@@ -40,6 +40,7 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
         "priority_fee_gwei": 2,
         "max_fee_per_gas_gwei": 12,
         "gas_cost_eth": 0.0021,
+        "quote_spot_warning_threshold_pct": 2,
     }
 
     with patch("tidal.kick_cli.typer.confirm", return_value=True) as confirm_mock:
@@ -91,6 +92,7 @@ def test_make_confirm_fn_warns_on_sell_vs_quote_mismatch(capsys):
         "priority_fee_gwei": 0.05,
         "max_fee_per_gas_gwei": 2.5,
         "gas_cost_eth": 0.000021,
+        "quote_spot_warning_threshold_pct": 2,
     }
 
     with patch("tidal.kick_cli.typer.confirm", return_value=False):
@@ -99,8 +101,54 @@ def test_make_confirm_fn_warns_on_sell_vs_quote_mismatch(capsys):
     output = capsys.readouterr().out
     assert "Sell amount: 3,473.41 WFRAX (~$10,000.00)" in output
     assert "Quote out:   1,568.00 crvUSD (~$1,568.00)" in output
-    assert "⚠️  Warning: sell value and quote value differ by 84.3%" in output
+    assert (
+        "⚠️  Warning: live quote is 84.3% lower than evaluated spot "
+        "(1,568.00 crvUSD quoted vs 10,000.00 crvUSD at spot)"
+    ) in output
     assert output.index("⚠️  Warning:") < output.index("Kick (1 of 1)")
+
+
+def test_make_confirm_fn_respects_quote_spot_warning_threshold(capsys):
+    confirm_fn = _make_confirm_fn()
+    summary = {
+        "kicks": [
+            {
+                "source": "0x1111111111111111111111111111111111111111",
+                "source_name": "Test Strategy",
+                "token_symbol": "CRV",
+                "auction": "0x2222222222222222222222222222222222222222",
+                "sell_amount": "1000",
+                "usd_value": "1000",
+                "starting_price": "1090",
+                "starting_price_display": "1,090 USDC (+10% buffer)",
+                "minimum_price": "940",
+                "minimum_price_display": "940 USDC (-5% buffer)",
+                "want_symbol": "USDC",
+                "want_price_usd": "1",
+                "buffer_bps": 1000,
+                "min_buffer_bps": 500,
+                "step_decay_rate_bps": 50,
+                "pricing_profile_name": "volatile",
+                "quote_amount": "1010",
+            }
+        ],
+        "batch_size": 1,
+        "total_usd": "1000",
+        "gas_estimate": 210000,
+        "gas_limit": 252000,
+        "base_fee_gwei": 0.1,
+        "priority_fee_gwei": 0.05,
+        "max_fee_per_gas_gwei": 2.5,
+        "gas_cost_eth": 0.000021,
+        "quote_spot_warning_threshold_pct": 2,
+    }
+
+    with patch("tidal.kick_cli.typer.confirm", return_value=False):
+        _ = confirm_fn(summary)
+
+    output = capsys.readouterr().out
+    assert "Quote out:   1,010.00 USDC (~$1,010.00)" in output
+    assert "⚠️  Warning:" not in output
 
 
 def test_render_kick_run_summary_for_aborted_confirm(capsys):

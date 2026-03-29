@@ -52,7 +52,6 @@ class KickCandidate:
     context_symbol: str | None = None
     token_symbol: str | None = None
     want_symbol: str | None = None
-    want_price_usd: str | None = None
 
     @property
     def strategy_address(self) -> str:
@@ -84,6 +83,7 @@ class PreparedKick:
     pricing_profile_name: str
     settle_token: str | None = None
     quote_response_json: str | None = None
+    want_price_usd_str: str | None = None
 
 
 @dataclass(slots=True)

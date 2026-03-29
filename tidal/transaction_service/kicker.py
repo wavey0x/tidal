@@ -268,6 +268,7 @@ class AuctionKicker:
         confirm_fn: Callable[[dict], bool] | None = None,
         require_curve_quote: bool = True,
         default_step_decay_rate_bps: int = _DEFAULT_STEP_DECAY_RATE_BPS,
+        quote_spot_warning_threshold_pct: float = 2.0,
         erc20_reader: ERC20Reader | None = None,
         auction_state_reader: AuctionStateReader | None = None,
         pricing_policy: AuctionPricingPolicy | None = None,
@@ -286,6 +287,7 @@ class AuctionKicker:
         self.chain_id = chain_id
         self.confirm_fn = confirm_fn
         self.require_curve_quote = require_curve_quote
+        self.quote_spot_warning_threshold_pct = Decimal(str(quote_spot_warning_threshold_pct))
         self.erc20_reader = erc20_reader
         self.auction_state_reader = auction_state_reader
         self.pricing_policy = pricing_policy or _default_pricing_policy(
@@ -864,6 +866,24 @@ class AuctionKicker:
             int((amount_out_normalized * min_buffer).to_integral_value(rounding=ROUND_FLOOR)),
         )
 
+        want_price_usd_str: str | None = None
+        try:
+            want_price_quote = await self.price_provider.quote_usd(
+                candidate.want_address,
+                quote_result.token_out_decimals or 18,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info(
+                "txn_want_price_lookup_failed",
+                source=candidate.source_address,
+                token_in=candidate.token_address,
+                token_out=candidate.want_address,
+                error=str(exc),
+            )
+        else:
+            if want_price_quote.price_usd is not None:
+                want_price_usd_str = str(want_price_quote.price_usd)
+
         return PreparedKick(
             candidate=candidate,
             sell_amount=sell_amount,
@@ -882,6 +902,7 @@ class AuctionKicker:
             step_decay_rate_bps=profile.step_decay_rate_bps,
             pricing_profile_name=profile.name,
             settle_token=settle_token,
+            want_price_usd_str=want_price_usd_str,
         )
 
     def _fail_batch(
@@ -996,7 +1017,7 @@ class AuctionKicker:
                         "sell_price_usd": pk.candidate.price_usd,
                         "want_address": pk.candidate.want_address,
                         "want_symbol": pk.candidate.want_symbol,
-                        "want_price_usd": pk.candidate.want_price_usd,
+                        "want_price_usd": pk.want_price_usd_str,
                         "buffer_bps": pk.start_price_buffer_bps,
                         "min_buffer_bps": pk.min_price_buffer_bps,
                         "step_decay_rate_bps": pk.step_decay_rate_bps,
@@ -1016,6 +1037,7 @@ class AuctionKicker:
                 "priority_fee_gwei": priority_fee_wei / 1e9,
                 "max_fee_per_gas_gwei": max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei,
                 "gas_cost_eth": gas_estimate * base_fee_gwei / 1e9,
+                "quote_spot_warning_threshold_pct": float(self.quote_spot_warning_threshold_pct),
             }
 
             if not self.confirm_fn(summary):

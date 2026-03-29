@@ -56,6 +56,7 @@ class ActionReportOutbox:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path).expanduser() if path is not None else default_action_report_outbox_path()
+        self._conn: sqlite3.Connection | None = None
 
     def queue_broadcast(self, *, base_url: str, action_id: str, payload: dict[str, Any]) -> None:
         self._upsert(
@@ -213,10 +214,13 @@ class ActionReportOutbox:
             )
 
     def _connect(self) -> sqlite3.Connection:
+        if self._conn is not None:
+            return self._conn
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute(_OUTBOX_SCHEMA)
+        self._conn = conn
         return conn
 
     @staticmethod

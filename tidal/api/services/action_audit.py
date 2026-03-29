@@ -320,6 +320,7 @@ def _sync_kick_log_rows(
                 "block_number": block_number,
                 "error_message": error_message,
                 "quote_amount": operation["quote_amount"],
+                "quote_response_json": operation["quote_response_json"],
                 "start_price_buffer_bps": operation["start_price_buffer_bps"],
                 "min_price_buffer_bps": operation["min_price_buffer_bps"],
                 "step_decay_rate_bps": operation["step_decay_rate_bps"],
@@ -358,25 +359,44 @@ def _prepared_kick_operations(action_row: dict[str, object]) -> list[dict[str, o
         token_address = _optional_normalize_address(item.get("tokenAddress"))
         if auction_address is None or token_address is None:
             continue
+
+        def _str(key: str) -> str | None:
+            v = item.get(key)
+            return str(v) if v is not None else None
+
+        def _int(key: str) -> int | None:
+            v = item.get(key)
+            return int(v) if v is not None else None
+
+        def _json_str(key: str) -> str | None:
+            v = item.get(key)
+            if v is None:
+                return None
+            if isinstance(v, str):
+                return v
+            try:
+                return json.dumps(v, sort_keys=True)
+            except (TypeError, ValueError):
+                return None
+
         items.append(
             {
-                "source_type": str(item.get("sourceType")) if item.get("sourceType") else None,
+                "source_type": _str("sourceType"),
                 "source_address": _optional_normalize_address(item.get("sourceAddress")),
                 "auction_address": auction_address,
                 "token_address": token_address,
-                "token_symbol": str(item.get("tokenSymbol")) if item.get("tokenSymbol") else None,
+                "token_symbol": _str("tokenSymbol"),
                 "want_address": _optional_normalize_address(item.get("wantAddress")),
-                "want_symbol": str(item.get("wantSymbol")) if item.get("wantSymbol") else None,
-                "sell_amount": str(item.get("sellAmount")) if item.get("sellAmount") is not None else None,
-                "starting_price": str(item.get("startingPrice")) if item.get("startingPrice") is not None else None,
-                "minimum_price": str(item.get("minimumPrice")) if item.get("minimumPrice") is not None else None,
-                "usd_value": str(item.get("usdValue")) if item.get("usdValue") is not None else None,
-                "quote_amount": str(item.get("quoteAmount")) if item.get("quoteAmount") is not None else None,
-                "start_price_buffer_bps": int(item["bufferBps"]) if item.get("bufferBps") is not None else None,
-                "min_price_buffer_bps": int(item["minBufferBps"]) if item.get("minBufferBps") is not None else None,
-                "step_decay_rate_bps": (
-                    int(item["stepDecayRateBps"]) if item.get("stepDecayRateBps") is not None else None
-                ),
+                "want_symbol": _str("wantSymbol"),
+                "sell_amount": _str("sellAmount"),
+                "starting_price": _str("startingPrice"),
+                "minimum_price": _str("minimumPrice"),
+                "usd_value": _str("usdValue"),
+                "quote_amount": _str("quoteAmount"),
+                "quote_response_json": _json_str("quoteResponseJson"),
+                "start_price_buffer_bps": _int("bufferBps"),
+                "min_price_buffer_bps": _int("minBufferBps"),
+                "step_decay_rate_bps": _int("stepDecayRateBps"),
                 "settle_token": _optional_normalize_address(item.get("settleToken")),
             }
         )

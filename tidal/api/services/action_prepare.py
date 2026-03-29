@@ -730,6 +730,7 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
                 f"(-{item.min_price_buffer_bps / 100:.0f}% buffer)"
             ),
             "quoteAmount": item.quote_amount_str,
+            "quoteResponseJson": item.quote_response_json,
             "usdValue": item.usd_value_str,
             "bufferBps": item.start_price_buffer_bps,
             "minBufferBps": item.min_price_buffer_bps,

@@ -404,6 +404,14 @@ def test_kick_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Path)
                         "startingPrice": "2750",
                         "minimumPrice": "2375",
                         "quoteAmount": "2500",
+                        "quoteResponseJson": {
+                            "requestUrl": (
+                                "https://prices.example.com/v1/quote"
+                                "?token_in=0x5000000000000000000000000000000000000005"
+                                "&token_out=0x4000000000000000000000000000000000000004"
+                                "&amount_in=1000000000000000000&chain_id=1&use_underlying=true&timeout_ms=7000"
+                            )
+                        },
                         "usdValue": "2500",
                         "bufferBps": 1000,
                         "minBufferBps": 500,
@@ -468,3 +476,4 @@ def test_kick_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Path)
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
     assert payload["data"]["kicks"][0]["wantSymbol"] == "USDC"
+    assert "prices.example.com/v1/quote" in payload["data"]["kicks"][0]["quoteResponseJson"]

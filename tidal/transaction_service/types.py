@@ -144,6 +144,21 @@ class KickResult:
 
 
 @dataclass(slots=True)
+class TransactionExecutionReport:
+    """Rendered transaction outcome for immediate CLI feedback."""
+
+    operation: str
+    sender: str | None
+    tx_hash: str
+    broadcast_at: str
+    chain_id: int
+    gas_estimate: int | None = None
+    receipt_status: str | None = None
+    block_number: int | None = None
+    gas_used: int | None = None
+
+
+@dataclass(slots=True)
 class TxnRunResult:
     """Summary of a single evaluation cycle."""
 

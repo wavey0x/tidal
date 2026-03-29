@@ -10,7 +10,8 @@ from tidal.cli_renderers import (
     render_kick_run_summary,
     render_prepared_action_summary,
 )
-from tidal.kick_cli import _make_confirm_fn
+from tidal.kick_cli import _make_confirm_fn, _make_execution_report_fn
+from tidal.transaction_service.types import TransactionExecutionReport
 
 
 def test_make_confirm_fn_displays_pricing_profile(capsys):
@@ -154,6 +155,31 @@ def test_make_confirm_fn_respects_quote_spot_warning_threshold(capsys):
     output = capsys.readouterr().out
     assert "Quote out:   1,010.00 USDC (~$1,010.00)" in output
     assert "⚠️  Warning:" not in output
+
+
+def test_make_execution_report_fn_renders_confirmed_panel(capsys):
+    report_fn = _make_execution_report_fn()
+
+    report_fn(
+        TransactionExecutionReport(
+            operation="kick",
+            sender="0x1111111111111111111111111111111111111111",
+            tx_hash="0xabc",
+            broadcast_at="2026-03-29T18:57:32+00:00",
+            chain_id=1,
+            gas_estimate=227159,
+            receipt_status="CONFIRMED",
+            block_number=24765182,
+            gas_used=224212,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "Confirmed" in output
+    assert "Operation:    kick" in output
+    assert "Explorer:     https://etherscan.io/tx/0xabc" in output
+    assert "Gas used:     224,212" in output
+    assert "Gas estimate: 227,159" in output
 
 
 def test_render_kick_run_summary_for_aborted_confirm(capsys):

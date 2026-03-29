@@ -29,8 +29,10 @@ from tidal.cli_options import (
     VerboseOption,
 )
 from tidal.cli_renderers import (
+    BroadcastRecord,
     emit_json,
     kick_scope_label,
+    render_broadcast_records,
     render_kick_inspect,
     render_kick_run_summary,
     render_kick_submission_summary,
@@ -41,7 +43,7 @@ from tidal.logging import OutputMode, configure_logging
 from tidal.ops.kick_inspect import inspect_kick_candidates
 from tidal.persistence import models
 from tidal.runtime import build_txn_service
-from tidal.transaction_service.types import SourceType
+from tidal.transaction_service.types import SourceType, TransactionExecutionReport
 
 app = typer.Typer(help="Kick auction lots", no_args_is_help=True)
 
@@ -81,6 +83,30 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         return accepted
 
     return _confirm_batch
+
+
+def _make_execution_report_fn() -> Callable[[TransactionExecutionReport], None]:
+    """Return a callback that renders the live transaction result panel immediately."""
+
+    def _render_execution_report(report: TransactionExecutionReport) -> None:
+        typer.echo()
+        render_broadcast_records(
+            [
+                BroadcastRecord(
+                    operation=report.operation,
+                    sender=report.sender,
+                    tx_hash=report.tx_hash,
+                    broadcast_at=report.broadcast_at,
+                    chain_id=report.chain_id,
+                    receipt_status=report.receipt_status,
+                    block_number=report.block_number,
+                    gas_used=report.gas_used,
+                    gas_estimate=report.gas_estimate,
+                )
+            ]
+        )
+
+    return _render_execution_report
 
 
 @app.command("run")
@@ -142,6 +168,7 @@ def kick_run(
             )
 
     confirm_fn = None if bypass_confirmation or not broadcast else _make_confirm_fn()
+    execution_report_fn = _make_execution_report_fn() if broadcast and not json_output else None
     skip_base_fee_check = False
     web3_client = cli_ctx.web3_client() if broadcast else None
     if web3_client is not None:
@@ -163,6 +190,7 @@ def kick_run(
             cli_ctx.settings,
             session,
             confirm_fn=confirm_fn,
+            execution_report_fn=execution_report_fn,
             require_curve_quote=require_curve_quote,
             skip_base_fee_check=skip_base_fee_check,
             web3_client=web3_client,
@@ -208,6 +236,7 @@ def kick_run(
             run_rows=run_rows,
             verbose=verbose,
             sender=execution_sender,
+            show_broadcast_records=execution_report_fn is None,
         )
         if inspection_data is not None:
             typer.echo()

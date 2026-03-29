@@ -527,6 +527,7 @@ def render_kick_run_summary(
     run_rows: list[dict[str, object]],
     verbose: bool,
     sender: str | None = None,
+    show_broadcast_records: bool = True,
 ) -> None:
     statuses = {str(row["status"]) for row in run_rows}
     skipped_count = sum(1 for row in run_rows if str(row.get("status")) == "USER_SKIPPED")
@@ -596,7 +597,7 @@ def render_kick_run_summary(
             typer.echo("Quote URL:")
             typer.echo(quote_url)
 
-    if live:
+    if live and show_broadcast_records:
         broadcast_records = kick_broadcast_records(run_rows, sender=sender)
         if broadcast_records:
             typer.echo()

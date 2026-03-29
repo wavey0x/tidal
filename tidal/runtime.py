@@ -206,6 +206,7 @@ def build_txn_service(
     session,
     *,
     confirm_fn=None,
+    execution_report_fn=None,
     require_curve_quote: bool | None = None,
     skip_base_fee_check: bool = False,
     web3_client: Web3Client | None = None,
@@ -288,6 +289,7 @@ def build_txn_service(
         auction_state_reader=auction_state_reader,
         pricing_policy=pricing_policy,
         token_sizing_policy=token_sizing_policy,
+        execution_report_fn=execution_report_fn,
     )
 
     lock_path = settings.resolved_db_path.parent / "txn_daemon.lock"

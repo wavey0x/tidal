@@ -19,7 +19,13 @@ import json
 from tidal.pricing.token_price_agg import QuoteResult, TokenPriceQuote
 from tidal.transaction_service.pricing_policy import TokenSizingPolicy
 from tidal.transaction_service.kicker import AuctionKicker, _DEFAULT_PRIORITY_FEE_GWEI
-from tidal.transaction_service.types import KickCandidate, KickResult, PreparedKick, PreparedSweepAndSettle
+from tidal.transaction_service.types import (
+    KickCandidate,
+    KickResult,
+    PreparedKick,
+    PreparedSweepAndSettle,
+    TransactionExecutionReport,
+)
 
 
 def _make_candidate(**overrides):
@@ -569,6 +575,54 @@ async def test_kick_confirm_fn_accepted(session):
     assert result.status == "CONFIRMED"
     assert result.tx_hash == "0xtxhash_confirmed"
     confirm_fn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_kick_emits_execution_report_on_confirmed_send(session):
+    web3_client = _make_web3_client_through_gas_estimate()
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash_report")
+    web3_client.get_transaction_receipt = AsyncMock(return_value={
+        "status": 1,
+        "gasUsed": 180000,
+        "effectiveGasPrice": int(12 * 1e9),
+        "blockNumber": 99999,
+    })
+
+    signer = MagicMock()
+    signer.address = "0xcccccccccccccccccccccccccccccccccccccccc"
+    signer.checksum_address = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    signer.sign_transaction = MagicMock(return_value=b"\x00" * 32)
+
+    captured_reports: list[TransactionExecutionReport] = []
+
+    with patch(
+        "tidal.transaction_service.kicker.ERC20Reader"
+    ) as MockERC20:
+        mock_erc20 = AsyncMock()
+        mock_erc20.read_balance = AsyncMock(return_value=10**21)
+        MockERC20.return_value = mock_erc20
+
+        kicker = _make_kicker(
+            session,
+            web3_client=web3_client,
+            signer=signer,
+            execution_report_fn=captured_reports.append,
+        )
+        candidate = _make_candidate()
+        result = await kicker.kick(candidate, "run-1")
+
+    assert result.status == "CONFIRMED"
+    assert len(captured_reports) == 1
+    report = captured_reports[0]
+    assert report.operation == "kick"
+    assert report.sender == signer.checksum_address
+    assert report.tx_hash == "0xtxhash_report"
+    assert report.chain_id == 1
+    assert report.receipt_status == "CONFIRMED"
+    assert report.block_number == 99999
+    assert report.gas_used == 180000
+    assert report.gas_estimate == 200000
 
 
 @pytest.mark.asyncio

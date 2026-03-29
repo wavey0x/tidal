@@ -89,10 +89,10 @@ def render_skip_panel(
     source_address: str | None,
     auction_address: str | None,
 ) -> None:
-    pair_left = token_symbol or "unknown"
-    pair_right = want_symbol or "unknown"
+    pair_left = token_symbol or "?"
+    pair_right = want_symbol or "?"
     lines = [reason]
-    lines.append(f"  Pair:        {pair_left} / {pair_right}")
+    lines.append(f"  Pair:        {pair_left} -> {pair_right}")
 
     if source_name and source_address and source_name != source_address:
         lines.append(f"  Source:      {source_name} ({short_address(source_address)})")

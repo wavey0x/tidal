@@ -52,6 +52,7 @@ async def post_kick_prepare(
         token_address=payload.token_address,
         limit=payload.limit,
         sender=payload.sender,
+        require_curve_quote=payload.require_curve_quote,
     )
     return {"status": status, "warnings": warnings, "data": data}
 

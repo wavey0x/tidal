@@ -129,6 +129,35 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     assert payload["data"]["rows"][0]["sourceName"] == "Test Strategy"
 
 
+def test_kick_prepare_route_threads_curve_quote_override(tmp_path: Path, monkeypatch) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    captured: dict[str, object] = {}
+
+    async def fake_prepare_kick_action(session, settings, **kwargs):  # noqa: ANN001, ANN003
+        del session, settings
+        captured["require_curve_quote"] = kwargs.get("require_curve_quote")
+        return "noop", [], {"preview": {}, "transactions": []}
+
+    monkeypatch.setattr("tidal.api.routes.kick.prepare_kick_action", fake_prepare_kick_action)
+
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/v1/tidal/kick/prepare",
+        headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+        json={
+            "sourceType": "fee_burner",
+            "auctionAddress": "0x3000000000000000000000000000000000000003",
+            "tokenAddress": "0x5000000000000000000000000000000000000005",
+            "sender": "0x6000000000000000000000000000000000000006",
+            "requireCurveQuote": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["require_curve_quote"] is False
+
+
 def test_actions_broadcast_and_receipt_routes_update_status(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)

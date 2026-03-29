@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from eth_utils import to_checksum_address
 from typer.testing import CliRunner
 
@@ -234,6 +235,44 @@ def test_operator_kick_run_dry_run_uses_inspect_only(tmp_path, monkeypatch) -> N
     assert "just-in-time during broadcast" in result.output
 
 
+@pytest.mark.parametrize(
+    ("flag_args", "expected"),
+    [
+        ([], None),
+        (["--require-curve-quote"], True),
+        (["--allow-missing-curve-quote"], False),
+    ],
+)
+def test_operator_kick_run_threads_curve_quote_override(tmp_path, monkeypatch, flag_args, expected) -> None:
+    config_path = _write_config(tmp_path)
+    client = _BroadcastClient()
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+    monkeypatch.setattr(operator_kick_cli_module.typer, "confirm", lambda *args, **kwargs: False)
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--broadcast", "--config", str(config_path), *flag_args])
+
+    assert result.exit_code == 2
+    assert client.prepare_calls
+    if expected is None:
+        assert all("requireCurveQuote" not in call for call in client.prepare_calls)
+    else:
+        assert all(call["requireCurveQuote"] is expected for call in client.prepare_calls)
+
+
 def test_operator_kick_run_broadcast_prepares_candidates_one_by_one(tmp_path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     client = _BroadcastClient()
@@ -330,7 +369,7 @@ def test_operator_kick_run_prepare_noop_does_not_repeat_generic_footer(tmp_path,
     assert result.exit_code == 2
     assert "Skip" in result.output
     assert "Candidate was skipped during prepare" in result.output
-    assert "Pair:        CRV / USDC" in result.output
+    assert "Pair:        CRV -> USDC" in result.output
     assert "Source:      Yearn Fee Burner (0x1111…1111)" in result.output
     assert "Auction:     0x2222222222222222222222222222222222222222" in result.output
     assert "No kick transactions were sent." not in result.output

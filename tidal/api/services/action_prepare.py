@@ -74,6 +74,7 @@ async def prepare_kick_action(
     token_address: str | None,
     limit: int | None,
     sender: str | None,
+    require_curve_quote: bool | None = None,
 ) -> tuple[str, list[str], dict[str, object]]:
     shortlist = build_shortlist(
         session,
@@ -120,7 +121,7 @@ async def prepare_kick_action(
         preview["preparedOperations"] = []
         return "noop", [], {"preview": preview, "transactions": []}
 
-    txn_service = build_txn_service(settings, session)
+    txn_service = build_txn_service(settings, session, require_curve_quote=require_curve_quote)
     inspections = await txn_service.kicker.inspect_candidates(candidates_to_prepare)
     prepared_kicks: list[PreparedKick] = []
     prepared_sweep_and_settle: list[PreparedSweepAndSettle] = []
@@ -230,6 +231,7 @@ async def prepare_kick_action(
             "tokenAddress": token_address,
             "limit": limit,
             "sender": sender,
+            "requireCurveQuote": require_curve_quote,
         },
         preview_payload=preview,
         transactions=transactions,

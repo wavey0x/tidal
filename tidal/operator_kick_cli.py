@@ -70,7 +70,7 @@ def _inspect_result_from_api(data: dict[str, object]) -> KickInspectResult:
 
 
 def _candidate_prepare_payload(candidate: KickInspectEntry, *, sender: str | None) -> dict[str, object]:
-    return {
+    payload = {
         "sourceType": candidate.source_type,
         "sourceAddress": candidate.source_address,
         "auctionAddress": candidate.auction_address,
@@ -78,9 +78,10 @@ def _candidate_prepare_payload(candidate: KickInspectEntry, *, sender: str | Non
         "limit": 1,
         "sender": sender,
     }
+    return payload
 
 
-def _prepare_skips(data: dict[str, object]) -> list[dict[str, str | None]]:
+def _prepare_skips(data: dict[str, object], *, candidate: KickInspectEntry | None = None) -> list[dict[str, str | None]]:
     preview = data.get("preview")
     if not isinstance(preview, dict):
         return []
@@ -113,10 +114,22 @@ def _prepare_skips(data: dict[str, object]) -> list[dict[str, str | None]]:
         skips.append(
             {
                 "reason": reason,
-                "token_symbol": str(entry.get("tokenSymbol")) if entry.get("tokenSymbol") is not None else None,
-                "want_symbol": str(entry.get("wantSymbol")) if entry.get("wantSymbol") is not None else None,
-                "source_name": str(entry.get("sourceName")) if entry.get("sourceName") is not None else None,
-                "source_address": source_label,
+                "token_symbol": (
+                    str(entry.get("tokenSymbol"))
+                    if entry.get("tokenSymbol") is not None
+                    else candidate.token_symbol if candidate is not None else None
+                ),
+                "want_symbol": (
+                    str(entry.get("wantSymbol"))
+                    if entry.get("wantSymbol") is not None
+                    else candidate.want_symbol if candidate is not None else None
+                ),
+                "source_name": (
+                    str(entry.get("sourceName"))
+                    if entry.get("sourceName") is not None
+                    else candidate.source_name if candidate is not None else None
+                ),
+                "source_address": source_label or (candidate.source_address if candidate is not None else None),
                 "auction_address": auction_label,
             }
         )
@@ -306,6 +319,11 @@ def kick_run(
     keystore: KeystoreOption = None,
     password_file: PasswordFileOption = None,
     verbose: VerboseOption = False,
+    require_curve_quote: bool | None = typer.Option(
+        None,
+        "--require-curve-quote/--allow-missing-curve-quote",
+        help="Override Curve quote strictness for prepare/broadcast.",
+    ),
 ) -> None:
     del verbose
     if bypass_confirmation and not broadcast:
@@ -345,9 +363,10 @@ def kick_run(
             if broadcast and inspect_result.ready_count:
                 total_ready = len(inspect_result.ready)
                 for index, candidate in enumerate(inspect_result.ready, start=1):
-                    prepare_response = client.prepare_kicks(
-                        _candidate_prepare_payload(candidate, sender=exec_ctx.sender)
-                    )
+                    prepare_payload = _candidate_prepare_payload(candidate, sender=exec_ctx.sender)
+                    if require_curve_quote is not None:
+                        prepare_payload["requireCurveQuote"] = require_curve_quote
+                    prepare_response = client.prepare_kicks(prepare_payload)
                     prepared_data = prepare_response["data"]
                     prepared_actions.append(prepared_data)
                     warnings = list(prepare_response.get("warnings") or [])
@@ -355,7 +374,7 @@ def kick_run(
 
                     if prepare_response["status"] == "noop" or not transactions:
                         if not json_output:
-                            skip_entries = _prepare_skips(prepared_data)
+                            skip_entries = _prepare_skips(prepared_data, candidate=candidate)
                             if skip_entries or warnings:
                                 prepare_feedback_emitted = True
                             for skip in skip_entries:

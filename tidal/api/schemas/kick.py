@@ -18,3 +18,6 @@ class KickInspectRequest(BaseModel):
 
 class KickPrepareRequest(KickInspectRequest):
     sender: str | None = None
+    require_curve_quote: bool | None = Field(default=None, alias="requireCurveQuote")
+
+    model_config = {"populate_by_name": True}

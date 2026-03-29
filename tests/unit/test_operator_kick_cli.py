@@ -298,6 +298,8 @@ def test_operator_kick_run_broadcast_prepares_candidates_one_by_one(tmp_path, mo
     assert "Explorer:     https://etherscan.io/tx/0x0000000000000000000000000000000000000000000000000000000000000001" in result.output
     assert "Gas limit:   252,000" in result.output
     assert "max 2.50 gwei" in result.output
+    assert result.output.index("Confirmed") < result.output.index("Kick (2 of 2)")
+    assert result.output.count("Explorer:     https://etherscan.io/tx/0x0000000000000000000000000000000000000000000000000000000000000001") == 1
 
 
 def test_operator_kick_run_prepare_noop_does_not_repeat_generic_footer(tmp_path, monkeypatch) -> None:
@@ -323,7 +325,7 @@ def test_operator_kick_run_prepare_noop_does_not_repeat_generic_footer(tmp_path,
 
     assert result.exit_code == 2
     assert (
-        "Skipped during prepare: CRV @ 0x2222222222222222222222222222222222222222: "
+        "Skip: CRV at 0x2222…2222: "
         "candidate was skipped during prepare"
     ) in result.output
     assert "No kick transactions were sent." not in result.output

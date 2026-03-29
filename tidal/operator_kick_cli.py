@@ -27,8 +27,9 @@ from tidal.cli_options import (
     SourceTypeOption,
     VerboseOption,
 )
-from tidal.cli_renderers import emit_json, render_kick_inspect, render_kick_submission_summary
+from tidal.cli_renderers import emit_json, render_inline_status, render_kick_inspect, render_kick_submission_summary
 from tidal.control_plane.client import ControlPlaneError
+from tidal.normalizers import short_address
 from tidal.operator_cli_support import (
     execute_prepared_action_sync,
     render_action_preview,
@@ -98,12 +99,12 @@ def _prepare_skip_messages(data: dict[str, object]) -> list[str]:
         auction_label = None
         if auction_address:
             try:
-                auction_label = to_checksum_address(str(auction_address))
+                auction_label = short_address(to_checksum_address(str(auction_address)))
             except Exception:
-                auction_label = str(auction_address)
+                auction_label = short_address(str(auction_address))
         reason = str(entry.get("reason") or "candidate was skipped during prepare")
         if auction_label:
-            messages.append(f"{token_label} @ {auction_label}: {reason}")
+            messages.append(f"{token_label} at {auction_label}: {reason}")
         else:
             messages.append(f"{token_label}: {reason}")
     return messages
@@ -326,6 +327,7 @@ def kick_run(
             prepared_candidate_count = 0
             skipped_confirmation_count = 0
             prepare_feedback_emitted = False
+            broadcast_feedback_emitted = False
 
             if broadcast and inspect_result.ready_count:
                 total_ready = len(inspect_result.ready)
@@ -344,7 +346,7 @@ def kick_run(
                             if skip_messages or warnings:
                                 prepare_feedback_emitted = True
                             for message in skip_messages:
-                                typer.echo(f"Skipped during prepare: {message}")
+                                render_inline_status("Skip", message, accent_style="yellow")
                             render_warnings(warnings)
                         continue
 
@@ -392,6 +394,9 @@ def kick_run(
                             signer=exec_ctx.signer,
                             transactions=transactions,
                         )
+                    if not json_output and action_records:
+                        render_broadcast_result(action_records)
+                        broadcast_feedback_emitted = True
                     broadcast_records.extend(action_records)
     except ControlPlaneError as exc:
         typer.echo(str(exc), err=True)
@@ -423,7 +428,7 @@ def kick_run(
             else:
                 typer.echo("No ready kick candidates.")
         else:
-            if broadcast_records:
+            if broadcast_records and not broadcast_feedback_emitted:
                 render_broadcast_result(broadcast_records)
             elif inspect_result.ready_count == 0:
                 typer.echo("No ready kick candidates.")

@@ -80,6 +80,19 @@ def render_panel(
     )
 
 
+def render_inline_status(
+    label: str,
+    message: str,
+    *,
+    accent_style: str = "yellow",
+    stderr: bool = False,
+) -> None:
+    text = Text()
+    text.append(f"{label}: ", style=f"bold {accent_style}")
+    text.append(message)
+    _console(stderr=stderr).print(text)
+
+
 def _display_bool(value: Any) -> str:
     if value is True:
         return "yes"

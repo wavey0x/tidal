@@ -26,7 +26,7 @@ from tidal.cli_options import (
     SourceTypeOption,
     VerboseOption,
 )
-from tidal.cli_renderers import emit_json, render_kick_inspect, render_kick_submission_summary
+from tidal.cli_renderers import emit_json, render_confirmation_banner, render_kick_inspect, render_kick_submission_summary
 from tidal.control_plane.client import ControlPlaneError
 from tidal.operator_cli_support import (
     execute_prepared_action_sync,
@@ -359,6 +359,8 @@ def kick_run(
                                 heading=f"Prepared kick action ({index}/{total_ready})",
                             )
                         render_warnings(warnings)
+                    if not bypass_confirmation:
+                        render_confirmation_banner("Send this transaction?")
                     if not bypass_confirmation and not typer.confirm("Send this transaction?", default=False):
                         continue
                     if exec_ctx.signer is None or exec_ctx.sender is None:

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from dataclasses import asdict, dataclass, is_dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import typer
 from eth_utils import to_checksum_address
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 from tidal.logging import OutputMode
 from tidal.normalizers import short_address
@@ -28,6 +34,58 @@ class BroadcastRecord:
     block_number: int | None = None
     gas_used: int | None = None
     gas_estimate: int | None = None
+
+
+def _console(*, stderr: bool = False) -> Console:
+    width = max(shutil.get_terminal_size((120, 20)).columns, 120)
+    return Console(
+        file=sys.stderr if stderr else sys.stdout,
+        width=width,
+        highlight=False,
+        soft_wrap=True,
+        emoji=False,
+    )
+
+
+def _panel_text(lines: list[str]) -> Text:
+    body = Text()
+    for index, line in enumerate(lines):
+        if index:
+            body.append("\n")
+        stripped = line.strip()
+        style = None
+        if stripped and (not line.startswith("  ") or stripped.endswith(("details", "plan", "preview"))):
+            style = "bold"
+        body.append(line, style=style)
+    return body
+
+
+def render_panel(
+    title: str,
+    lines: list[str],
+    *,
+    border_style: str = "cyan",
+    stderr: bool = False,
+) -> None:
+    if not lines:
+        return
+    _console(stderr=stderr).print(
+        Panel.fit(
+            _panel_text(lines),
+            title=title,
+            border_style=border_style,
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+    )
+
+
+def _display_bool(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "unknown"
 
 
 def _jsonable(value: Any) -> Any:
@@ -94,6 +152,186 @@ def _format_decimal_amount(value: Decimal) -> str:
     return f"{float(value):,.4f}" if value < 1 else f"{float(value):,.2f}"
 
 
+def render_warning_panel(warnings: list[str]) -> None:
+    if not warnings:
+        return
+    render_panel("Warnings", [f"- {warning}" for warning in warnings], border_style="yellow")
+
+
+def render_confirmation_banner(prompt: str) -> None:
+    render_panel("Confirmation Required", [prompt], border_style="cyan")
+
+
+def render_status_panel(title: str, message: str, *, border_style: str) -> None:
+    render_panel(title, [message], border_style=border_style)
+
+
+def _format_match_line(match: dict[str, Any]) -> str:
+    auction = short_address(str(match.get("auction_address") or match.get("auctionAddress") or "-"))
+    factory = short_address(str(match.get("factory_address") or match.get("factoryAddress") or "-"))
+    starting_price = match.get("starting_price") if match.get("starting_price") is not None else match.get("startingPrice")
+    version = match.get("version") or "unknown"
+    return f"auction={auction} factory={factory} startingPrice={starting_price or 'unknown'} version={version}"
+
+
+def _format_selected_tokens(selected_tokens: list[str], probes: list[dict[str, Any]]) -> str | None:
+    if not selected_tokens:
+        return None
+    selected_set = {str(address).lower() for address in selected_tokens}
+    labels: list[str] = []
+    for probe in probes:
+        token_address = str(probe.get("token_address") or probe.get("tokenAddress") or "").lower()
+        if token_address not in selected_set:
+            continue
+        symbol = probe.get("symbol")
+        label = str(symbol or short_address(str(probe.get("token_address") or probe.get("tokenAddress"))))
+        labels.append(label)
+    if not labels:
+        labels = [short_address(str(address)) for address in selected_tokens]
+    if len(labels) > 4:
+        return ", ".join(labels[:4]) + f", +{len(labels) - 4} more"
+    return ", ".join(labels)
+
+
+def _prepared_action_detail_lines(action_type: str | None, preview: dict[str, Any]) -> list[str]:
+    normalized_action_type = (action_type or "").replace("-", "_")
+    if normalized_action_type == "deploy":
+        lines = [
+            "",
+            "  Deployment details",
+            f"  Factory:     {_display_address(preview.get('factoryAddress'))}",
+            f"  Want:        {_display_address(preview.get('want'))}",
+            f"  Receiver:    {_display_address(preview.get('receiver'))}",
+            f"  Governance:  {_display_address(preview.get('governance'))}",
+            f"  Start price: {_format_broadcast_value(preview.get('startingPrice'))}",
+            f"  Salt:        {preview.get('salt') or '-'}",
+        ]
+        predicted = preview.get("predictedAuctionAddress")
+        if predicted:
+            lines.append(f"  Predicted:   {_display_address(predicted)}")
+        predicted_exists = preview.get("predictedAuctionAddressExists")
+        if predicted_exists is not None:
+            lines.append(f"  Exists now:  {_display_bool(predicted_exists)}")
+        existing_matches = preview.get("existingMatches")
+        if isinstance(existing_matches, list):
+            lines.append(f"  Matches:     {len(existing_matches)}")
+            for match in existing_matches[:3]:
+                if isinstance(match, dict):
+                    lines.append(f"    - {_format_match_line(match)}")
+            if len(existing_matches) > 3:
+                lines.append(f"    - +{len(existing_matches) - 3} more")
+        return lines
+
+    if normalized_action_type == "enable_tokens":
+        inspection = preview.get("inspection") if isinstance(preview.get("inspection"), dict) else {}
+        source = preview.get("source") if isinstance(preview.get("source"), dict) else {}
+        selected_tokens = [str(value) for value in preview.get("selectedTokens") or [] if value]
+        probes = [item for item in preview.get("probes") or [] if isinstance(item, dict)]
+        preview_result = preview.get("preview") if isinstance(preview.get("preview"), dict) else {}
+        source_name = source.get("source_name") or source.get("sourceName")
+        source_address = source.get("source_address") or source.get("sourceAddress")
+        source_label = str(source_name or _display_address(source_address))
+        if source_name and source_address:
+            source_label = f"{source_name} ({short_address(str(source_address))})"
+        lines = [
+            "",
+            "  Auction details",
+            f"  Auction:     {_display_address(inspection.get('auction_address') or inspection.get('auctionAddress'))}",
+            f"  Governance:  {_display_address(inspection.get('governance'))}",
+            f"  Receiver:    {_display_address(inspection.get('receiver'))}",
+            f"  Want:        {_display_address(inspection.get('want'))}",
+            f"  Source:      {source_label}",
+            f"  Source type: {str(source.get('source_type') or source.get('sourceType') or '-').replace('_', '-')}",
+            "",
+            "  Token plan",
+            f"  Selected:    {len(selected_tokens)} token(s)",
+            f"  Commands:    {_format_broadcast_value(preview.get('commandsCount'))}",
+            f"  State slots: {_format_broadcast_value(preview.get('stateSlots'))}",
+            f"  In factory:  {_display_bool(inspection.get('in_configured_factory'))}",
+            f"  Yearn gov:   {_display_bool(inspection.get('governance_matches_required'))}",
+        ]
+        selected_label = _format_selected_tokens(selected_tokens, probes)
+        if selected_label:
+            lines.append(f"  Tokens:      {selected_label}")
+        if preview_result:
+            lines.append(f"  Preview:     {'ok' if preview_result.get('call_succeeded') else 'failed'}")
+            if preview_result.get("error_message"):
+                lines.append(f"  Reason:      {preview_result['error_message']}")
+        return lines
+
+    if normalized_action_type == "settle":
+        inspection = preview.get("inspection") if isinstance(preview.get("inspection"), dict) else {}
+        decision = preview.get("decision") if isinstance(preview.get("decision"), dict) else {}
+        active_tokens = inspection.get("active_tokens") or inspection.get("activeTokens") or []
+        lines = [
+            "",
+            "  Auction details",
+            f"  Auction:     {_display_address(inspection.get('auction_address') or inspection.get('auctionAddress'))}",
+            f"  Active:      {_display_bool(inspection.get('is_active_auction') if 'is_active_auction' in inspection else inspection.get('isActiveAuction'))}",
+            f"  Active lot:  {_display_address(inspection.get('active_token') or inspection.get('activeToken'))}",
+            f"  Tokens:      {len(active_tokens)} active token(s)",
+            f"  Available:   {_format_broadcast_value(inspection.get('active_available_raw') if 'active_available_raw' in inspection else inspection.get('activeAvailableRaw'))}",
+            f"  Price:       {_format_broadcast_value(inspection.get('active_price_raw') if 'active_price_raw' in inspection else inspection.get('activePriceRaw'))}",
+            f"  Min price:   {_format_broadcast_value(inspection.get('minimum_price_raw') if 'minimum_price_raw' in inspection else inspection.get('minimumPriceRaw'))}",
+            "",
+            "  Settlement plan",
+            f"  Operation:   {str(decision.get('operation_type') or decision.get('operationType') or '-').replace('_', '-')}",
+            f"  Token:       {_display_address(decision.get('token_address') or decision.get('tokenAddress'))}",
+            f"  Status:      {decision.get('status') or '-'}",
+            f"  Reason:      {decision.get('reason') or '-'}",
+        ]
+        return lines
+
+    prepared_operations = preview.get("preparedOperations")
+    if isinstance(prepared_operations, list) and prepared_operations:
+        lines = ["", "  Planned operations"]
+        for index, operation in enumerate(prepared_operations[:3], 1):
+            if not isinstance(operation, dict):
+                continue
+            lines.append(
+                f"  {index}. {operation.get('operation') or 'operation'} -> "
+                f"{_display_address(operation.get('auctionAddress') or operation.get('to') or operation.get('sourceAddress'))}"
+            )
+        if len(prepared_operations) > 3:
+            lines.append(f"  +{len(prepared_operations) - 3} more operation(s)")
+        return lines
+
+    return []
+
+
+def _prepared_action_transaction_lines(transactions: list[dict[str, Any]]) -> list[str]:
+    lines = ["", "  Send details"]
+    for index, tx in enumerate(transactions, 1):
+        lines.extend(
+            [
+                f"  Tx {index}:        {tx.get('operation') or 'transaction'} -> {_display_address(tx.get('to'))}",
+                f"    From:       {_display_address(tx.get('sender'))}",
+                f"    Chain ID:   {_format_broadcast_value(tx.get('chainId'))}",
+                f"    Gas est:    {_display_gas_value(tx.get('gasEstimate'))}",
+                f"    Gas limit:  {_display_gas_value(tx.get('gasLimit'))}",
+            ]
+        )
+    return lines
+
+
+def render_prepared_action_summary(data: dict[str, Any], *, heading: str = "Prepared Action") -> None:
+    action_id = data.get("actionId")
+    action_type = str(data.get("actionType") or "").replace("_", "-") or None
+    preview = data.get("preview")
+    transactions = data.get("transactions") or []
+    lines = ["  Action details"]
+    if action_id:
+        lines.append(f"  Action ID:    {action_id}")
+    if action_type:
+        lines.append(f"  Action Type:  {action_type}")
+    lines.append(f"  Transactions: {len(transactions)}")
+    if isinstance(preview, dict):
+        lines.extend(_prepared_action_detail_lines(action_type, preview))
+    if isinstance(transactions, list) and transactions:
+        lines.extend(_prepared_action_transaction_lines([tx for tx in transactions if isinstance(tx, dict)]))
+    render_panel(heading, lines, border_style="cyan")
+
+
 def render_kick_submission_summary(summary: dict[str, Any]) -> None:
     kicks = summary["kicks"]
     batch_size = summary["batch_size"]
@@ -114,8 +352,8 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
         token_sym = k.get("token_symbol") or "???"
         want_sym = k.get("want_symbol") or "???"
         profile_name = k.get("pricing_profile_name") or "default"
-        amount = float(k["sell_amount"])
-        amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
+        amount = Decimal(str(k["sell_amount"]))
+        amount_str = _format_decimal_amount(amount)
         quote_amount = Decimal(str(k["quote_amount"]))
         usd_value = Decimal(str(k["usd_value"]))
 
@@ -156,9 +394,9 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
 
         rate_line = None
         if amount > 0:
-            quote_rate = quote_amount / Decimal(str(amount))
-            start_rate = Decimal(starting_price) / Decimal(str(amount))
-            min_rate = Decimal(minimum_price) / Decimal(str(amount))
+            quote_rate = quote_amount / amount
+            start_rate = Decimal(starting_price) / amount
+            min_rate = Decimal(minimum_price) / amount
             rate_line = (
                 f"  Rate:        {float(quote_rate):,.4f} quoted | {float(start_rate):,.4f} start | "
                 f"{float(min_rate):,.4f} floor {want_sym}/{token_sym}"
@@ -205,8 +443,8 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
             source_name = kick.get("source_name") or "Unknown"
             token_sym = kick.get("token_symbol") or "???"
             profile_name = kick.get("pricing_profile_name") or "default"
-            amount = float(kick["sell_amount"])
-            amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
+            amount = Decimal(str(kick["sell_amount"]))
+            amount_str = _format_decimal_amount(amount)
             usd_value = float(kick["usd_value"])
             content.append(f"  {index}. {source_name} | {amount_str} {token_sym} (~${usd_value:,.2f}) | {profile_name}")
 
@@ -222,13 +460,7 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
             f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee_str} gwei",
         ])
 
-    width = max(len(line) for line in content)
-    h_bar = "─" * (width + 2)
-    top = typer.style(f"┌{h_bar}┐", fg="cyan")
-    bottom = typer.style(f"└{h_bar}┘", fg="cyan")
-    vl = typer.style("│", fg="cyan")
-    lines = [top, *(f"{vl} {line.ljust(width)} {vl}" for line in content), bottom]
-    typer.echo("\n".join(lines))
+    render_panel("Prepared Transaction", content, border_style="cyan")
 
 
 def render_scan_summary(result: Any) -> None:
@@ -267,26 +499,25 @@ def render_broadcast_records(records: list[BroadcastRecord]) -> None:
         return
 
     for index, record in enumerate(records, 1):
-        if index > 1:
-            typer.echo()
-        heading = "Transaction:" if len(records) == 1 else f"Transaction {index}:"
-        typer.echo(heading)
+        heading = "Transaction" if len(records) == 1 else f"Transaction {index}"
+        lines: list[str] = []
         if record.operation:
-            typer.echo(f"  Operation:    {record.operation}")
-        typer.echo(f"  Sender:       {_format_broadcast_value(record.sender)}")
-        typer.echo(f"  Tx hash:      {record.tx_hash}")
+            lines.append(f"  Operation:    {record.operation}")
+        lines.append(f"  Sender:       {_format_broadcast_value(record.sender)}")
+        lines.append(f"  Tx hash:      {record.tx_hash}")
         explorer_url = tx_explorer_url(record.chain_id, record.tx_hash)
         if explorer_url is not None:
-            typer.echo(f"  Explorer:     {explorer_url}")
-        typer.echo(f"  Broadcast at: {_format_broadcast_value(record.broadcast_at)}")
+            lines.append(f"  Explorer:     {explorer_url}")
+        lines.append(f"  Broadcast at: {_format_broadcast_value(record.broadcast_at)}")
         if record.receipt_status is not None:
-            typer.echo(f"  Receipt:      {record.receipt_status}")
+            lines.append(f"  Receipt:      {record.receipt_status}")
         if record.block_number is not None:
-            typer.echo(f"  Block:        {_format_broadcast_value(record.block_number)}")
+            lines.append(f"  Block:        {_format_broadcast_value(record.block_number)}")
         if record.gas_used is not None:
-            typer.echo(f"  Gas used:     {_format_broadcast_value(record.gas_used)}")
+            lines.append(f"  Gas used:     {_format_broadcast_value(record.gas_used)}")
         if record.gas_estimate is not None:
-            typer.echo(f"  Gas estimate: {_format_broadcast_value(record.gas_estimate)}")
+            lines.append(f"  Gas estimate: {_format_broadcast_value(record.gas_estimate)}")
+        render_panel(heading, lines, border_style="cyan")
 
 
 def kick_broadcast_records(run_rows: list[dict[str, object]], *, sender: str | None) -> list[BroadcastRecord]:

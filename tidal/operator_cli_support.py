@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 import sys
-import threading
 from contextlib import contextmanager
 from typing import Any
 
 import typer
 from eth_utils import to_checksum_address
+from rich.console import Console
 
-from tidal.cli_renderers import BroadcastRecord, render_broadcast_records, tx_explorer_url
+from tidal.cli_renderers import (
+    BroadcastRecord,
+    render_broadcast_records,
+    render_prepared_action_summary,
+    render_status_panel,
+    render_warning_panel,
+    tx_explorer_url,
+)
 from tidal.control_plane.client import ControlPlaneClient
 from tidal.control_plane.outbox import ActionReportOutbox
 from tidal.runtime import build_web3_client
@@ -20,29 +26,11 @@ from tidal.time import utcnow_iso
 
 
 def render_action_preview(data: dict[str, Any], *, heading: str) -> None:
-    typer.echo(f"{heading}:")
-    action_id = data.get("actionId")
-    action_type = data.get("actionType")
-    if action_id:
-        typer.echo(f"  Action ID:    {action_id}")
-    if action_type:
-        typer.echo(f"  Action Type:  {action_type}")
-    preview = data.get("preview") or {}
-    transactions = data.get("transactions") or []
-    if isinstance(preview, dict):
-        prepared = preview.get("preparedOperations")
-        if isinstance(prepared, list) and prepared:
-            typer.echo(f"  Operations:   {len(prepared)}")
-    typer.echo(f"  Transactions: {len(transactions)}")
-    for index, tx in enumerate(transactions, 1):
-        typer.echo(f"  Tx {index}:       {tx.get('operation')} -> {tx.get('to')}")
-        typer.echo(f"    Gas est:    {tx.get('gasEstimate') or 'unavailable'}")
-        typer.echo(f"    Gas limit:  {tx.get('gasLimit') or 'unavailable'}")
+    render_prepared_action_summary(data, heading=heading)
 
 
 def render_warnings(warnings: list[str]) -> None:
-    for warning in warnings:
-        typer.echo(f"Warning: {warning}")
+    render_warning_panel(warnings)
     if warnings:
         typer.echo()
 
@@ -50,34 +38,13 @@ def render_warnings(warnings: list[str]) -> None:
 @contextmanager
 def submission_progress(message: str) -> None:
     if not sys.stdout.isatty():
-        typer.echo(message)
+        render_status_panel("Submitting", message, border_style="cyan")
         yield
         return
 
-    stop_event = threading.Event()
-    last_width = 0
-
-    def _spin() -> None:
-        nonlocal last_width
-        for frame in itertools.cycle(["-", "\\", "|", "/"]):
-            if stop_event.is_set():
-                break
-            text = f"{message} {frame}"
-            last_width = max(last_width, len(text))
-            sys.stdout.write(f"\r{text}")
-            sys.stdout.flush()
-            if stop_event.wait(0.1):
-                break
-
-    thread = threading.Thread(target=_spin, daemon=True)
-    thread.start()
-    try:
+    console = Console(file=sys.stdout, highlight=False, soft_wrap=True)
+    with console.status(f"[bold cyan]{message}[/bold cyan]", spinner="dots"):
         yield
-    finally:
-        stop_event.set()
-        thread.join(timeout=1)
-        sys.stdout.write("\r" + (" " * last_width) + "\r")
-        sys.stdout.flush()
 
 
 def render_submission_outcome(records: list[dict[str, Any]], *, chain_id: int) -> None:
@@ -91,16 +58,13 @@ def render_submission_outcome(records: list[dict[str, Any]], *, chain_id: int) -
     receipt_status = str(record.get("receiptStatus") or "").upper()
 
     if receipt_status == "CONFIRMED":
-        typer.secho("Confirmed", fg="green", nl=False)
-        typer.echo(f": {target}")
+        render_status_panel("Confirmed", target, border_style="green")
         return
     if receipt_status in {"FAILED", "REVERTED"}:
-        typer.secho("Failed", fg="red", nl=False)
-        typer.echo(f": {target}")
+        render_status_panel("Failed", target, border_style="red")
         return
 
-    typer.secho("Submitted", fg="yellow", nl=False)
-    typer.echo(f": {target}")
+    render_status_panel("Submitted", target, border_style="yellow")
 
 
 def _send_action_report(

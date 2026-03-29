@@ -17,7 +17,7 @@ from tidal.cli_options import (
     PasswordFileOption,
     SenderOption,
 )
-from tidal.cli_renderers import emit_json
+from tidal.cli_renderers import emit_json, render_confirmation_banner
 from tidal.control_plane.client import ControlPlaneError
 from tidal.operator_cli_support import (
     execute_prepared_action_sync,
@@ -49,8 +49,11 @@ def _handle_prepared_action(
     try:
         with cli_ctx.control_plane_client() as client:
             if broadcast and response["status"] == "ok":
+                confirmation_prompt = f"Broadcast {len(data.get('transactions') or [])} transaction(s)?"
+                if not bypass_confirmation:
+                    render_confirmation_banner(confirmation_prompt)
                 if not bypass_confirmation and not typer.confirm(
-                    f"Broadcast {len(data.get('transactions') or [])} transaction(s)?",
+                    confirmation_prompt,
                     default=False,
                 ):
                     raise typer.Exit(code=2)

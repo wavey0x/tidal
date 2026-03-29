@@ -249,8 +249,10 @@ def test_operator_kick_run_broadcast_prepares_candidates_one_by_one(tmp_path, mo
     assert "Quote out:   2,500.00 USDC" in result.output
     assert "Start quote: 2,750 USDC (+10% buffer)" in result.output
     assert "Min price:   2,375 USDC (-5% buffer)" in result.output
+    assert "Confirmation Required" in result.output
     assert "Submitting transaction..." in result.output
-    assert "Confirmed: https://etherscan.io/tx/0x0000000000000000000000000000000000000000000000000000000000000001" in result.output
+    assert "Confirmed" in result.output
+    assert "https://etherscan.io/tx/0x0000000000000000000000000000000000000000000000000000000000000001" in result.output
     assert "Explorer:     https://etherscan.io/tx/0x0000000000000000000000000000000000000000000000000000000000000001" in result.output
     assert "Gas limit:   252,000" in result.output
     assert "max 2.50 gwei" in result.output

@@ -31,9 +31,11 @@ from tidal.cli_options import (
 from tidal.cli_renderers import (
     emit_json,
     kick_scope_label,
+    render_confirmation_banner,
     render_kick_inspect,
     render_kick_run_summary,
     render_kick_submission_summary,
+    render_status_panel,
 )
 from tidal.errors import ConfigurationError
 from tidal.logging import OutputMode, configure_logging
@@ -74,10 +76,10 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
         batch_size = summary["batch_size"]
         render_kick_submission_summary(summary)
         prompt = "Send this transaction?" if batch_size == 1 else f"Send batch of {batch_size} kicks?"
+        render_confirmation_banner(prompt)
         accepted = typer.confirm(prompt, default=False)
         if accepted:
-            typer.echo()
-            typer.echo("Submitting transaction...")
+            render_status_panel("Submitting", "Submitting transaction...", border_style="cyan")
         return accepted
 
     return _confirm_batch

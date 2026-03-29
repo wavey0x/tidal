@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 from eth_utils import to_checksum_address
 
-from tidal.cli_renderers import BroadcastRecord, render_broadcast_records, render_kick_run_summary
+from tidal.cli_renderers import (
+    BroadcastRecord,
+    render_broadcast_records,
+    render_kick_run_summary,
+    render_prepared_action_summary,
+)
 from tidal.kick_cli import _make_confirm_fn
 
 
@@ -56,6 +61,7 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
     assert "Gas limit:   252,000" in output
     assert "Rate:        2.5000 quoted | 2.7500 start | 2.3750 floor USDC/CRV" in output
     assert "Profile:     stable | decay 0.01%" in output
+    assert "Confirmation Required" in output
     assert "Submitting transaction..." in output
     confirm_mock.assert_called_once_with("Send this transaction?", default=False)
 
@@ -281,7 +287,7 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
     )
 
     output = capsys.readouterr().out
-    assert "Transaction:" in output
+    assert "Transaction" in output
     assert "Operation:    settle" in output
     assert "Sender:       0x1111111111111111111111111111111111111111" in output
     assert "Tx hash:      0xabc" in output
@@ -291,6 +297,95 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
     assert "Block:        12,345" in output
     assert "Gas used:     210,000" in output
     assert "Gas estimate: 240,000" in output
+
+
+def test_render_prepared_action_summary_for_deploy(capsys):
+    render_prepared_action_summary(
+        {
+            "actionId": "action-deploy",
+            "actionType": "deploy",
+            "preview": {
+                "factoryAddress": "0x1111111111111111111111111111111111111111",
+                "want": "0x2222222222222222222222222222222222222222",
+                "receiver": "0x3333333333333333333333333333333333333333",
+                "governance": "0x4444444444444444444444444444444444444444",
+                "startingPrice": 1234,
+                "salt": "0xabc",
+                "predictedAuctionAddress": "0x5555555555555555555555555555555555555555",
+                "predictedAuctionAddressExists": False,
+                "existingMatches": [
+                    {
+                        "auction_address": "0x6666666666666666666666666666666666666666",
+                        "factory_address": "0x7777777777777777777777777777777777777777",
+                        "starting_price": 1200,
+                        "version": "1.0.0",
+                    }
+                ],
+            },
+            "transactions": [
+                {
+                    "operation": "deploy",
+                    "to": "0x1111111111111111111111111111111111111111",
+                    "sender": "0x8888888888888888888888888888888888888888",
+                    "chainId": 1,
+                    "gasEstimate": 210000,
+                    "gasLimit": 252000,
+                }
+            ],
+        },
+        heading="Prepared action",
+    )
+
+    output = capsys.readouterr().out
+    assert "Prepared action" in output
+    assert "Deployment details" in output
+    assert "Start price: 1,234" in output
+    assert "Predicted:" in output
+    assert "Matches:     1" in output
+    assert "Send details" in output
+
+
+def test_render_prepared_action_summary_for_settle(capsys):
+    render_prepared_action_summary(
+        {
+            "actionId": "action-settle",
+            "actionType": "settle",
+            "preview": {
+                "inspection": {
+                    "auction_address": "0x1111111111111111111111111111111111111111",
+                    "is_active_auction": True,
+                    "active_tokens": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+                    "active_token": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "active_available_raw": 0,
+                    "active_price_raw": 125,
+                    "minimum_price_raw": 100,
+                },
+                "decision": {
+                    "status": "actionable",
+                    "operation_type": "settle",
+                    "token_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "reason": "active lot is sold out",
+                },
+            },
+            "transactions": [
+                {
+                    "operation": "settle",
+                    "to": "0x1111111111111111111111111111111111111111",
+                    "sender": "0x9999999999999999999999999999999999999999",
+                    "chainId": 1,
+                    "gasEstimate": 150000,
+                    "gasLimit": 180000,
+                }
+            ],
+        },
+        heading="Prepared action",
+    )
+
+    output = capsys.readouterr().out
+    assert "Settlement plan" in output
+    assert "Operation:   settle" in output
+    assert "Reason:      active lot is sold out" in output
+    assert "Available:   0" in output
 
 
 def test_render_kick_run_summary_shows_transaction_block(capsys):
@@ -324,7 +419,7 @@ def test_render_kick_run_summary_shows_transaction_block(capsys):
     )
 
     output = capsys.readouterr().out
-    assert "Transaction:" in output
+    assert "Transaction" in output
     assert "Operation:    kick" in output
     assert "Sender:       0x1111111111111111111111111111111111111111" in output
     assert "Tx hash:      0xabc" in output

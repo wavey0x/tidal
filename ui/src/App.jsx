@@ -45,7 +45,11 @@ function parseLocation() {
   } else if (path === "fee-burner") {
     page = "fee-burner";
   }
-  return { page, runId: params.get("run_id") || null };
+  return {
+    page,
+    runId: params.get("run_id") || null,
+    kickId: params.get("kick_id") || null,
+  };
 }
 
 function navigateTo(page, params) {
@@ -937,6 +941,8 @@ function KickDetailContent({ kick }) {
   let quoteSummary = null;
   let tokenOutDecimals = null;
   let quoteRequestUrl = null;
+  let identifierLabel = null;
+  let identifierValue = null;
 
   if (kick.quoteResponseJson) {
     try {
@@ -958,6 +964,14 @@ function KickDetailContent({ kick }) {
     } catch {
       // ignore parse errors
     }
+  }
+
+  if (kick.runId && kick.runId.startsWith("api-action:")) {
+    identifierLabel = "Action ID";
+    identifierValue = kick.runId.slice("api-action:".length) || kick.runId;
+  } else if (kick.runId && kick.runId !== "api-prepare") {
+    identifierLabel = "Run ID";
+    identifierValue = kick.runId;
   }
 
   const bpsToPercent = (bps) => {
@@ -1113,10 +1127,12 @@ function KickDetailContent({ kick }) {
           <div className="kick-detail-value error-text">{kick.errorMessage}</div>
         </div>
       ) : null}
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Run ID</div>
-        <div className="kick-detail-value">{kick.runId || "—"}</div>
-      </div>
+      {identifierLabel ? (
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">{identifierLabel}</div>
+          <div className="kick-detail-value">{identifierValue}</div>
+        </div>
+      ) : null}
       {(kick.auctionAddress || quoteRequestUrl) ? (
         <div className="kick-detail-item" style={{ gridColumn: "1 / -1" }}>
           <div className="kick-detail-value">
@@ -1343,7 +1359,7 @@ function KickLogSkeletonRows() {
   ));
 }
 
-function KickLogPage({ nowMs, initialRunId }) {
+function KickLogPage({ nowMs, initialRunId, initialKickId }) {
   const [kicks, setKicks] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -1397,8 +1413,10 @@ function KickLogPage({ nowMs, initialRunId }) {
   }, []);
 
   useEffect(() => {
-    if (loading || !initialRunId || !kicks.length) return;
-    const match = kicks.find((k) => k.runId === initialRunId);
+    if (loading || (!initialKickId && !initialRunId) || !kicks.length) return;
+    const match = initialKickId
+      ? kicks.find((k) => String(k.id) === String(initialKickId))
+      : kicks.find((k) => k.runId === initialRunId);
     if (match) {
       setExpandedRows(new Set([match.id]));
       if (!isMobile) {
@@ -1407,7 +1425,7 @@ function KickLogPage({ nowMs, initialRunId }) {
         });
       }
     }
-  }, [loading, initialRunId, kicks, isMobile]);
+  }, [loading, initialKickId, initialRunId, kicks, isMobile]);
 
   const filteredKicks = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -1510,8 +1528,8 @@ function KickLogPage({ nowMs, initialRunId }) {
       next.add(kick.id);
       return next;
     });
-    if (expanding && kick.runId) {
-      navigateTo("kicks", { run_id: kick.runId });
+    if (expanding) {
+      navigateTo("kicks", { kick_id: String(kick.id) });
     } else {
       navigateTo("kicks");
     }
@@ -1574,7 +1592,12 @@ function KickLogPage({ nowMs, initialRunId }) {
                     nowMs={nowMs}
                     isExpanded={expandedRows.has(kick.id)}
                     onToggle={() => toggleRow(kick)}
-                    rowRef={kick.runId === initialRunId ? highlightedRowRef : undefined}
+                    rowRef={
+                      (initialKickId != null && String(kick.id) === String(initialKickId))
+                      || (initialKickId == null && kick.runId === initialRunId)
+                        ? highlightedRowRef
+                        : undefined
+                    }
                     isMobile={isMobile}
                   />
                 ))
@@ -1763,8 +1786,10 @@ function FeeBurnerPage({
 }
 
 export default function App() {
-  const [activePage, setActivePage] = useState(() => parseLocation().page);
-  const [initialRunId] = useState(() => parseLocation().runId);
+  const [initialLocation] = useState(() => parseLocation());
+  const [activePage, setActivePage] = useState(() => initialLocation.page);
+  const [initialRunId] = useState(() => initialLocation.runId);
+  const [initialKickId] = useState(() => initialLocation.kickId);
   const [selectedToken, setSelectedToken] = useState(getTokenFromUrl);
   const [auctionFilter, setAuctionFilter] = useState("all");
   const [isAuctionFilterMenuOpen, setIsAuctionFilterMenuOpen] = useState(false);
@@ -2356,7 +2381,13 @@ export default function App() {
         </div>
       </header>
 
-      {activePage === "kicks" ? <KickLogPage nowMs={nowMs} initialRunId={initialRunId} /> : null}
+      {activePage === "kicks" ? (
+        <KickLogPage
+          nowMs={nowMs}
+          initialRunId={initialRunId}
+          initialKickId={initialKickId}
+        />
+      ) : null}
 
       {activePage === "strategies" ? (
       <>

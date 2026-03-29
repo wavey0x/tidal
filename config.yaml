@@ -2,7 +2,7 @@
 # Any key here can be overridden by setting the equivalent env var.
 
 # ── General ──────────────────────────────────────────
-db_path: ./tidal.db
+db_path: data/tidal.db
 chain_id: 1
 
 # ── Scanner ──────────────────────────────────────────

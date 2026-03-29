@@ -21,7 +21,7 @@ Create `/home/wavey/tidal/.env`:
 
 ```bash
 # Database
-TIDAL_DB_PATH=data/tidal.db
+DB_PATH=data/tidal.db
 
 # RPC (local geth)
 RPC_URL=http://127.0.0.1:8545

@@ -53,7 +53,7 @@ class ControlPlaneClient:
             raise ControlPlaneError(f"API returned invalid JSON ({response.status_code})") from exc
 
         if not response.is_success:
-            message = payload.get("detail") or payload.get("error") or payload.get("message") or response.text
+            message = payload.get("detail") or payload.get("message") or payload.get("error") or response.text
             raise ControlPlaneError(str(message))
 
         if not isinstance(payload, dict):

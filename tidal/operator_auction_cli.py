@@ -23,6 +23,8 @@ from tidal.operator_cli_support import (
     execute_prepared_action_sync,
     render_action_preview,
     render_broadcast_result,
+    render_submission_outcome,
+    submission_progress,
     render_warnings,
 )
 
@@ -54,14 +56,17 @@ def _handle_prepared_action(
                     raise typer.Exit(code=2)
                 if exec_ctx.signer is None or exec_ctx.sender is None:
                     raise typer.Exit(code=1)
-                broadcast_records = execute_prepared_action_sync(
-                    settings=cli_ctx.settings,
-                    client=client,
-                    action_id=str(data["actionId"]),
-                    sender=exec_ctx.sender,
-                    signer=exec_ctx.signer,
-                    transactions=list(data.get("transactions") or []),
-                )
+                with submission_progress("Submitting transaction..."):
+                    broadcast_records = execute_prepared_action_sync(
+                        settings=cli_ctx.settings,
+                        client=client,
+                        action_id=str(data["actionId"]),
+                        sender=exec_ctx.sender,
+                        signer=exec_ctx.signer,
+                        transactions=list(data.get("transactions") or []),
+                    )
+                if not json_output:
+                    render_submission_outcome(broadcast_records, chain_id=cli_ctx.settings.chain_id)
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

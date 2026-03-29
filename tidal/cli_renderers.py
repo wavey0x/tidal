@@ -23,6 +23,7 @@ class BroadcastRecord:
     sender: str | None
     tx_hash: str
     broadcast_at: str | None
+    chain_id: int | None = None
     receipt_status: str | None = None
     block_number: int | None = None
     gas_used: int | None = None
@@ -212,9 +213,6 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
     bottom = typer.style(f"└{h_bar}┘", fg="cyan")
     vl = typer.style("│", fg="cyan")
     lines = [top, *(f"{vl} {line.ljust(width)} {vl}" for line in content), bottom]
-    candidate_label = "candidate" if batch_size == 1 else "candidates"
-    typer.echo(f"{batch_size} {candidate_label} ready for submission")
-    typer.echo()
     typer.echo("\n".join(lines))
 
 
@@ -236,6 +234,19 @@ def _format_broadcast_value(value: Any) -> str:
     return str(value)
 
 
+def tx_explorer_url(chain_id: int | None, tx_hash: str) -> str | None:
+    base_urls = {
+        1: "https://etherscan.io",
+        10: "https://optimistic.etherscan.io",
+        42161: "https://arbiscan.io",
+        8453: "https://basescan.org",
+    }
+    base_url = base_urls.get(chain_id)
+    if base_url is None:
+        return None
+    return f"{base_url}/tx/{tx_hash}"
+
+
 def render_broadcast_records(records: list[BroadcastRecord]) -> None:
     if not records:
         return
@@ -249,6 +260,9 @@ def render_broadcast_records(records: list[BroadcastRecord]) -> None:
             typer.echo(f"  Operation:    {record.operation}")
         typer.echo(f"  Sender:       {_format_broadcast_value(record.sender)}")
         typer.echo(f"  Tx hash:      {record.tx_hash}")
+        explorer_url = tx_explorer_url(record.chain_id, record.tx_hash)
+        if explorer_url is not None:
+            typer.echo(f"  Explorer:     {explorer_url}")
         typer.echo(f"  Broadcast at: {_format_broadcast_value(record.broadcast_at)}")
         if record.receipt_status is not None:
             typer.echo(f"  Receipt:      {record.receipt_status}")
@@ -281,6 +295,7 @@ def kick_broadcast_records(run_rows: list[dict[str, object]], *, sender: str | N
                 sender=sender,
                 tx_hash=tx_hash_str,
                 broadcast_at=str(row.get("created_at")) if row.get("created_at") else None,
+                chain_id=int(row["chain_id"]) if row.get("chain_id") is not None else None,
                 receipt_status=str(row.get("status")) if row.get("status") else None,
                 block_number=int(block_number) if block_number is not None else None,
                 gas_used=int(gas_used) if gas_used is not None else None,

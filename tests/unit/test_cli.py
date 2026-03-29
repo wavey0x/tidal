@@ -47,7 +47,6 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
 
     output = capsys.readouterr().out
     assert result is True
-    assert "1 candidate ready for submission" in output
     assert "Auction details" in output
     assert "Send details" in output
     assert f"Auction:     {to_checksum_address('0x2222222222222222222222222222222222222222')}" in output
@@ -224,6 +223,7 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
                 sender="0x1111111111111111111111111111111111111111",
                 tx_hash="0xabc",
                 broadcast_at="2026-03-28T15:04:05+00:00",
+                chain_id=1,
                 receipt_status="CONFIRMED",
                 block_number=12345,
                 gas_used=210000,
@@ -237,6 +237,7 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
     assert "Operation:    settle" in output
     assert "Sender:       0x1111111111111111111111111111111111111111" in output
     assert "Tx hash:      0xabc" in output
+    assert "Explorer:     https://etherscan.io/tx/0xabc" in output
     assert "Broadcast at: 2026-03-28T15:04:05+00:00" in output
     assert "Receipt:      CONFIRMED" in output
     assert "Block:        12,345" in output

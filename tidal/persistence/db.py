@@ -14,10 +14,7 @@ class Database:
     """Small wrapper around SQLAlchemy engine and session factory."""
 
     def __init__(self, database_url: str):
-        engine_kwargs: dict[str, object] = {"future": True}
-        if database_url.startswith("sqlite"):
-            engine_kwargs["connect_args"] = {"timeout": _SQLITE_BUSY_TIMEOUT_MS / 1000}
-        self.engine = create_engine(database_url, **engine_kwargs)
+        self.engine = create_engine(database_url, future=True)
         if self.engine.dialect.name == "sqlite":
             event.listen(self.engine, "connect", self._configure_sqlite_connection)
         self._session_factory = sessionmaker(

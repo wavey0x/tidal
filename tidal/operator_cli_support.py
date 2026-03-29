@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import sys
+import threading
+from contextlib import contextmanager
 from typing import Any
 
 import typer
 from eth_utils import to_checksum_address
 
-from tidal.cli_renderers import BroadcastRecord, render_broadcast_records
+from tidal.cli_renderers import BroadcastRecord, render_broadcast_records, tx_explorer_url
 from tidal.control_plane.client import ControlPlaneClient
 from tidal.runtime import build_web3_client
 from tidal.time import utcnow_iso
@@ -40,6 +44,62 @@ def render_warnings(warnings: list[str]) -> None:
         typer.echo(f"Warning: {warning}")
     if warnings:
         typer.echo()
+
+
+@contextmanager
+def submission_progress(message: str) -> None:
+    if not sys.stdout.isatty():
+        typer.echo(message)
+        yield
+        return
+
+    stop_event = threading.Event()
+    last_width = 0
+
+    def _spin() -> None:
+        nonlocal last_width
+        for frame in itertools.cycle(["-", "\\", "|", "/"]):
+            if stop_event.is_set():
+                break
+            text = f"{message} {frame}"
+            last_width = max(last_width, len(text))
+            sys.stdout.write(f"\r{text}")
+            sys.stdout.flush()
+            if stop_event.wait(0.1):
+                break
+
+    thread = threading.Thread(target=_spin, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        thread.join(timeout=1)
+        sys.stdout.write("\r" + (" " * last_width) + "\r")
+        sys.stdout.flush()
+
+
+def render_submission_outcome(records: list[dict[str, Any]], *, chain_id: int) -> None:
+    if not records:
+        return
+
+    record = records[-1]
+    tx_hash = str(record.get("txHash") or "")
+    explorer_url = tx_explorer_url(chain_id, tx_hash) if tx_hash else None
+    target = explorer_url or tx_hash or "transaction"
+    receipt_status = str(record.get("receiptStatus") or "").upper()
+
+    if receipt_status == "CONFIRMED":
+        typer.secho("Confirmed", fg="green", nl=False)
+        typer.echo(f": {target}")
+        return
+    if receipt_status in {"FAILED", "REVERTED"}:
+        typer.secho("Failed", fg="red", nl=False)
+        typer.echo(f": {target}")
+        return
+
+    typer.secho("Submitted", fg="yellow", nl=False)
+    typer.echo(f": {target}")
 
 
 async def broadcast_prepared_action(
@@ -138,6 +198,7 @@ async def broadcast_prepared_action(
                 "sender": sender,
                 "txHash": tx_hash,
                 "broadcastAt": broadcast_at,
+                "chainId": settings.chain_id,
                 "gasEstimate": tx.get("gasEstimate"),
             }
             try:
@@ -207,6 +268,7 @@ def render_broadcast_result(records: list[dict[str, Any]]) -> None:
                 sender=str(record.get("sender")) if record.get("sender") is not None else None,
                 tx_hash=str(record["txHash"]),
                 broadcast_at=str(record.get("broadcastAt")) if record.get("broadcastAt") is not None else None,
+                chain_id=int(record["chainId"]) if record.get("chainId") is not None else None,
                 receipt_status=str(record.get("receiptStatus")) if record.get("receiptStatus") is not None else None,
                 block_number=int(record["blockNumber"]) if record.get("blockNumber") is not None else None,
                 gas_used=int(record["gasUsed"]) if record.get("gasUsed") is not None else None,

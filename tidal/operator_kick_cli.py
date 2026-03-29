@@ -32,6 +32,8 @@ from tidal.operator_cli_support import (
     execute_prepared_action_sync,
     render_action_preview,
     render_broadcast_result,
+    render_submission_outcome,
+    submission_progress,
     render_warnings,
 )
 from tidal.ops.kick_inspect import KickInspectEntry, KickInspectResult
@@ -354,13 +356,12 @@ def kick_run(
                         render_warnings(warnings)
                     if not bypass_confirmation and not typer.confirm("Send this transaction?", default=False):
                         continue
-                    if not json_output:
-                        typer.echo()
-                        typer.echo("Submitting transaction...")
                     if exec_ctx.signer is None or exec_ctx.sender is None:
                         raise typer.Exit(code=1)
-                    broadcast_records.extend(
-                        execute_prepared_action_sync(
+                    if not json_output:
+                        typer.echo()
+                    with submission_progress("Submitting transaction..."):
+                        action_records = execute_prepared_action_sync(
                             settings=cli_ctx.settings,
                             client=client,
                             action_id=str(prepared_data["actionId"]),
@@ -368,7 +369,9 @@ def kick_run(
                             signer=exec_ctx.signer,
                             transactions=transactions,
                         )
-                    )
+                    if not json_output:
+                        render_submission_outcome(action_records, chain_id=cli_ctx.settings.chain_id)
+                    broadcast_records.extend(action_records)
     except ControlPlaneError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

@@ -59,7 +59,9 @@ def inspect_kick_candidates(
     source_type: SourceType | None = None,
     source_address: str | None = None,
     auction_address: str | None = None,
+    token_address: str | None = None,
     limit: int | None = None,
+    include_live_inspection: bool = True,
 ) -> KickInspectResult:
     shortlist = build_shortlist(
         session,
@@ -68,6 +70,7 @@ def inspect_kick_candidates(
         source_type=source_type,
         source_address=source_address,
         auction_address=auction_address,
+        token_address=token_address,
         limit=limit,
     )
     decisions = check_pre_send(
@@ -77,7 +80,7 @@ def inspect_kick_candidates(
     )
     ready_candidates = [decision.candidate for decision in decisions if decision.action == KickAction.KICK]
     ready_inspections: dict[tuple[str, str], AuctionInspection] = {}
-    if settings.rpc_url and ready_candidates:
+    if include_live_inspection and settings.rpc_url and ready_candidates:
         txn_service = build_txn_service(settings, session)
         ready_inspections = asyncio.run(txn_service.kicker.inspect_candidates(ready_candidates))
 

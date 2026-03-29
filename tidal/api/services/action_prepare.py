@@ -71,6 +71,7 @@ async def prepare_kick_action(
     source_type: str | None,
     source_address: str | None,
     auction_address: str | None,
+    token_address: str | None,
     limit: int | None,
     sender: str | None,
 ) -> tuple[str, list[str], dict[str, object]]:
@@ -81,6 +82,7 @@ async def prepare_kick_action(
         source_type=source_type,  # type: ignore[arg-type]
         source_address=source_address,
         auction_address=auction_address,
+        token_address=token_address,
         limit=limit,
     )
     decisions = check_pre_send(
@@ -105,6 +107,7 @@ async def prepare_kick_action(
         "sourceType": source_type,
         "sourceAddress": source_address,
         "auctionAddress": auction_address,
+        "tokenAddress": token_address,
         "limit": limit,
         "eligibleCount": len(shortlist.eligible_candidates),
         "selectedCount": len(shortlist.selected_candidates),
@@ -222,6 +225,7 @@ async def prepare_kick_action(
             "sourceType": source_type,
             "sourceAddress": source_address,
             "auctionAddress": auction_address,
+            "tokenAddress": token_address,
             "limit": limit,
             "sender": sender,
         },
@@ -230,6 +234,7 @@ async def prepare_kick_action(
         resource_address=auction_address or source_address,
         auction_address=auction_address,
         source_address=source_address,
+        token_address=token_address,
     )
     return "ok", warnings, {
         "actionId": action_id,
@@ -246,7 +251,9 @@ def inspect_kicks(
     source_type: str | None,
     source_address: str | None,
     auction_address: str | None,
+    token_address: str | None,
     limit: int | None,
+    include_live_inspection: bool,
 ) -> dict[str, object]:
     result = inspect_kick_candidates(
         session,
@@ -254,7 +261,9 @@ def inspect_kicks(
         source_type=source_type,  # type: ignore[arg-type]
         source_address=source_address,
         auction_address=auction_address,
+        token_address=token_address,
         limit=limit,
+        include_live_inspection=include_live_inspection,
     )
     return _serialize(result)
 
@@ -703,13 +712,27 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
             "auctionAddress": item.candidate.auction_address,
             "sourceAddress": item.candidate.source_address,
             "sourceName": item.candidate.source_name,
+            "sourceType": item.candidate.source_type,
             "tokenAddress": item.candidate.token_address,
             "tokenSymbol": item.candidate.token_symbol,
+            "wantAddress": item.candidate.want_address,
+            "wantSymbol": item.candidate.want_symbol,
+            "wantPriceUsd": item.candidate.want_price_usd,
             "sellAmount": item.normalized_balance,
             "startingPrice": item.starting_price_str,
+            "startingPriceDisplay": (
+                f"{item.starting_price_raw:,} {item.candidate.want_symbol or 'want-token'} "
+                f"(+{item.start_price_buffer_bps / 100:.0f}% buffer)"
+            ),
             "minimumPrice": item.minimum_price_str,
+            "minimumPriceDisplay": (
+                f"{item.minimum_price_raw:,} {item.candidate.want_symbol or 'want-token'} "
+                f"(-{item.min_price_buffer_bps / 100:.0f}% buffer)"
+            ),
             "quoteAmount": item.quote_amount_str,
             "usdValue": item.usd_value_str,
+            "bufferBps": item.start_price_buffer_bps,
+            "minBufferBps": item.min_price_buffer_bps,
             "pricingProfileName": item.pricing_profile_name,
             "stepDecayRateBps": item.step_decay_rate_bps,
             "settleToken": item.settle_token,

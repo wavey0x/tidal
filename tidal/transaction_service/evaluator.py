@@ -54,6 +54,7 @@ def shortlist_candidates(
     source_type: SourceType | None = None,
     source_address: str | None = None,
     auction_address: str | None = None,
+    token_address: str | None = None,
     limit: int | None = None,
 ) -> list[KickCandidate]:
     return build_shortlist(
@@ -63,6 +64,7 @@ def shortlist_candidates(
         source_type=source_type,
         source_address=source_address,
         auction_address=auction_address,
+        token_address=token_address,
         limit=limit,
     ).selected_candidates
 
@@ -75,6 +77,7 @@ def build_shortlist(
     source_type: SourceType | None = None,
     source_address: str | None = None,
     auction_address: str | None = None,
+    token_address: str | None = None,
     limit: int | None = None,
 ) -> ShortlistResult:
     """Query SQLite for source-token pairs above threshold with fresh data."""
@@ -216,12 +219,17 @@ def build_shortlist(
             )
         )
 
-    if source_type is not None:
-        candidates = [candidate for candidate in candidates if candidate.source_type == source_type]
-    if source_address is not None:
-        candidates = [candidate for candidate in candidates if candidate.source_address.lower() == source_address]
-    if auction_address is not None:
-        candidates = [candidate for candidate in candidates if candidate.auction_address.lower() == auction_address]
+    normalized_source = source_address.lower() if source_address is not None else None
+    normalized_auction = auction_address.lower() if auction_address is not None else None
+    normalized_token = token_address.lower() if token_address is not None else None
+    if source_type is not None or normalized_source or normalized_auction or normalized_token:
+        candidates = [
+            c for c in candidates
+            if (source_type is None or c.source_type == source_type)
+            and (normalized_source is None or c.source_address.lower() == normalized_source)
+            and (normalized_auction is None or c.auction_address.lower() == normalized_auction)
+            and (normalized_token is None or c.token_address.lower() == normalized_token)
+        ]
 
     all_eligible_candidates = sort_candidates(candidates)
     selected_before_limit = _best_candidate_per_auction(candidates)

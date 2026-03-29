@@ -89,6 +89,18 @@ def test_shortlist_filters_below_threshold(session):
     assert len(candidates) == 0
 
 
+def test_shortlist_filters_by_token_address_case_insensitively(session):
+    _seed_data(session)
+    candidates = shortlist_candidates(
+        session,
+        usd_threshold=100,
+        max_data_age_seconds=600,
+        token_address="0XTOKEN1",
+    )
+    assert len(candidates) == 1
+    assert candidates[0].token_address == "0xtoken1"
+
+
 def test_shortlist_filters_no_auction(session):
     _seed_data(session, auction_address=None)
     candidates = shortlist_candidates(session, usd_threshold=100, max_data_age_seconds=600)

@@ -27,7 +27,9 @@ def post_kick_inspect(
         source_type=payload.source_type,
         source_address=payload.source_address,
         auction_address=payload.auction_address,
+        token_address=payload.token_address,
         limit=payload.limit,
+        include_live_inspection=payload.include_live_inspection,
     )
     status = "ok" if data.get("ready_count") or data.get("cooldown_count") or data.get("deferred_same_auction_count") else "noop"
     return {"status": status, "warnings": [], "data": data}
@@ -47,6 +49,7 @@ async def post_kick_prepare(
         source_type=payload.source_type,
         source_address=payload.source_address,
         auction_address=payload.auction_address,
+        token_address=payload.token_address,
         limit=payload.limit,
         sender=payload.sender,
     )

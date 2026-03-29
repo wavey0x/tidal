@@ -67,10 +67,10 @@ class CLIContext:
         if not self.settings.rpc_url:
             raise ConfigurationError("RPC_URL is required for this command")
 
-    def require_api(self) -> None:
+    def require_api(self, *, auth: bool = True) -> None:
         if not self.api_base_url:
             raise ConfigurationError("TIDAL_API_BASE_URL is required for this command")
-        if not self.api_key:
+        if auth and not self.api_key:
             raise ConfigurationError("TIDAL_API_KEY is required for this command")
 
     @contextmanager
@@ -87,11 +87,11 @@ class CLIContext:
         self.require_rpc()
         return build_web3_client(self.settings)
 
-    def control_plane_client(self) -> ControlPlaneClient:
-        self.require_api()
+    def control_plane_client(self, *, auth: bool = True) -> ControlPlaneClient:
+        self.require_api(auth=auth)
         return ControlPlaneClient(
             base_url=str(self.api_base_url),
-            token=str(self.api_key),
+            token=str(self.api_key) if self.api_key else "",
             timeout_seconds=self.settings.tidal_api_request_timeout_seconds,
         )
 

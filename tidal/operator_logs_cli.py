@@ -86,7 +86,7 @@ def logs_kicks(
     normalized_source = normalize_cli_address(source_address)
     normalized_auction = normalize_cli_address(auction_address)
     try:
-        with cli_ctx.control_plane_client() as client:
+        with cli_ctx.control_plane_client(auth=False) as client:
             response = client.get_kick_logs(
                 limit=limit or 20,
                 offset=0,
@@ -117,7 +117,7 @@ def logs_scans(
 ) -> None:
     cli_ctx = CLIContext(config, api_base_url=api_base_url, api_key=api_key)
     try:
-        with cli_ctx.control_plane_client() as client:
+        with cli_ctx.control_plane_client(auth=False) as client:
             response = client.get_scan_logs(limit=limit or 20, offset=0, status=status)
     except ControlPlaneError as exc:
         typer.echo(str(exc), err=True)
@@ -141,7 +141,7 @@ def logs_show(
 ) -> None:
     cli_ctx = CLIContext(config, api_base_url=api_base_url, api_key=api_key)
     try:
-        with cli_ctx.control_plane_client() as client:
+        with cli_ctx.control_plane_client(auth=False) as client:
             response = client.get_run_detail(run_id)
     except ControlPlaneError as exc:
         typer.echo(str(exc), err=True)

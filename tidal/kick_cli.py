@@ -6,7 +6,6 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
-from decimal import Decimal, InvalidOperation
 
 import typer
 from sqlalchemy import select
@@ -29,10 +28,15 @@ from tidal.cli_options import (
     SourceTypeOption,
     VerboseOption,
 )
-from tidal.cli_renderers import emit_json, kick_scope_label, render_kick_inspect, render_kick_run_summary
+from tidal.cli_renderers import (
+    emit_json,
+    kick_scope_label,
+    render_kick_inspect,
+    render_kick_run_summary,
+    render_kick_submission_summary,
+)
 from tidal.errors import ConfigurationError
 from tidal.logging import OutputMode, configure_logging
-from tidal.normalizers import short_address
 from tidal.ops.kick_inspect import inspect_kick_candidates
 from tidal.persistence import models
 from tidal.runtime import build_txn_service
@@ -67,111 +71,8 @@ def _make_confirm_fn() -> Callable[[dict], bool]:
     """Return a confirm callback that displays a batch summary."""
 
     def _confirm_batch(summary: dict) -> bool:
-        kicks = summary["kicks"]
         batch_size = summary["batch_size"]
-        gas_cost_eth = summary.get("gas_cost_eth", 0)
-        priority_fee = summary.get("priority_fee_gwei", 0)
-        max_fee = summary.get("max_fee_per_gas_gwei", 0)
-        gas_estimate = summary.get("gas_estimate", 0)
-
-        if batch_size == 1:
-            k = kicks[0]
-            source_name = k.get("source_name") or "Unknown"
-            token_sym = k.get("token_symbol") or "???"
-            want_sym = k.get("want_symbol") or "???"
-            profile_name = k.get("pricing_profile_name") or "default"
-            amount = float(k["sell_amount"])
-            amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
-            quote_amount = Decimal(str(k["quote_amount"]))
-            usd_value = Decimal(str(k["usd_value"]))
-
-            starting_price = int(k["starting_price"])
-            minimum_price = int(k["minimum_price"])
-            step_decay_rate_bps = k.get("step_decay_rate_bps")
-            step_decay_str = f"{step_decay_rate_bps / 100:.2f}%" if step_decay_rate_bps is not None else "—"
-            quote_amount_str = f"{float(quote_amount):,.4f}" if quote_amount < 1 else f"{float(quote_amount):,.2f}"
-            quote_value_line = None
-            divergence_line = None
-            want_price_usd = k.get("want_price_usd")
-            if want_price_usd is not None:
-                try:
-                    want_price = Decimal(str(want_price_usd))
-                    quote_value_usd = quote_amount * want_price
-                    quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym} (~${float(quote_value_usd):,.2f})"
-                    if usd_value > 0 and quote_value_usd > 0:
-                        mismatch_ratio = abs(usd_value - quote_value_usd) / usd_value
-                        if mismatch_ratio >= Decimal("0.20"):
-                            divergence_line = (
-                                f"⚠️  Warning: sell value and quote value differ by {float(mismatch_ratio * 100):,.1f}%"
-                            )
-                except (InvalidOperation, ValueError, TypeError):
-                    quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym}"
-            else:
-                quote_value_line = f"  Quote out:   {quote_amount_str} {want_sym}"
-
-            rate_line = None
-            if amount > 0:
-                quote_rate = quote_amount / Decimal(str(amount))
-                start_rate = Decimal(starting_price) / Decimal(str(amount))
-                min_rate = Decimal(minimum_price) / Decimal(str(amount))
-                rate_line = (
-                    f"  Rate:        {float(quote_rate):,.4f} quoted | {float(start_rate):,.4f} start | "
-                    f"{float(min_rate):,.4f} floor {want_sym}/{token_sym}"
-                )
-            precision_line = None
-            if quote_amount > 0 and Decimal(starting_price) > quote_amount * 2:
-                precision_line = f"               ↳ ceiled lot based on {quote_amount:.4f} quote"
-
-            content = []
-            if divergence_line:
-                content.extend([divergence_line, ""])
-            content.extend([
-                "Kick (1 of 1)",
-                f"  Source:      {source_name} ({short_address(k['source'])})",
-                f"  Auction:     {k['auction']}",
-                f"  Sell amount: {amount_str} {token_sym} (~${float(usd_value):,.2f})",
-                quote_value_line,
-                f"  Start quote: {k['starting_price_display']}",
-                f"  Min price:   {k['minimum_price_display']}",
-                f"  Profile:     {profile_name} | decay {step_decay_str}",
-            ])
-            if rate_line:
-                content.append(rate_line)
-            if precision_line:
-                content.append(precision_line)
-            content.extend([
-                f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
-                f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",
-            ])
-        else:
-            content = [f"Batch of {batch_size} kicks", ""]
-            for index, kick in enumerate(kicks, 1):
-                source_name = kick.get("source_name") or "Unknown"
-                token_sym = kick.get("token_symbol") or "???"
-                profile_name = kick.get("pricing_profile_name") or "default"
-                amount = float(kick["sell_amount"])
-                amount_str = f"{amount:,.4f}" if amount < 1 else f"{amount:,.2f}"
-                usd_value = float(kick["usd_value"])
-                content.append(f"  {index}. {source_name} | {amount_str} {token_sym} (~${usd_value:,.2f}) | {profile_name}")
-
-            total_usd = float(summary["total_usd"])
-            content.extend([
-                "",
-                f"  Total USD:   ~${total_usd:,.2f}",
-                f"  Gas est:     {gas_estimate:,} (~{gas_cost_eth:.6f} ETH)",
-                f"  Fees:        priority {priority_fee:.2f} gwei | max {max_fee} gwei",
-            ])
-
-        width = max(len(line) for line in content)
-        h_bar = "─" * (width + 2)
-        top = typer.style(f"┌{h_bar}┐", fg="cyan")
-        bottom = typer.style(f"└{h_bar}┘", fg="cyan")
-        vl = typer.style("│", fg="cyan")
-        lines = [top, *(f"{vl} {line.ljust(width)} {vl}" for line in content), bottom]
-        candidate_label = "candidate" if batch_size == 1 else "candidates"
-        typer.echo(f"{batch_size} {candidate_label} ready for submission")
-        typer.echo()
-        typer.echo("\n".join(lines))
+        render_kick_submission_summary(summary)
         prompt = "Send this transaction?" if batch_size == 1 else f"Send batch of {batch_size} kicks?"
         accepted = typer.confirm(prompt, default=False)
         if accepted:

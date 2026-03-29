@@ -628,13 +628,20 @@ function OutboundLinkGlyph({ className = "" }) {
   );
 }
 
-function AuctionScanTextLink({ kick }) {
+function AuctionScanTextLink({ kick, onOpen }) {
   const href = getAuctionScanHref(kick);
   if (!href) {
     return null;
   }
 
   const target = getAuctionScanTargetLabel(kick);
+  const handleClick = (event) => {
+    event.stopPropagation();
+    if (!kick.auctionScanRoundUrl && onOpen) {
+      event.preventDefault();
+      onOpen(kick);
+    }
+  };
 
   return (
     <a
@@ -642,6 +649,7 @@ function AuctionScanTextLink({ kick }) {
       target="_blank"
       rel="noopener noreferrer"
       className="kick-external-link"
+      onClick={handleClick}
     >
       <span>{`view ${target} on`}</span>
       <AuctionScanFavicon />
@@ -650,13 +658,20 @@ function AuctionScanTextLink({ kick }) {
   );
 }
 
-function AuctionScanIconLink({ kick }) {
+function AuctionScanIconLink({ kick, onOpen }) {
   const href = getAuctionScanHref(kick);
   if (!href) {
     return null;
   }
 
   const target = getAuctionScanTargetLabel(kick);
+  const handleClick = (event) => {
+    event.stopPropagation();
+    if (!kick.auctionScanRoundUrl && onOpen) {
+      event.preventDefault();
+      onOpen(kick);
+    }
+  };
 
   return (
     <a
@@ -666,7 +681,7 @@ function AuctionScanIconLink({ kick }) {
       className="kick-auctionscan-link"
       title={`View ${target} on AuctionScan`}
       aria-label={`View ${target} on AuctionScan`}
-      onClick={(e) => e.stopPropagation()}
+      onClick={handleClick}
     >
       <AuctionScanFavicon className="kick-auctionscan-link-icon" />
       <OutboundLinkGlyph className="kick-auctionscan-link-glyph" />
@@ -935,7 +950,7 @@ function formatProviderAmount(amountOut, decimals, status) {
   return String(amountOut);
 }
 
-function KickDetailContent({ kick }) {
+function KickDetailContent({ kick, onOpenAuctionScan }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
   let quoteProviders = null;
   let quoteSummary = null;
@@ -1138,14 +1153,14 @@ function KickDetailContent({ kick }) {
           <div className="kick-detail-value">
             {kick.auctionScanRoundUrl ? (
               <div>
-                <AuctionScanTextLink kick={kick} />
+                <AuctionScanTextLink kick={kick} onOpen={onOpenAuctionScan} />
                 {kick.auctionScanResolving ? (
                   <span className="kick-link-status"> checking for round…</span>
                 ) : null}
               </div>
             ) : kick.auctionScanAuctionUrl ? (
               <div>
-                <AuctionScanTextLink kick={kick} />
+                <AuctionScanTextLink kick={kick} onOpen={onOpenAuctionScan} />
                 {kick.auctionScanResolving ? (
                   <span className="kick-link-status"> checking for round…</span>
                 ) : null}
@@ -1182,17 +1197,17 @@ function KickDetailContent({ kick }) {
   );
 }
 
-function KickDetailPanel({ kick }) {
+function KickDetailPanel({ kick, onOpenAuctionScan }) {
   return (
     <tr className="kick-detail">
       <td colSpan={8}>
-        <KickDetailContent kick={kick} />
+        <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
       </td>
     </tr>
   );
 }
 
-function KickDetailModal({ kick, onClose }) {
+function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
   const sheetRef = useRef(null);
   const bodyRef = useRef(null);
   const backdropRef = useRef(null);
@@ -1261,7 +1276,7 @@ function KickDetailModal({ kick, onClose }) {
       >
         <div className="kick-modal-handle" />
         <div ref={bodyRef} className="kick-modal-body">
-          <KickDetailContent kick={kick} />
+          <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
         </div>
       </div>
     </div>,
@@ -1269,7 +1284,7 @@ function KickDetailModal({ kick, onClose }) {
   );
 }
 
-function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
+function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile, onOpenAuctionScan }) {
   const sourceLabel = truncateMiddle(kick.sourceName || kick.sourceAddress, 18);
 
   return (
@@ -1328,7 +1343,7 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
           ) : "—"}
         </td>
         <td className="kick-auctionscan-cell" data-label="AuctionScan">
-          <AuctionScanIconLink kick={kick} />
+          <AuctionScanIconLink kick={kick} onOpen={onOpenAuctionScan} />
         </td>
         <td data-label="Tx">
           {kick.txHash ? (
@@ -1338,8 +1353,10 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
           ) : "—"}
         </td>
       </tr>
-      {isExpanded && !isMobile ? <KickDetailPanel kick={kick} /> : null}
-      {isExpanded && isMobile ? <KickDetailModal kick={kick} onClose={onToggle} /> : null}
+      {isExpanded && !isMobile ? <KickDetailPanel kick={kick} onOpenAuctionScan={onOpenAuctionScan} /> : null}
+      {isExpanded && isMobile ? (
+        <KickDetailModal kick={kick} onClose={onToggle} onOpenAuctionScan={onOpenAuctionScan} />
+      ) : null}
     </>
   );
 }
@@ -1370,6 +1387,7 @@ function KickLogPage({ nowMs, initialRunId, initialKickId }) {
   const hasFetchedRef = useRef(false);
   const highlightedRowRef = useRef(null);
   const kicksRef = useRef([]);
+  const auctionScanRequestsRef = useRef(new Map());
   const isMobile = useMediaQuery("(max-width: 600px)");
 
   useEffect(() => {
@@ -1453,20 +1471,34 @@ function KickLogPage({ nowMs, initialRunId, initialKickId }) {
     });
   }, [kicks, statusFilter, searchTerm]);
 
+  function getAuctionScanUrls(kick) {
+    if (!kick) {
+      return { roundUrl: null, auctionUrl: null };
+    }
+    return {
+      roundUrl: kick.auctionScanRoundUrl || null,
+      auctionUrl: kick.auctionScanAuctionUrl || null,
+    };
+  }
+
   async function ensureAuctionScanLink(kickId) {
     const current = kicksRef.current.find((kick) => kick.id === kickId);
     if (!current) {
-      return;
+      return null;
     }
     if (
-      current.auctionScanResolving
-      || current.auctionScanRoundId != null
+      current.auctionScanRoundId != null
       || !current.auctionAddress
       || current.operationType !== "kick"
       || current.status !== "CONFIRMED"
       || !current.txHash
     ) {
-      return;
+      return getAuctionScanUrls(current);
+    }
+
+    const inFlight = auctionScanRequestsRef.current.get(kickId);
+    if (inFlight) {
+      return inFlight;
     }
 
     setKicks((prev) => prev.map((kick) => (
@@ -1475,20 +1507,17 @@ function KickLogPage({ nowMs, initialRunId, initialKickId }) {
         : kick
     )));
 
-    try {
-      const response = await apiFetch(`/kicks/${kickId}/auctionscan`);
-      if (!response.ok) {
-        throw new Error("Unable to resolve AuctionScan link");
-      }
-      const payload = await response.json();
-      const data = payload?.data || {};
-      setKicks((prev) => prev.map((kick) => {
-        if (kick.id !== kickId) {
-          return kick;
+    const request = (async () => {
+      try {
+        const response = await apiFetch(`/kicks/${kickId}/auctionscan`);
+        if (!response.ok) {
+          throw new Error("Unable to resolve AuctionScan link");
         }
-        return normalizeKick({
-          ...kick,
-          chainId: data.chainId ?? kick.chainId,
+        const payload = await response.json();
+        const data = payload?.data || {};
+        const nextKick = normalizeKick({
+          ...current,
+          chainId: data.chainId ?? current.chainId,
           auctionScanEligible: data.eligible,
           auctionScanResolved: data.resolved,
           auctionScanRoundId: data.roundId,
@@ -1499,18 +1528,58 @@ function KickLogPage({ nowMs, initialRunId, initialKickId }) {
           auctionScanResolving: false,
           auctionScanResolveError: "",
         });
-      }));
-    } catch (error) {
-      setKicks((prev) => prev.map((kick) => (
-        kick.id === kickId
-          ? {
-              ...kick,
-              auctionScanResolving: false,
-              auctionScanResolveError: error?.message || "Unable to resolve AuctionScan link",
-            }
-          : kick
-      )));
+        setKicks((prev) => prev.map((kick) => (kick.id === kickId ? nextKick : kick)));
+        return getAuctionScanUrls(nextKick);
+      } catch (error) {
+        setKicks((prev) => prev.map((kick) => (
+          kick.id === kickId
+            ? {
+                ...kick,
+                auctionScanResolving: false,
+                auctionScanResolveError: error?.message || "Unable to resolve AuctionScan link",
+              }
+            : kick
+        )));
+        return getAuctionScanUrls(current);
+      } finally {
+        auctionScanRequestsRef.current.delete(kickId);
+      }
+    })();
+
+    auctionScanRequestsRef.current.set(kickId, request);
+    return request;
+  }
+
+  async function openAuctionScanLink(kick) {
+    const current = kicksRef.current.find((item) => item.id === kick.id) || kick;
+    if (current.auctionScanRoundUrl) {
+      window.open(current.auctionScanRoundUrl, "_blank", "noopener,noreferrer");
+      return;
     }
+
+    const popup = window.open("about:blank", "_blank");
+    if (popup) {
+      try {
+        popup.opener = null;
+      } catch (error) {
+        // Ignore browser-specific opener restrictions.
+      }
+    }
+
+    const resolvedUrls = await ensureAuctionScanLink(current.id);
+    const href = resolvedUrls?.roundUrl || resolvedUrls?.auctionUrl || current.auctionScanAuctionUrl || null;
+
+    if (!href) {
+      popup?.close();
+      return;
+    }
+
+    if (popup) {
+      popup.location.replace(href);
+      return;
+    }
+
+    window.open(href, "_blank", "noopener,noreferrer");
   }
 
   function toggleRow(kick) {
@@ -1592,6 +1661,7 @@ function KickLogPage({ nowMs, initialRunId, initialKickId }) {
                     nowMs={nowMs}
                     isExpanded={expandedRows.has(kick.id)}
                     onToggle={() => toggleRow(kick)}
+                    onOpenAuctionScan={openAuctionScanLink}
                     rowRef={
                       (initialKickId != null && String(kick.id) === String(initialKickId))
                       || (initialKickId == null && kick.runId === initialRunId)

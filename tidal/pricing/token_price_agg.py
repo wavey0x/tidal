@@ -45,6 +45,7 @@ class TokenPriceAggProvider:
     """Fetches token/USD quotes from token_price_agg API."""
 
     source_name = "token_price_agg_usd_price"
+    quote_timeout_ms = 7000
 
     def __init__(
         self,
@@ -93,6 +94,7 @@ class TokenPriceAggProvider:
             "amount_in": amount_in,
             "chain_id": self.chain_id,
             "use_underlying": "true",
+            "timeout_ms": self.quote_timeout_ms,
         }
         client = await self._client()
         query_string = "&".join(f"{k}={v}" for k, v in params.items())

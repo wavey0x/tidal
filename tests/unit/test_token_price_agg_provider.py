@@ -194,9 +194,12 @@ def test_curve_quote_available_empty_amounts() -> None:
 @pytest.mark.asyncio
 async def test_quote_parses_per_provider_amounts() -> None:
     provider = _provider()
+    captured: dict[str, object] = {}
 
     async def fake_get_price(client, path, params):  # noqa: ANN001
-        del client, path, params
+        del client
+        captured["path"] = path
+        captured["params"] = params
         return {
             "summary": {"high_amount_out": "742100"},
             "token_out": {"decimals": 6},
@@ -216,6 +219,15 @@ async def test_quote_parses_per_provider_amounts() -> None:
 
     assert result.provider_amounts == {"curve": 742100, "defillama": 740000}
     assert result.curve_quote_available() is True
+    assert captured["path"] == "/v1/quote"
+    assert captured["params"] == {
+        "token_in": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "token_out": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "amount_in": "1000000000000000000",
+        "chain_id": 1,
+        "use_underlying": "true",
+        "timeout_ms": 7000,
+    }
 
 
 # ---------------------------------------------------------------------------

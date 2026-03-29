@@ -308,7 +308,7 @@ def test_render_kick_run_summary_reports_single_failure_detail_and_quote_url(cap
                     {
                         "requestUrl": (
                             "https://prices.example.com/v1/quote"
-                            "?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true"
+                            "?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true&timeout_ms=7000"
                         )
                     }
                 ),
@@ -320,4 +320,4 @@ def test_render_kick_run_summary_reports_single_failure_detail_and_quote_url(cap
     output = capsys.readouterr().out
     assert "Failed." in output
     assert "Failure:      curve quote unavailable (status: error)" in output
-    assert "Quote URL:\nhttps://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true" in output
+    assert "Quote URL:\nhttps://prices.example.com/v1/quote?token_in=0xaaa&token_out=0xbbb&amount_in=1000&chain_id=1&use_underlying=true&timeout_ms=7000" in output

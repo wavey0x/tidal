@@ -19,6 +19,7 @@ from tidal.api.services.action_prepare import (
     prepare_settle_action,
 )
 from tidal.config import Settings
+from tidal.security import redact_sensitive_data
 
 router = APIRouter()
 
@@ -30,7 +31,8 @@ async def get_deploy_defaults(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
     data = await load_strategy_deploy_defaults(session, settings, strategy_address=strategy)
-    return {"status": "ok", "warnings": data.pop("warnings", []), "data": data}
+    warnings = redact_sensitive_data(data.pop("warnings", []))
+    return {"status": "ok", "warnings": warnings, "data": redact_sensitive_data(data)}
 
 
 @router.post("/auctions/deploy/prepare")
@@ -52,7 +54,7 @@ async def post_deploy_prepare(
         starting_price=payload.starting_price,
         salt=payload.salt,
     )
-    return {"status": status, "warnings": warnings, "data": data}
+    return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}
 
 
 @router.post("/auctions/{auction}/enable-tokens/prepare")
@@ -71,7 +73,7 @@ async def post_enable_tokens_prepare(
         sender=payload.sender,
         extra_tokens=payload.extra_tokens,
     )
-    return {"status": status, "warnings": warnings, "data": data}
+    return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}
 
 
 @router.post("/auctions/{auction}/settle/prepare")
@@ -91,4 +93,4 @@ async def post_settle_prepare(
         token_address=payload.token_address,
         sweep=payload.sweep,
     )
-    return {"status": status, "warnings": warnings, "data": data}
+    return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}

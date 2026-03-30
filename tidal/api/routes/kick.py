@@ -11,6 +11,7 @@ from tidal.api.schemas.kick import KickInspectRequest, KickPrepareRequest
 from tidal.api.services.action_prepare import inspect_kicks, prepare_kick_action
 from tidal.api.services.auctionscan import AuctionScanService
 from tidal.config import Settings
+from tidal.security import redact_sensitive_data
 
 router = APIRouter()
 
@@ -32,7 +33,7 @@ def post_kick_inspect(
         include_live_inspection=payload.include_live_inspection,
     )
     status = "ok" if data.get("ready_count") or data.get("cooldown_count") or data.get("deferred_same_auction_count") else "noop"
-    return {"status": status, "warnings": [], "data": data}
+    return {"status": status, "warnings": [], "data": redact_sensitive_data(data)}
 
 
 @router.post("/kick/prepare")
@@ -54,7 +55,7 @@ async def post_kick_prepare(
         sender=payload.sender,
         require_curve_quote=payload.require_curve_quote,
     )
-    return {"status": status, "warnings": warnings, "data": data}
+    return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}
 
 
 @router.get("/kicks/{kick_id}/auctionscan")
@@ -64,4 +65,4 @@ async def get_kick_auctionscan(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
     data = await AuctionScanService(session, settings).resolve_kick_auctionscan(kick_id)
-    return {"status": "ok", "warnings": [], "data": data}
+    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(data)}

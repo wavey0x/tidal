@@ -10,6 +10,7 @@ from tidal.api.dependencies import get_operator, get_session
 from tidal.api.errors import APIError
 from tidal.api.schemas.actions import ActionBroadcastRequest, ActionReceiptRequest
 from tidal.api.services.action_audit import get_action, list_actions, record_broadcast, record_receipt
+from tidal.security import redact_sensitive_data
 
 router = APIRouter()
 
@@ -25,7 +26,11 @@ def get_actions(
     _current_operator: OperatorIdentity = Depends(get_operator),
 ) -> dict[str, object]:
     data = list_actions(session, limit=limit, offset=offset, operator_id=operator, status=status, action_type=action_type)
-    return {"status": "ok" if data["items"] else "noop", "warnings": [], "data": data}
+    return {
+        "status": "ok" if data["items"] else "noop",
+        "warnings": [],
+        "data": redact_sensitive_data(data),
+    }
 
 
 @router.get("/actions/{action_id}")
@@ -37,7 +42,7 @@ def get_action_detail(
     data = get_action(session, action_id)
     if data is None:
         raise APIError("Action not found", status_code=404)
-    return {"status": "ok", "warnings": [], "data": data}
+    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(data)}
 
 
 @router.post("/actions/{action_id}/broadcast")
@@ -54,7 +59,7 @@ def post_action_broadcast(
         tx_hash=payload.tx_hash,
         broadcast_at=payload.broadcast_at,
     )
-    return {"status": "ok", "warnings": [], "data": data}
+    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(data)}
 
 
 @router.post("/actions/{action_id}/receipt")
@@ -75,5 +80,4 @@ def post_action_receipt(
         observed_at=payload.observed_at,
         error_message=payload.error_message,
     )
-    return {"status": "ok", "warnings": [], "data": data}
-
+    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(data)}

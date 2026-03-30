@@ -20,6 +20,7 @@ from tidal.api.routes.logs import router as logs_router
 from tidal.api.services.action_audit import run_receipt_reconciler
 from tidal.config import Settings, load_settings
 from tidal.persistence.db import Database
+from tidal.security import redact_sensitive_text
 
 
 def _is_sqlite_locked_error(exc: OperationalError) -> bool:
@@ -65,7 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def handle_api_error(_request: Request, exc: APIError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
-            content={"status": "error", "warnings": [], "data": None, "detail": exc.message},
+            content={"status": "error", "warnings": [], "data": None, "detail": redact_sensitive_text(exc.message)},
         )
 
     @app.exception_handler(OperationalError)

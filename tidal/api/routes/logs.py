@@ -11,6 +11,7 @@ from tidal.config import Settings
 from tidal.read.kick_logs import KickLogReadService
 from tidal.read.run_logs import RunLogReadService
 from tidal.read.scan_logs import ScanLogReadService
+from tidal.security import redact_sensitive_data
 
 router = APIRouter()
 
@@ -39,7 +40,11 @@ def get_kick_logs(
         run_id=run_id,
         kick_id=kick_id,
     )
-    return {"status": "ok" if data["kicks"] else "noop", "warnings": [], "data": data}
+    return {
+        "status": "ok" if data["kicks"] else "noop",
+        "warnings": [],
+        "data": redact_sensitive_data(data),
+    }
 
 
 @router.get("/logs/scans")
@@ -50,7 +55,11 @@ def get_scan_logs(
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
     data = ScanLogReadService(session).list_runs(limit=limit, offset=offset, status=status)
-    return {"status": "ok" if data["items"] else "noop", "warnings": [], "data": data}
+    return {
+        "status": "ok" if data["items"] else "noop",
+        "warnings": [],
+        "data": redact_sensitive_data(data),
+    }
 
 
 @router.get("/logs/runs/{run_id}")
@@ -61,4 +70,4 @@ def get_run_detail(
     detail = RunLogReadService(session).get_detail(run_id)
     if detail is None:
         raise APIError("Run not found", status_code=404)
-    return {"status": "ok", "warnings": [], "data": detail}
+    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(detail)}

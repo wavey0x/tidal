@@ -189,6 +189,67 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     assert payload["data"]["rows"][0]["sourceName"] == "Test Strategy"
 
 
+def test_public_run_detail_redacts_secret_like_error_messages(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        session.execute(
+            models.scan_runs.insert().values(
+                run_id="scan-secret",
+                started_at="2026-03-28T00:00:00+00:00",
+                finished_at="2026-03-28T00:01:00+00:00",
+                status="FAILED",
+                vaults_seen=0,
+                strategies_seen=0,
+                pairs_seen=0,
+                pairs_succeeded=0,
+                pairs_failed=1,
+                error_summary=(
+                    "RPC failed: "
+                    "https://alice:supersecret@rpc.example/v1/mainnet?api_key=abc123&network=mainnet"
+                ),
+            )
+        )
+        session.execute(
+            models.scan_item_errors.insert().values(
+                run_id="scan-secret",
+                source_type=None,
+                source_address=None,
+                strategy_address=None,
+                token_address=None,
+                stage="DISCOVERY",
+                error_code="rpc_failed",
+                error_message=(
+                    "Authorization: Bearer secret-token "
+                    "ETH_PASSWORD=hunter2 "
+                    "https://user:pass@example.com/path?access_token=abc"
+                ),
+                created_at="2026-03-28T00:00:30+00:00",
+            )
+        )
+        session.commit()
+
+    client = TestClient(create_app(settings))
+    response = client.get("/api/v1/tidal/logs/runs/scan-secret")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert "supersecret" not in payload["error_summary"]
+    assert "abc123" not in payload["error_summary"]
+    assert (
+        "https://REDACTED:REDACTED@rpc.example/v1/mainnet?api_key=REDACTED&network=mainnet"
+        in payload["error_summary"]
+    )
+    error_message = payload["errors"][0]["error_message"]
+    assert "secret-token" not in error_message
+    assert "hunter2" not in error_message
+    assert "pass@example.com" not in error_message
+    assert "Authorization: Bearer REDACTED" in error_message
+    assert "ETH_PASSWORD=REDACTED" in error_message
+    assert "https://REDACTED:REDACTED@example.com/path?access_token=REDACTED" in error_message
+
+
 def test_kick_prepare_route_threads_curve_quote_override(tmp_path: Path, monkeypatch) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from tidal.api.dependencies import get_session
 from tidal.api.services.dashboard import load_dashboard
+from tidal.security import redact_sensitive_data
 
 router = APIRouter()
 
@@ -15,5 +16,4 @@ router = APIRouter()
 def get_dashboard(
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
-    return {"status": "ok", "warnings": [], "data": load_dashboard(session)}
-
+    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(load_dashboard(session))}

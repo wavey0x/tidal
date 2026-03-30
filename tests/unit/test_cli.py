@@ -334,6 +334,25 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
     assert "Gas estimate:" not in output
 
 
+def test_render_broadcast_records_pending_confirmation(capsys):
+    render_broadcast_records(
+        [
+            BroadcastRecord(
+                operation="kick",
+                sender="0x1111111111111111111111111111111111111111",
+                tx_hash="0xabc",
+                broadcast_at="2026-03-28T15:04:05+00:00",
+                chain_id=1,
+            )
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "Pending Confirmation" in output
+    assert "Tx hash:      0xabc" in output
+    assert "Receipt:      pending" in output
+
+
 def test_render_prepared_action_summary_for_deploy(capsys):
     render_prepared_action_summary(
         {

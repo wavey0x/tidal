@@ -22,6 +22,7 @@ from tidal.control_plane.client import ControlPlaneError
 from tidal.errors import ConfigurationError
 from tidal.operator_cli_support import (
     execute_prepared_action_sync,
+    progress_status,
     render_action_preview,
     render_broadcast_result,
     submission_progress,
@@ -107,7 +108,7 @@ def _handle_prepared_action(
                     raise typer.Exit(code=2)
                 if exec_ctx.signer is None or exec_ctx.sender is None:
                     raise typer.Exit(code=1)
-                with submission_progress("Submitting transaction..."):
+                with submission_progress("Submitting transaction...") as update_progress:
                     broadcast_records = execute_prepared_action_sync(
                         settings=cli_ctx.settings,
                         client=client,
@@ -115,6 +116,7 @@ def _handle_prepared_action(
                         sender=exec_ctx.sender,
                         signer=exec_ctx.signer,
                         transactions=list(transactions),
+                        progress_callback=update_progress,
                     )
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
@@ -188,7 +190,11 @@ def deploy(
     }
     try:
         with cli_ctx.control_plane_client() as client:
-            response = client.prepare_deploy(payload)
+            if json_output:
+                response = client.prepare_deploy(payload)
+            else:
+                with progress_status("Preparing deployment..."):
+                    response = client.prepare_deploy(payload)
     except (ConfigurationError, ControlPlaneError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -241,7 +247,17 @@ def enable_tokens(
     }
     try:
         with cli_ctx.control_plane_client() as client:
-            response = client.prepare_enable_tokens(normalize_cli_address(auction_address, param_hint="AUCTION"), payload)
+            if json_output:
+                response = client.prepare_enable_tokens(
+                    normalize_cli_address(auction_address, param_hint="AUCTION"),
+                    payload,
+                )
+            else:
+                with progress_status("Preparing token enable..."):
+                    response = client.prepare_enable_tokens(
+                        normalize_cli_address(auction_address, param_hint="AUCTION"),
+                        payload,
+                    )
     except (ConfigurationError, ControlPlaneError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -300,7 +316,17 @@ def settle(
     }
     try:
         with cli_ctx.control_plane_client() as client:
-            response = client.prepare_settle(normalize_cli_address(auction_address, param_hint="AUCTION"), payload)
+            if json_output:
+                response = client.prepare_settle(
+                    normalize_cli_address(auction_address, param_hint="AUCTION"),
+                    payload,
+                )
+            else:
+                with progress_status("Preparing settlement..."):
+                    response = client.prepare_settle(
+                        normalize_cli_address(auction_address, param_hint="AUCTION"),
+                        payload,
+                    )
     except (ConfigurationError, ControlPlaneError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

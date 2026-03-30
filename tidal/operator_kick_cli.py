@@ -33,6 +33,7 @@ from tidal.control_plane.client import ControlPlaneError
 from tidal.errors import ConfigurationError
 from tidal.operator_cli_support import (
     execute_prepared_action_sync,
+    progress_status,
     render_action_preview,
     render_broadcast_result,
     submission_progress,
@@ -307,7 +308,11 @@ def kick_inspect(
     }
     try:
         with cli_ctx.control_plane_client(auth=False) as client:
-            response = client.inspect_kicks(payload)
+            if json_output:
+                response = client.inspect_kicks(payload)
+            else:
+                with progress_status("Loading kick candidates..."):
+                    response = client.inspect_kicks(payload)
     except (ConfigurationError, ControlPlaneError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -375,7 +380,11 @@ def kick_run(
     preview_fee_context = _resolve_preview_fee_context(cli_ctx) if broadcast and not json_output else None
     try:
         with cli_ctx.control_plane_client(auth=broadcast) as client:
-            inspect_response = client.inspect_kicks(payload)
+            if json_output:
+                inspect_response = client.inspect_kicks(payload)
+            else:
+                with progress_status("Loading kick candidates..."):
+                    inspect_response = client.inspect_kicks(payload)
             inspect_result = _inspect_result_from_api(inspect_response["data"])
             broadcast_records: list[dict[str, object]] = []
             prepared_actions: list[dict[str, object]] = []
@@ -390,7 +399,11 @@ def kick_run(
                     prepare_payload = _candidate_prepare_payload(candidate, sender=exec_ctx.sender)
                     if require_curve_quote is not None:
                         prepare_payload["requireCurveQuote"] = require_curve_quote
-                    prepare_response = client.prepare_kicks(prepare_payload)
+                    if json_output:
+                        prepare_response = client.prepare_kicks(prepare_payload)
+                    else:
+                        with progress_status(f"Preparing kick {index} of {total_ready}..."):
+                            prepare_response = client.prepare_kicks(prepare_payload)
                     prepared_data = prepare_response["data"]
                     prepared_actions.append(prepared_data)
                     warnings = list(prepare_response.get("warnings") or [])
@@ -448,7 +461,7 @@ def kick_run(
                         raise typer.Exit(code=1)
                     if not json_output:
                         typer.echo()
-                    with submission_progress("Submitting transaction..."):
+                    with submission_progress("Submitting transaction...") as update_progress:
                         action_records = execute_prepared_action_sync(
                             settings=cli_ctx.settings,
                             client=client,
@@ -456,6 +469,7 @@ def kick_run(
                             sender=exec_ctx.sender,
                             signer=exec_ctx.signer,
                             transactions=transactions,
+                            progress_callback=update_progress,
                         )
                     if not json_output and action_records:
                         render_broadcast_result(action_records)

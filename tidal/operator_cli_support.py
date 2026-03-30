@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import typer
 from eth_utils import to_checksum_address
@@ -35,15 +35,43 @@ def render_warnings(warnings: list[str]) -> None:
 
 
 @contextmanager
-def submission_progress(message: str) -> None:
+def progress_status(
+    message: str,
+    *,
+    border_style: str = "cyan",
+    spinner: str = "dots",
+    fallback_render: bool = False,
+    fallback_title: str = "Working",
+) -> Iterator[Callable[[str], None]]:
     if not sys.stdout.isatty():
-        render_status_panel("Submitting", message, border_style="cyan")
-        yield
+        if fallback_render:
+            render_status_panel(fallback_title, message, border_style=border_style)
+        yield lambda _message: None
         return
 
     console = Console(file=sys.stdout, highlight=False, soft_wrap=True)
-    with console.status(f"[bold cyan]{message}[/bold cyan]", spinner="dots"):
-        yield
+    with console.status(
+        f"[bold {border_style}]{message}[/bold {border_style}]",
+        spinner=spinner,
+        spinner_style=f"bold {border_style}",
+    ) as status:
+        yield lambda next_message: status.update(
+            f"[bold {border_style}]{next_message}[/bold {border_style}]",
+            spinner=spinner,
+            spinner_style=f"bold {border_style}",
+        )
+
+
+@contextmanager
+def submission_progress(message: str) -> Iterator[Callable[[str], None]]:
+    with progress_status(
+        message,
+        border_style="cyan",
+        spinner="dots",
+        fallback_render=True,
+        fallback_title="Submitting",
+    ) as update:
+        yield update
 
 
 def _send_action_report(
@@ -104,6 +132,7 @@ async def broadcast_prepared_action(
     transactions: list[dict[str, Any]],
     receipt_timeout_seconds: int = 120,
     outbox: ActionReportOutbox | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:  # noqa: ANN001
     report_outbox = outbox or ActionReportOutbox()
     try:
@@ -186,6 +215,8 @@ async def broadcast_prepared_action(
                 raise RuntimeError(f"transaction {tx_index + 1} failed: {exc}") from exc
 
             broadcast_at = utcnow_iso()
+            if progress_callback is not None:
+                progress_callback(f"Awaiting confirmation {tx_hash[:10]}...{tx_hash[-6:]}")
             _send_action_report(
                 outbox=report_outbox,
                 client=client,
@@ -258,6 +289,7 @@ def execute_prepared_action_sync(
     signer,
     transactions: list[dict[str, Any]],
     outbox: ActionReportOutbox | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:  # noqa: ANN001
     return asyncio.run(
         broadcast_prepared_action(
@@ -268,6 +300,7 @@ def execute_prepared_action_sync(
             signer=signer,
             transactions=transactions,
             outbox=outbox,
+            progress_callback=progress_callback,
         )
     )
 

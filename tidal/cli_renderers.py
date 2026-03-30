@@ -491,7 +491,7 @@ def render_broadcast_records(records: list[BroadcastRecord]) -> None:
             status_title = "Failed"
             border_style = "red"
         else:
-            status_title = "Submitted"
+            status_title = "Pending Confirmation"
             border_style = "yellow"
         heading = status_title if len(records) == 1 else f"Transaction {index} · {status_title}"
         lines: list[str] = []
@@ -502,6 +502,8 @@ def render_broadcast_records(records: list[BroadcastRecord]) -> None:
         lines.append(f"  Broadcast at: {_format_broadcast_value(record.broadcast_at)}")
         if record.receipt_status is not None:
             lines.append(f"  Receipt:      {record.receipt_status}")
+        else:
+            lines.append("  Receipt:      pending")
         render_panel(heading, lines, border_style=border_style)
 
 
@@ -566,7 +568,7 @@ def render_kick_run_summary(
     elif "CONFIRMED" in statuses:
         typer.echo("Confirmed.")
     elif "SUBMITTED" in statuses:
-        typer.echo("Submitted.")
+        typer.echo("Pending confirmation.")
     elif result.kicks_failed:
         typer.echo("Failed.")
     else:

@@ -155,3 +155,43 @@ async def test_broadcast_prepared_action_queues_reports_for_retry(monkeypatch, t
     assert outbox.pending_count(base_url=client.base_url) == 0
     assert recovery_client.broadcast_reports[0]["txHash"] == "0xabc"
     assert recovery_client.receipt_reports[0]["receiptStatus"] == "CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_prepared_action_emits_confirmation_progress(monkeypatch, tmp_path) -> None:
+    web3_client = _FakeWeb3Client()
+    client = _FakeClient()
+    outbox = ActionReportOutbox(tmp_path / "action_outbox.db")
+    signer = _CapturingSigner()
+    sender = signer.address
+    progress_messages: list[str] = []
+
+    monkeypatch.setattr("tidal.operator_cli_support.build_web3_client", lambda settings: web3_client)
+
+    await broadcast_prepared_action(
+        settings=SimpleNamespace(
+            txn_max_priority_fee_gwei=2,
+            txn_max_base_fee_gwei=0.5,
+            chain_id=1,
+        ),
+        client=client,
+        action_id="action-1",
+        sender=sender,
+        signer=signer,
+        outbox=outbox,
+        progress_callback=progress_messages.append,
+        transactions=[
+            {
+                "operation": "kick",
+                "to": "0x846475a1b97ac57861813206749c1b0f592383ef",
+                "data": "0xdeadbeef",
+                "value": "0x0",
+                "chainId": 1,
+                "sender": sender,
+                "gasEstimate": 210000,
+                "gasLimit": 252000,
+            }
+        ],
+    )
+
+    assert progress_messages == ["Awaiting confirmation 0xabc...0xabc"]

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tidal.api.services.action_prepare import _estimate_transaction, prepare_kick_action
+from tidal.api.services.action_prepare import _estimate_transaction, load_strategy_deploy_defaults, prepare_kick_action
 from tidal.transaction_service.types import KickAction, KickCandidate, PreparedKick
 
 
@@ -142,3 +142,94 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
     assert status == "ok"
     assert warnings == []
     assert data["actionId"] == "action-1"
+
+
+@pytest.mark.asyncio
+async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypatch) -> None:
+    strategy_address = "0x1111111111111111111111111111111111111111"
+    want_address = "0x2222222222222222222222222222222222222222"
+    factory_address = "0x3333333333333333333333333333333333333333"
+    governance_address = "0x4444444444444444444444444444444444444444"
+    predicted_address = "0x5555555555555555555555555555555555555555"
+
+    class _FakeMappings:
+        def all(self):  # noqa: ANN201
+            return [
+                {
+                    "strategy_address": strategy_address,
+                    "strategy_name": "Test Strategy",
+                    "auction_address": None,
+                    "want_address": want_address,
+                    "want_symbol": "crvUSD",
+                    "active": True,
+                    "token_address": "0x6666666666666666666666666666666666666666",
+                    "raw_balance": "1000000000000000000000",
+                    "normalized_balance": "1000",
+                    "token_symbol": "CRV",
+                    "token_decimals": 18,
+                    "token_price_usd": "1.0",
+                }
+            ]
+
+    class _FakeExecuteResult:
+        def mappings(self):  # noqa: ANN201
+            return _FakeMappings()
+
+    class _FakeSession:
+        def execute(self, stmt, params):  # noqa: ANN001, ANN201
+            del stmt
+            assert params["strategy_address"] == strategy_address
+            return _FakeExecuteResult()
+
+    class _FakeQuote:
+        amount_out_raw = 500_000_000
+        token_out_decimals = 6
+        request_url = "https://prices.example.com/v1/quote"
+        provider_statuses = {"curve": "ok"}
+
+        def curve_quote_available(self) -> bool:
+            return True
+
+    class _FakeQuoteProvider:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            del kwargs
+
+        async def quote(self, **kwargs):  # noqa: ANN003, ANN201
+            assert kwargs["token_in"] == "0x6666666666666666666666666666666666666666"
+            assert kwargs["token_out"] == want_address
+            return _FakeQuote()
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("tidal.api.services.action_prepare.TokenPriceAggProvider", _FakeQuoteProvider)
+    monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
+    monkeypatch.setattr("tidal.api.services.action_prepare.default_factory_address", lambda settings: factory_address)
+    monkeypatch.setattr("tidal.api.services.action_prepare.default_governance_address", lambda: governance_address)
+    monkeypatch.setattr("tidal.api.services.action_prepare.read_factory_auction_addresses", lambda w3, factory: [])
+    monkeypatch.setattr("tidal.api.services.action_prepare.read_existing_matches", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "tidal.api.services.action_prepare.preview_deployment",
+        lambda *args, **kwargs: SimpleNamespace(
+            predicted_address=predicted_address,
+            predicted_address_exists=False,
+        ),
+    )
+
+    data = await load_strategy_deploy_defaults(
+        _FakeSession(),
+        SimpleNamespace(
+            chain_id=1,
+            token_price_agg_base_url="https://prices.example.com",
+            token_price_agg_key=None,
+            price_timeout_seconds=10,
+            price_retry_attempts=1,
+            txn_start_price_buffer_bps=1000,
+        ),
+        strategy_address=strategy_address,
+    )
+
+    assert data["strategyAddress"] == strategy_address
+    assert data["receiverAddress"] == strategy_address
+    assert data["factoryAddress"] == factory_address
+    assert data["predictedAuctionAddress"] == predicted_address

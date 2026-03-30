@@ -1393,6 +1393,21 @@ tbody tr:hover td {
   font-size: 11px;
   color: var(--text-secondary);
   text-align: right;
+  min-width: 0;
+}
+
+.deploy-modal-value {
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.deploy-modal-value .address-copy {
+  margin-top: 0;
+}
+
+.deploy-modal-link {
+  font-size: 11px;
 }
 
 .deploy-modal-actions {

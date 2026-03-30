@@ -579,6 +579,31 @@ function AddressCopy({ address }) {
   );
 }
 
+function AddressLinkCopy({ address, label = null }) {
+  if (!address) {
+    return <span className="row-secondary mono">—</span>;
+  }
+
+  return (
+    <span className="address-copy" title={address}>
+      <a
+        className="etherscan-link mono address-value deploy-modal-link"
+        href={`${ETHERSCAN_ADDRESS_URL}${address}`}
+        title={address}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {label || shortenAddress(address)}
+      </a>
+      <CopyIconButton
+        valueToCopy={address}
+        title={`Copy address ${address}`}
+        ariaLabel={`Copy address ${address}`}
+      />
+    </span>
+  );
+}
+
 function EntityIdentity({ primary, secondary, address }) {
   return (
     <div className="entity-cell">
@@ -748,13 +773,20 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
 
   const spec = payload || {};
   const warnings = Array.isArray(spec.warnings) ? spec.warnings.filter(Boolean) : [];
+  const receiverAddress = spec.receiverAddress || spec.strategyAddress || null;
   const rows = [
-    ["Factory", shortenAddress(spec.factoryAddress)],
-    ["Receiver", shortenAddress(spec.receiverAddress)],
-    ["Want", spec.wantSymbol || shortenAddress(spec.wantAddress)],
+    ["Factory", <AddressLinkCopy address={spec.factoryAddress} />],
+    ["Receiver", <AddressLinkCopy address={receiverAddress} />],
+    ["Want", <AddressLinkCopy address={spec.wantAddress} label={spec.wantSymbol || shortenAddress(spec.wantAddress)} />],
   ];
   if (spec.inference?.sellTokenAddress) {
-    rows.push(["Inference token", spec.inference.sellTokenSymbol || shortenAddress(spec.inference.sellTokenAddress)]);
+    rows.push([
+      "Inference token",
+      <AddressLinkCopy
+        address={spec.inference.sellTokenAddress}
+        label={spec.inference.sellTokenSymbol || shortenAddress(spec.inference.sellTokenAddress)}
+      />,
+    ]);
   }
   if (spec.startingPrice) {
     rows.push(["Starting price", spec.startingPrice]);
@@ -763,7 +795,7 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
     rows.push(["Start-price buffer", `+${(Number(spec.startPriceBufferBps) / 100).toFixed(1)}%`]);
   }
   if (spec.predictedAuctionAddress) {
-    rows.push(["Predicted auction", shortenAddress(spec.predictedAuctionAddress)]);
+    rows.push(["Predicted auction", <AddressLinkCopy address={spec.predictedAuctionAddress} />]);
   }
 
   return createPortal(
@@ -776,7 +808,9 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
           {rows.map(([label, value]) => (
             <div key={label} className="deploy-modal-row">
               <dt>{label}</dt>
-              <dd className="mono">{value}</dd>
+              <dd className={typeof value === "string" || typeof value === "number" ? "mono" : "deploy-modal-value"}>
+                {value}
+              </dd>
             </div>
           ))}
         </dl>

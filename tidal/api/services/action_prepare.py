@@ -369,6 +369,7 @@ async def load_strategy_deploy_defaults(
         "strategyAddress": context["strategyAddress"],
         "strategyName": context["strategyName"],
         "auctionAddress": context["auctionAddress"],
+        "receiverAddress": context["strategyAddress"],
         "wantAddress": context["wantAddress"],
         "wantSymbol": context["wantSymbol"],
         "factoryAddress": factory_address,

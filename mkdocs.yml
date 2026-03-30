@@ -5,6 +5,12 @@ repo_url: https://github.com/wavey0x/tidal
 
 theme:
   name: material
+  logo: assets/tidal-logo-light.svg
+  favicon: assets/tidal-logo-dark.svg
+  features:
+    - navigation.tabs
+    - navigation.top
+    - content.code.copy
   palette:
     - scheme: default
       toggle:
@@ -39,3 +45,6 @@ markdown_extensions:
       alternate_style: true
   - toc:
       permalink: true
+
+extra_css:
+  - stylesheets/extra.css

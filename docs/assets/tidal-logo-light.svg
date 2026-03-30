@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="Tidal logo light">
+  <rect width="400" height="400" rx="0" fill="#f3f3f3" />
+  <path
+    d="M56 208 C111 165 126 99 184 72 C230 51 286 57 323 89 C336 100 344 113 347 126 M238 120 C206 131 194 170 209 199 C228 236 285 254 342 233"
+    fill="none"
+    stroke="#07163a"
+    stroke-width="18"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

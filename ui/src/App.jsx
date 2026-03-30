@@ -245,6 +245,14 @@ async function waitForTransactionReceipt(provider, txHash, attempts = 60, delayM
   return null;
 }
 
+function normalizeReceiptStatus(value) {
+  const normalized = hexToNumber(value);
+  if (normalized === 0 || normalized === 1) {
+    return normalized;
+  }
+  return null;
+}
+
 function hexToNumber(value) {
   if (value == null) {
     return null;
@@ -2580,7 +2588,7 @@ export default function App() {
         }
       }
 
-      const txHash = await provider.request({
+      txHash = await provider.request({
         method: "eth_sendTransaction",
         params: [
           {
@@ -2595,7 +2603,7 @@ export default function App() {
       updateDeployState(sourceAddress, { status: "submitted", error: "", txHash });
 
       const receipt = await waitForTransactionReceipt(provider, txHash);
-      if (receipt && receipt.status !== "0x1") {
+      if (normalizeReceiptStatus(receipt?.status) === 0) {
         throw new Error("Deployment transaction reverted");
       }
     } catch (deployError) {

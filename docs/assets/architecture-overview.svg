@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="565" viewBox="0 0 940 565" role="img" aria-labelledby="title desc">
+  <title id="title">Tidal architecture overview</title>
+  <desc id="desc">Diagram showing Tidal server components, external dependencies, and the CLI client boundary.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7f7f7; }
+      .tidal-stroke { stroke: #2f44ff; }
+      .external-stroke { stroke: #148a20; }
+      .user-stroke { stroke: #ef7d00; }
+      .zone {
+        fill: none;
+        stroke-width: 1.5;
+        stroke-dasharray: 4 4;
+      }
+      .zone-title {
+        font: 700 22px Arial, sans-serif;
+      }
+      .node-label {
+        font: 500 15px Arial, sans-serif;
+        fill: #111;
+      }
+      .cloud-label {
+        font: 500 15px Arial, sans-serif;
+        fill: #111;
+      }
+      .edge {
+        stroke: #111;
+        stroke-width: 1.6;
+        fill: none;
+      }
+      .edge-label {
+        font: 500 13px Arial, sans-serif;
+        fill: #111;
+      }
+      .box {
+        fill: #fff;
+        stroke-width: 1.5;
+      }
+      .cloud {
+        fill: #fff;
+        stroke-width: 1.5;
+      }
+      .clock-face {
+        fill: #fff;
+        stroke: #2f44ff;
+        stroke-width: 1.5;
+      }
+      .clock-hand {
+        stroke: #2f44ff;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+      }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#111"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="940" height="565"/>
+
+  <rect class="zone tidal-stroke" x="1" y="1" width="460" height="280"/>
+  <text class="zone-title tidal-stroke" x="215" y="20">Tidal</text>
+
+  <rect class="zone external-stroke" x="479" y="1" width="460" height="280"/>
+  <text class="zone-title external-stroke" x="676" y="20">External</text>
+
+  <rect class="zone user-stroke" x="1" y="297" width="460" height="267"/>
+  <text class="zone-title user-stroke" x="214" y="317">User</text>
+
+  <rect class="box tidal-stroke" x="30" y="30" rx="10" ry="10" width="120" height="60"/>
+  <text class="node-label" x="90" y="65" text-anchor="middle">Tidal Database</text>
+
+  <rect class="box tidal-stroke" x="310" y="30" rx="10" ry="10" width="120" height="60"/>
+  <text class="node-label" x="370" y="65" text-anchor="middle">Tidal Scanner</text>
+  <circle class="clock-face" cx="424" cy="37" r="15"/>
+  <line class="clock-hand" x1="424" y1="37" x2="424" y2="29"/>
+  <line class="clock-hand" x1="424" y1="37" x2="430" y2="37"/>
+
+  <path class="cloud tidal-stroke" d="M108 204
+    C108 188,122 176,138 178
+    C144 162,164 156,179 165
+    C187 152,208 152,217 167
+    C236 165,251 177,251 194
+    C264 197,273 208,273 221
+    C273 237,259 249,242 249
+    L137 249
+    C120 249,107 238,107 223
+    C97 219,92 211,92 202
+    C92 190,100 182,111 181
+    C111 189,109 196,108 204 Z"/>
+  <text class="cloud-label" x="182" y="208" text-anchor="middle">Tidal</text>
+  <text class="cloud-label" x="182" y="226" text-anchor="middle">API</text>
+
+  <rect class="box tidal-stroke" x="310" y="190" rx="10" ry="10" width="120" height="60"/>
+  <text class="node-label" x="370" y="215" text-anchor="middle">Tidal Web App</text>
+
+  <path class="cloud external-stroke" d="M535 208
+    C535 194,548 183,562 184
+    C567 170,585 164,598 172
+    C607 162,625 162,634 174
+    C652 173,667 184,667 199
+    C681 202,689 212,689 225
+    C689 241,675 252,659 252
+    L562 252
+    C546 252,533 241,533 226
+    C523 222,518 214,518 205
+    C518 194,525 186,536 186
+    C536 194,535 201,535 208 Z"/>
+  <text class="cloud-label" x="604" y="214" text-anchor="middle">Ethereum RPC</text>
+
+  <path class="cloud external-stroke" d="M715 208
+    C715 194,728 183,742 184
+    C747 170,765 164,778 172
+    C787 162,805 162,814 174
+    C832 173,847 184,847 199
+    C861 202,869 212,869 225
+    C869 241,855 252,839 252
+    L742 252
+    C726 252,713 241,713 226
+    C703 222,698 214,698 205
+    C698 194,705 186,716 186
+    C716 194,715 201,715 208 Z"/>
+  <text class="cloud-label" x="783" y="209" text-anchor="middle">Wavey Token Price</text>
+  <text class="cloud-label" x="783" y="227" text-anchor="middle">Aggregator</text>
+
+  <rect class="box user-stroke" x="106" y="352" rx="10" ry="10" width="120" height="60"/>
+  <text class="node-label" x="166" y="387" text-anchor="middle">Tidal CLI</text>
+
+  <rect class="box user-stroke" x="106" y="458" rx="10" ry="10" width="120" height="60"/>
+  <text class="node-label" x="166" y="493" text-anchor="middle">Config</text>
+
+  <path class="edge" marker-end="url(#arrow)" d="M310 60 H150"/>
+  <path class="edge" marker-end="url(#arrow)" d="M160 178 V90"/>
+  <path class="edge" marker-end="url(#arrow)" d="M310 220 H272"/>
+  <path class="edge" marker-end="url(#arrow)" d="M370 90 V160 H568 V184"/>
+  <path class="edge" marker-end="url(#arrow)" d="M430 60 H738 V184"/>
+  <path class="edge" marker-end="url(#arrow)" d="M226 382 V250"/>
+  <path class="edge" marker-end="url(#arrow)" d="M166 412 V458"/>
+  <path class="edge" marker-end="url(#arrow)" d="M226 382 H558 V252"/>
+  <text class="edge-label" x="356" y="378">Broadcast Transaction</text>
+</svg>

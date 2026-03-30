@@ -9,6 +9,10 @@ Tidal exists to answer two operational questions quickly and safely:
 
 The design splits shared state from signing authority. The server owns the database and background jobs. CLI clients keep keys local.
 
+## Overview Diagram
+
+![Tidal architecture overview](assets/architecture-overview.svg)
+
 ## Main Components
 
 | Component | Responsibility | Main code |

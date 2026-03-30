@@ -12,19 +12,19 @@ This guide is for contributors and local server operators working from a repo ch
 ## Backend Setup
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
-This installs the Python package, test dependencies, and MkDocs Material for local docs preview.
+This creates the local project environment from `uv.lock`, installs the package, and includes the `dev` extra for tests and docs work.
+
+Use `uv run ...` for Python-side commands from the checkout instead of activating a manual venv.
 
 ## Secrets And Config
 
 Initialize the local config home first:
 
 ```bash
-tidal init
+uv run tidal init
 ```
 
 Put secrets in `~/.tidal/.env`:
@@ -53,7 +53,7 @@ See [Configuration](config.md) for the full schema.
 ## Initialize The Database
 
 ```bash
-tidal-server db migrate
+uv run tidal-server db migrate
 ```
 
 This applies Alembic migrations to the configured SQLite database.
@@ -63,7 +63,7 @@ This applies Alembic migrations to the configured SQLite database.
 If you want to exercise authenticated API flows locally:
 
 ```bash
-tidal-server auth create --label yourname
+uv run tidal-server auth create --label yourname
 ```
 
 The command prints a plaintext key once. Keep it somewhere safe, then export it:
@@ -77,13 +77,13 @@ export TIDAL_API_KEY=<printed-key>
 Run one scan:
 
 ```bash
-tidal-server scan run
+uv run tidal-server scan run
 ```
 
 Start the API:
 
 ```bash
-tidal-server api serve
+uv run tidal-server api serve
 ```
 
 By default the API listens on `0.0.0.0:8787`. Override with `TIDAL_API_HOST` and `TIDAL_API_PORT` if needed.
@@ -93,9 +93,9 @@ By default the API listens on `0.0.0.0:8787`. Override with `TIDAL_API_HOST` and
 ```bash
 export TIDAL_API_BASE_URL=http://127.0.0.1:8787
 
-tidal kick inspect
-tidal logs kicks
-tidal kick run
+uv run tidal kick inspect
+uv run tidal logs kicks
+uv run tidal kick run
 ```
 
 For broadcast flows you also need wallet flags such as:
@@ -132,15 +132,15 @@ VITE_TIDAL_API_KEY=$TIDAL_API_KEY npm run dev
 Python tests:
 
 ```bash
-pytest
+uv run pytest
 ```
 
 You can also scope to unit, integration, or fork tests:
 
 ```bash
-pytest tests/unit
-pytest tests/integration
-pytest tests/fork
+uv run pytest tests/unit
+uv run pytest tests/integration
+uv run pytest tests/fork
 ```
 
 Contract tests:
@@ -153,7 +153,7 @@ MAINNET_URL=$RPC_URL forge test -vvv
 ## Preview The Docs Site
 
 ```bash
-mkdocs serve
+uv run mkdocs serve
 ```
 
 The local docs site will be available at `http://127.0.0.1:8000`.
@@ -162,9 +162,9 @@ The local docs site will be available at `http://127.0.0.1:8000`.
 
 If you are new to the repo, the fastest way to build context is:
 
-1. Run `tidal-server db migrate`
-2. Run `tidal-server scan run`
-3. Run `tidal-server api serve`
+1. Run `uv run tidal-server db migrate`
+2. Run `uv run tidal-server scan run`
+3. Run `uv run tidal-server api serve`
 4. Open the UI locally
-5. Run `tidal kick inspect`
+5. Run `uv run tidal kick inspect`
 6. Read [Architecture](architecture.md) and [Kick Selection](kick-selection.md)

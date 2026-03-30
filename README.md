@@ -33,17 +33,16 @@ The server owns the database, scans, API, and audit history. CLI clients keep pr
 ### Backend contributor
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -e ".[dev]"
-tidal-server db migrate
-tidal-server scan run
-tidal-server api serve
+uv sync --extra dev
+uv run tidal init
+uv run tidal-server db migrate
+uv run tidal-server scan run
+uv run tidal-server api serve
 ```
 
 Required setup:
 
-- Run `tidal init` to scaffold `~/.tidal/config.yaml`, `~/.tidal/.env`, and `~/.tidal/auction_pricing_policy.yaml`.
+- Run `uv run tidal init` to scaffold `~/.tidal/config.yaml`, `~/.tidal/.env`, and `~/.tidal/auction_pricing_policy.yaml`.
 - Put secrets such as `RPC_URL` and API keys in `~/.tidal/.env`.
 - Put operational settings in `~/.tidal/config.yaml`.
 - If you want the UI locally, run `cd ui && npm install && npm run dev`.
@@ -75,6 +74,7 @@ Broadcasting commands use a Foundry-style wallet surface: `--sender`, `--account
 ## Where To Go Next
 
 - Start with the docs landing page: [`docs/index.md`](./docs/index.md)
+- Quick install guide: [`docs/install.md`](./docs/install.md)
 - System overview: [`docs/architecture.md`](./docs/architecture.md)
 - Local development: [`docs/local-dev.md`](./docs/local-dev.md)
 - CLI client guide: [`docs/operator-guide.md`](./docs/operator-guide.md)

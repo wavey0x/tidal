@@ -11,6 +11,8 @@
 - API key management
 - the canonical SQLite database
 
+If this host does not have Tidal installed yet, start with [Install](install.md).
+
 The server should run close to both the database and the Ethereum RPC it depends on.
 
 ## Recommended Deployment Shape

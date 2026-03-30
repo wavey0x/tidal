@@ -4,6 +4,8 @@
 
 `tidal` is the API-backed CLI client. It does not own the shared database. It reads and prepares actions through the control-plane API, then signs and broadcasts transactions locally.
 
+If Tidal is not installed on this machine yet, start with [Install](install.md).
+
 That split matters:
 
 - the server owns shared state and audit history

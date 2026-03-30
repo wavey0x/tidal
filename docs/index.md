@@ -4,6 +4,7 @@ Tidal is Yearn's auction operations stack. It scans strategy and fee-burner inve
 
 ## Read This First
 
+- Installing the CLI client or server operator: go to [Install](install.md)
 - New to the system: start with [Architecture](architecture.md)
 - Setting up a workstation: go to [Local Development](local-dev.md)
 - Operating as a CLI client against a remote API: go to [CLI Client Guide](operator-guide.md)
@@ -25,29 +26,33 @@ Tidal is Yearn's auction operations stack. It scans strategy and fee-burner inve
 
 ### Backend contributor
 
-1. [Architecture](architecture.md)
+1. [Install](install.md)
 2. [Local Development](local-dev.md)
-3. [Configuration](config.md)
-4. [Pricing](pricing.md)
-5. [Kick Selection](kick-selection.md)
+3. [Architecture](architecture.md)
+4. [Configuration](config.md)
+5. [Pricing](pricing.md)
+6. [Kick Selection](kick-selection.md)
 
 ### CLI client
 
-1. [CLI Client Guide](operator-guide.md)
-2. [CLI Client Overview](cli-client-reference.md)
-3. [CLI Client: `tidal kick`](cli-client-kick.md)
-3. [Configuration](config.md)
-4. [Pricing](pricing.md)
+1. [Install](install.md)
+2. [CLI Client Guide](operator-guide.md)
+3. [CLI Client Overview](cli-client-reference.md)
+4. [CLI Client: `tidal kick`](cli-client-kick.md)
+5. [Configuration](config.md)
+6. [Pricing](pricing.md)
 
 ### Server operator
 
-1. [Server Operator Guide](server-ops.md)
-2. [Server Operator CLI Overview](cli-server-reference.md)
-3. [Configuration](config.md)
-4. [API Reference](api-reference.md)
+1. [Install](install.md)
+2. [Server Operator Guide](server-ops.md)
+3. [Server Operator CLI Overview](cli-server-reference.md)
+4. [Configuration](config.md)
+5. [API Reference](api-reference.md)
 
 ## Reference
 
+- [Install](install.md)
 - [CLI Overview](cli-reference.md)
 - [CLI Client Overview](cli-client-reference.md)
 - [Server Operator CLI Overview](cli-server-reference.md)

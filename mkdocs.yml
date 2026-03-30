@@ -22,7 +22,13 @@ theme:
         name: Switch to light mode
 
 nav:
-  - Home: index.md
+  - Getting Started:
+    - Overview: index.md
+    - Install: install.md
+  - Guides:
+    - Local Development: local-dev.md
+    - CLI Client Guide: operator-guide.md
+    - Server Operator Guide: server-ops.md
   - Reference:
     - CLI:
       - Overview: cli-reference.md
@@ -44,10 +50,6 @@ nav:
     - API: api-reference.md
     - Configuration: config.md
   - Architecture: architecture.md
-  - Getting Started:
-    - Local Development: local-dev.md
-    - CLI Client Guide: operator-guide.md
-    - Server Operator Guide: server-ops.md
   - Concepts:
     - Pricing: pricing.md
     - Kick Selection: kick-selection.md

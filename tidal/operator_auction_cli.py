@@ -136,7 +136,11 @@ def _handle_prepared_action(
             border_style="yellow",
         )
     elif not broadcast:
-        render_status_panel("Dry Run", "No transaction was sent.", border_style="yellow")
+        render_status_panel(
+            "Transaction Status",
+            "Dry run mode enabled. Use --broadcast to submit transaction on chain.",
+            border_style="yellow",
+        )
     else:
         render_broadcast_result(broadcast_records)
 

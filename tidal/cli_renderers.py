@@ -107,6 +107,29 @@ def render_skip_panel(
     render_panel("Skip", lines, border_style="yellow")
 
 
+def format_warning_lines(warning: str, *, bullet: str = "- ") -> list[str]:
+    if warning == "Forced sweep requested while auction is still above floor; unsold tokens will be returned to the receiver.":
+        return [
+            f"{bullet}Forced sweep requested while auction is still above floor.",
+            "  Unsold tokens will be returned to the receiver.",
+        ]
+    return [f"{bullet}{warning}"]
+
+
+def format_settlement_reason_lines(reason: str, *, prefix: str = "Reason:        ") -> list[str]:
+    if reason == "forced sweep requested while auction is still active above minimumPrice":
+        return [
+            f"{prefix}forced sweep requested",
+            " " * len(prefix) + "auction above minimumPrice",
+        ]
+    if reason == "requested settlement method is not applicable: auction still active above minimumPrice":
+        return [
+            f"{prefix}settle not applicable",
+            " " * len(prefix) + "auction above minimumPrice",
+        ]
+    return [f"{prefix}{reason}"]
+
+
 def _display_bool(value: Any) -> str:
     if value is True:
         return "yes"
@@ -191,7 +214,10 @@ def _safe_decimal(value: Any) -> Decimal | None:
 def render_warning_panel(warnings: list[str]) -> None:
     if not warnings:
         return
-    render_panel("Warnings", [f"- {warning}" for warning in warnings], border_style="yellow")
+    lines: list[str] = []
+    for warning in warnings:
+        lines.extend(format_warning_lines(warning))
+    render_panel("Warnings", lines, border_style="yellow")
 
 def render_status_panel(title: str, message: str | list[str], *, border_style: str) -> None:
     lines = [message] if isinstance(message, str) else message
@@ -274,8 +300,8 @@ def _prepared_action_detail_lines(action_type: str | None, preview: dict[str, An
             f"  Auction:     {_display_address(inspection.get('auction_address') or inspection.get('auctionAddress'))}",
             f"  Operation:   {str(decision.get('operation_type') or decision.get('operationType') or '-').replace('_', '-')}",
             f"  Token:       {_display_address(decision.get('token_address') or decision.get('tokenAddress'))}",
-            f"  Reason:      {decision.get('reason') or '-'}",
         ]
+        lines.extend(format_settlement_reason_lines(str(decision.get("reason") or "-"), prefix="  Reason:      "))
         return lines
 
     prepared_operations = preview.get("preparedOperations")

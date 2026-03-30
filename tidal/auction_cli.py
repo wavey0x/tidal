@@ -26,7 +26,13 @@ from tidal.cli_options import (
     PasswordFileOption,
     SenderOption,
 )
-from tidal.cli_renderers import BroadcastRecord, emit_json, render_broadcast_records
+from tidal.cli_renderers import (
+    BroadcastRecord,
+    emit_json,
+    format_settlement_reason_lines,
+    format_warning_lines,
+    render_broadcast_records,
+)
 from tidal.errors import ConfigurationError
 from tidal.logging import OutputMode, configure_logging
 from tidal.ops.auction_enable import (
@@ -217,7 +223,8 @@ def _render_settlement_summary(
 ) -> None:
     typer.echo(f"Auction:       {to_checksum_address(inspection.auction_address)}")
     typer.echo(f"Method:        {format_operation_type(decision.operation_type)}")
-    typer.echo(f"Reason:        {decision.reason}")
+    for line in format_settlement_reason_lines(decision.reason):
+        typer.echo(line)
     typer.echo(f"Active:        {'yes' if inspection.is_active_auction else 'no' if inspection.is_active_auction is False else 'unknown'}")
     typer.echo(f"Active token:  {to_checksum_address(inspection.active_token) if inspection.active_token else '-'}")
     typer.echo(
@@ -245,14 +252,22 @@ def _render_settlement_summary(
         typer.echo(f"Priority fee:  {float(execution['priority_fee_gwei']):.4f} gwei")
 
     for warning in warnings:
-        typer.echo(f"Warning:       {warning}")
+        warning_lines = format_warning_lines(warning, bullet="Warning:       ")
+        if len(warning_lines) == 1:
+            typer.echo(warning_lines[0])
+        else:
+            typer.echo(warning_lines[0])
+            for continuation in warning_lines[1:]:
+                typer.echo(" " * len("Warning:       ") + continuation.strip())
 
     if decision.status == "noop":
         typer.echo("No settlement action is currently available.")
     elif decision.status == "error":
         typer.echo("Settlement inspection failed.")
     elif not broadcast:
-        typer.echo("Dry run only. No transaction was sent.")
+        typer.echo("Transaction status:")
+        typer.echo("  Dry run mode enabled.")
+        typer.echo("  Use --broadcast to submit transaction on chain.")
     elif status == "noop":
         typer.echo("Aborted before broadcast.")
 

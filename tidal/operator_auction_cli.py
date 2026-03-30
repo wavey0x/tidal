@@ -17,7 +17,7 @@ from tidal.cli_options import (
     PasswordFileOption,
     SenderOption,
 )
-from tidal.cli_renderers import emit_json, render_status_panel
+from tidal.cli_renderers import emit_json, format_settlement_reason_lines, render_status_panel
 from tidal.control_plane.client import ControlPlaneError
 from tidal.errors import ConfigurationError
 from tidal.operator_cli_support import (
@@ -42,7 +42,7 @@ def _noop_status_lines(*, command_name: str, data: dict[str, object]) -> list[st
     if isinstance(decision, dict):
         reason = str(decision.get("reason") or "").strip()
         if reason:
-            lines.append(f"Reason:        {reason}")
+            lines.extend(format_settlement_reason_lines(reason))
 
     if command_name != "auction.settle":
         return lines
@@ -138,7 +138,10 @@ def _handle_prepared_action(
     elif not broadcast:
         render_status_panel(
             "Transaction Status",
-            "Dry run mode enabled. Use --broadcast to submit transaction on chain.",
+            [
+                "Dry run mode enabled.",
+                "Use --broadcast to submit transaction on chain.",
+            ],
             border_style="yellow",
         )
     else:

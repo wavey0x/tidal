@@ -1406,10 +1406,6 @@ tbody tr:hover td {
   margin-top: 0;
 }
 
-.deploy-modal-link {
-  font-size: 11px;
-}
-
 .deploy-modal-actions {
   display: flex;
   justify-content: flex-end;

@@ -20,7 +20,6 @@ from tidal.auction_price_units import (
     compute_minimum_quote_unscaled,
     compute_starting_price_unscaled,
     scaled_price_to_public_raw,
-    scaled_price_to_rate,
 )
 from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.chain.contracts.erc20 import ERC20Reader
@@ -1053,7 +1052,6 @@ class AuctionKicker:
                 want_sym = pk.candidate.want_symbol or "want-token"
                 buffer_pct = pk.start_price_buffer_bps / 100
                 min_buffer_pct = pk.min_price_buffer_bps / 100
-                floor_rate = scaled_price_to_rate(pk.minimum_price_scaled_1e18)
                 kick_summaries.append(
                     {
                         "source": pk.candidate.source_address,
@@ -1078,9 +1076,9 @@ class AuctionKicker:
                         "want_address": pk.candidate.want_address,
                         "want_symbol": pk.candidate.want_symbol,
                         "want_price_usd": pk.want_price_usd_str,
-                        "quote_rate": str(Decimal(pk.quote_amount_str) / Decimal(pk.normalized_balance)),
-                        "start_rate": str(Decimal(pk.starting_price_unscaled) / Decimal(pk.normalized_balance)),
-                        "floor_rate": str(floor_rate) if floor_rate is not None else None,
+                        "quote_rate": pk.quote_rate,
+                        "start_rate": pk.start_rate,
+                        "floor_rate": pk.floor_rate,
                         "buffer_bps": pk.start_price_buffer_bps,
                         "min_buffer_bps": pk.min_price_buffer_bps,
                         "step_decay_rate_bps": pk.step_decay_rate_bps,

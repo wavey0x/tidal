@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
 from tidal.api.services.action_audit import create_prepared_action
-from tidal.auction_price_units import scaled_price_to_rate
 from tidal.auction_settlement import (
     build_auction_settlement_call,
     decide_auction_settlement,
@@ -759,13 +758,9 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
             "minBufferBps": item.min_price_buffer_bps,
             "pricingProfileName": item.pricing_profile_name,
             "stepDecayRateBps": item.step_decay_rate_bps,
-            "quoteRate": str(Decimal(item.quote_amount_str) / Decimal(item.normalized_balance)),
-            "startRate": str(Decimal(item.starting_price_unscaled) / Decimal(item.normalized_balance)),
-            "floorRate": (
-                str(floor_rate)
-                if (floor_rate := scaled_price_to_rate(item.minimum_price_scaled_1e18)) is not None
-                else None
-            ),
+            "quoteRate": item.quote_rate,
+            "startRate": item.start_rate,
+            "floorRate": item.floor_rate,
             "settleToken": item.settle_token,
         }
         for item in items

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from typing import Literal
+
+_WAD = Decimal(10) ** 18
 
 
 SourceType = Literal["strategy", "fee_burner"]
@@ -88,10 +91,6 @@ class PreparedKick:
     want_price_usd_str: str | None = None
 
     @property
-    def minimum_price_raw(self) -> int:
-        return self.minimum_price_scaled_1e18
-
-    @property
     def starting_price_str(self) -> str:
         return self.starting_price_unscaled_str
 
@@ -100,12 +99,22 @@ class PreparedKick:
         return self.minimum_price_scaled_1e18_str
 
     @property
-    def minimum_quote_raw(self) -> int:
-        return self.minimum_quote_unscaled
-
-    @property
     def minimum_quote_str(self) -> str:
         return self.minimum_quote_unscaled_str
+
+    @property
+    def quote_rate(self) -> str:
+        return str(Decimal(self.quote_amount_str) / Decimal(self.normalized_balance))
+
+    @property
+    def start_rate(self) -> str:
+        return str(Decimal(self.starting_price_unscaled) / Decimal(self.normalized_balance))
+
+    @property
+    def floor_rate(self) -> str | None:
+        if self.minimum_price_scaled_1e18 is None:
+            return None
+        return str(Decimal(self.minimum_price_scaled_1e18) / _WAD)
 
 
 @dataclass(slots=True)
@@ -134,10 +143,6 @@ class PreparedSweepAndSettle:
     normalized_balance: str | None
     stuck_abort_reason: str
     token_symbol: str | None = None
-
-    @property
-    def minimum_price_raw(self) -> int | None:
-        return self.minimum_price_scaled_1e18
 
     @property
     def minimum_price_str(self) -> str | None:

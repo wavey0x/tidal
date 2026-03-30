@@ -579,26 +579,34 @@ function AddressCopy({ address }) {
   );
 }
 
-function AddressLinkCopy({ address, label = null }) {
+function AddressLinkCopy({
+  address,
+  label = null,
+  title = null,
+  copyTitle = null,
+  copyAriaLabel = null,
+  onClick = null,
+}) {
   if (!address) {
     return <span className="row-secondary mono">—</span>;
   }
 
   return (
-    <span className="address-copy" title={address}>
+    <span className="address-copy" title={title || address}>
       <a
-        className="etherscan-link mono address-value deploy-modal-link"
+        className="etherscan-link mono address-value"
         href={`${ETHERSCAN_ADDRESS_URL}${address}`}
         title={address}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={onClick}
       >
         {label || shortenAddress(address)}
       </a>
       <CopyIconButton
         valueToCopy={address}
-        title={`Copy address ${address}`}
-        ariaLabel={`Copy address ${address}`}
+        title={copyTitle || `Copy address ${address}`}
+        ariaLabel={copyAriaLabel || `Copy address ${address}`}
       />
     </span>
   );
@@ -1354,42 +1362,24 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile, onOpe
         </td>
         <td data-label="Auction">
           {kick.auctionAddress ? (
-            <span className="address-copy" title={kick.auctionAddress}>
-              <a
-                className="mono address-value"
-                href={`${ETHERSCAN_ADDRESS_URL}${kick.auctionAddress}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {shortenAddress(kick.auctionAddress)}
-              </a>
-              <CopyIconButton
-                valueToCopy={kick.auctionAddress}
-                title={`Copy ${kick.auctionAddress}`}
-                ariaLabel={`Copy auction address ${kick.auctionAddress}`}
-              />
-            </span>
+            <AddressLinkCopy
+              address={kick.auctionAddress}
+              onClick={(e) => e.stopPropagation()}
+              copyTitle={`Copy ${kick.auctionAddress}`}
+              copyAriaLabel={`Copy auction address ${kick.auctionAddress}`}
+            />
           ) : "—"}
         </td>
         <td data-label="Source">
           {kick.sourceAddress ? (
-            <span className="address-copy" title={kick.sourceName || kick.sourceAddress}>
-              <a
-                className="mono address-value"
-                href={`${ETHERSCAN_ADDRESS_URL}${kick.sourceAddress}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {sourceLabel}
-              </a>
-              <CopyIconButton
-                valueToCopy={kick.sourceAddress}
-                title={`Copy ${kick.sourceAddress}`}
-                ariaLabel={`Copy source address ${kick.sourceAddress}`}
-              />
-            </span>
+            <AddressLinkCopy
+              address={kick.sourceAddress}
+              label={sourceLabel}
+              title={kick.sourceName || kick.sourceAddress}
+              onClick={(e) => e.stopPropagation()}
+              copyTitle={`Copy ${kick.sourceAddress}`}
+              copyAriaLabel={`Copy source address ${kick.sourceAddress}`}
+            />
           ) : "—"}
         </td>
         <td className="kick-auctionscan-cell" data-label="AuctionScan">

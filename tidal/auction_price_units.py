@@ -70,12 +70,6 @@ def scaled_price_to_public_raw(minimum_price_scaled_1e18: int | None, want_decim
     return minimum_price_scaled_1e18 // scaler
 
 
-def public_price_to_rate(public_price_raw: int | None, want_decimals: int | None) -> Decimal | None:
-    if public_price_raw is None or want_decimals is None:
-        return None
-    return Decimal(public_price_raw) / (Decimal(10) ** want_decimals)
-
-
 def compute_minimum_quote_unscaled(
     *,
     minimum_price_scaled_1e18: int,

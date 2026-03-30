@@ -110,6 +110,66 @@ def _seed_dashboard_data(settings: Settings) -> None:
         session.commit()
 
 
+def _seed_kick_log_rows(settings: Settings) -> None:
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        session.execute(
+            models.kick_txs.insert(),
+            [
+                {
+                    "run_id": "run-a",
+                    "operation_type": "kick",
+                    "source_type": "strategy",
+                    "source_address": "0x2000000000000000000000000000000000000002",
+                    "strategy_address": "0x2000000000000000000000000000000000000002",
+                    "token_address": "0x5000000000000000000000000000000000000005",
+                    "auction_address": "0x3000000000000000000000000000000000000003",
+                    "token_symbol": "CRV",
+                    "want_address": "0x4000000000000000000000000000000000000004",
+                    "want_symbol": "USDC",
+                    "status": "CONFIRMED",
+                    "tx_hash": "0xaaa",
+                    "quote_response_json": '{"requestUrl":"https://prices.example.com/1"}',
+                    "created_at": "2026-03-28T00:03:00+00:00",
+                },
+                {
+                    "run_id": "run-b",
+                    "operation_type": "kick",
+                    "source_type": "strategy",
+                    "source_address": "0x2000000000000000000000000000000000000002",
+                    "strategy_address": "0x2000000000000000000000000000000000000002",
+                    "token_address": "0x5000000000000000000000000000000000000005",
+                    "auction_address": "0x3000000000000000000000000000000000000004",
+                    "token_symbol": "YFI",
+                    "want_address": "0x4000000000000000000000000000000000000004",
+                    "want_symbol": "USDC",
+                    "status": "ERROR",
+                    "tx_hash": "0xbbb",
+                    "error_message": "failed",
+                    "quote_response_json": '{"requestUrl":"https://prices.example.com/2"}',
+                    "created_at": "2026-03-28T00:02:00+00:00",
+                },
+                {
+                    "run_id": "run-c",
+                    "operation_type": "kick",
+                    "source_type": "strategy",
+                    "source_address": "0x2000000000000000000000000000000000000002",
+                    "strategy_address": "0x2000000000000000000000000000000000000002",
+                    "token_address": "0x5000000000000000000000000000000000000005",
+                    "auction_address": "0x3000000000000000000000000000000000000005",
+                    "token_symbol": "CRV",
+                    "want_address": "0x4000000000000000000000000000000000000004",
+                    "want_symbol": "DAI",
+                    "status": "CONFIRMED",
+                    "tx_hash": "0xccc",
+                    "quote_response_json": '{"requestUrl":"https://prices.example.com/3"}',
+                    "created_at": "2026-03-28T00:01:00+00:00",
+                },
+            ],
+        )
+        session.commit()
+
+
 def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)
@@ -533,3 +593,52 @@ def test_kick_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Path)
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
     assert payload["data"]["kicks"][0]["wantSymbol"] == "USDC"
     assert "prices.example.com/v1/quote" in payload["data"]["kicks"][0]["quoteResponseJson"]
+
+
+def test_kick_logs_endpoint_supports_pagination_and_search(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    _seed_dashboard_data(settings)
+    _seed_kick_log_rows(settings)
+    client = TestClient(create_app(settings))
+    headers = {"Authorization": f"Bearer {_TEST_API_KEY}"}
+
+    first_page = client.get("/api/v1/tidal/logs/kicks?limit=2", headers=headers)
+    assert first_page.status_code == 200
+    first_payload = first_page.json()["data"]
+    assert first_payload["total"] == 3
+    assert first_payload["limit"] == 2
+    assert first_payload["offset"] == 0
+    assert first_payload["hasMore"] is True
+    assert [row["runId"] for row in first_payload["kicks"]] == ["run-a", "run-b"]
+
+    second_page = client.get("/api/v1/tidal/logs/kicks?limit=2&offset=2", headers=headers)
+    assert second_page.status_code == 200
+    second_payload = second_page.json()["data"]
+    assert second_payload["hasMore"] is False
+    assert [row["runId"] for row in second_payload["kicks"]] == ["run-c"]
+
+    failed_only = client.get("/api/v1/tidal/logs/kicks?status=failed", headers=headers)
+    assert failed_only.status_code == 200
+    failed_payload = failed_only.json()["data"]
+    assert failed_payload["total"] == 1
+    assert failed_payload["kicks"][0]["runId"] == "run-b"
+
+    search = client.get("/api/v1/tidal/logs/kicks?q=yfi", headers=headers)
+    assert search.status_code == 200
+    search_payload = search.json()["data"]
+    assert search_payload["total"] == 1
+    assert search_payload["kicks"][0]["tokenSymbol"] == "YFI"
+
+    filtered_run = client.get("/api/v1/tidal/logs/kicks?run_id=run-c", headers=headers)
+    assert filtered_run.status_code == 200
+    run_payload = filtered_run.json()["data"]
+    assert run_payload["total"] == 1
+    assert run_payload["kicks"][0]["runId"] == "run-c"
+
+    kick_id = first_payload["kicks"][0]["id"]
+    exact_kick = client.get(f"/api/v1/tidal/logs/kicks?kick_id={kick_id}", headers=headers)
+    assert exact_kick.status_code == 200
+    exact_payload = exact_kick.json()["data"]
+    assert exact_payload["total"] == 1
+    assert exact_payload["kicks"][0]["id"] == kick_id

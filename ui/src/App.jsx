@@ -1439,12 +1439,15 @@ function KickLogPage({
   const [offset, setOffset] = useState(initialOffset);
   const [hasMore, setHasMore] = useState(false);
   const [expandedRows, setExpandedRows] = useState(() => new Set());
+  const [focusedKickId, setFocusedKickId] = useState(initialKickId);
+  const [focusedRunId, setFocusedRunId] = useState(initialRunId);
   const highlightedRowRef = useRef(null);
   const kicksRef = useRef([]);
   const auctionScanRequestsRef = useRef(new Map());
   const pageCacheRef = useRef(new Map());
+  const filterResetRef = useRef(true);
   const isMobile = useMediaQuery("(max-width: 600px)");
-  const focusedView = Boolean(initialKickId || initialRunId);
+  const focusedView = Boolean(focusedKickId || focusedRunId);
 
   useEffect(() => {
     kicksRef.current = kicks;
@@ -1458,6 +1461,10 @@ function KickLogPage({
   }, [searchTerm]);
 
   useEffect(() => {
+    if (filterResetRef.current) {
+      filterResetRef.current = false;
+      return;
+    }
     setOffset(0);
     setExpandedRows(new Set());
   }, [statusFilter, debouncedSearchTerm]);
@@ -1468,8 +1475,8 @@ function KickLogPage({
 
     const normalizedQuery = debouncedSearchTerm.trim();
     const requestKey = JSON.stringify({
-      kickId: initialKickId || null,
-      runId: initialRunId || null,
+      kickId: focusedKickId || null,
+      runId: focusedRunId || null,
       offset,
       status: statusFilter,
       q: normalizedQuery,
@@ -1541,10 +1548,10 @@ function KickLogPage({
         if (normalizedQuery) {
           params.set("q", normalizedQuery);
         }
-        if (initialKickId) {
-          params.set("kick_id", String(initialKickId));
-        } else if (initialRunId) {
-          params.set("run_id", initialRunId);
+        if (focusedKickId) {
+          params.set("kick_id", String(focusedKickId));
+        } else if (focusedRunId) {
+          params.set("run_id", focusedRunId);
         }
 
         const response = await apiFetch(`/logs/kicks?${params.toString()}`, {
@@ -1571,19 +1578,13 @@ function KickLogPage({
       isMounted = false;
       controller.abort();
     };
-  }, []);
-    loadKicks();
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
-  }, [debouncedSearchTerm, initialKickId, initialRunId, offset, statusFilter, focusedView]);
+  }, [debouncedSearchTerm, focusedKickId, focusedRunId, offset, statusFilter, focusedView]);
 
   useEffect(() => {
-    if (loading || (!initialKickId && !initialRunId) || !kicks.length) return;
-    const match = initialKickId
-      ? kicks.find((k) => String(k.id) === String(initialKickId))
-      : kicks.find((k) => k.runId === initialRunId);
+    if (loading || (!focusedKickId && !focusedRunId) || !kicks.length) return;
+    const match = focusedKickId
+      ? kicks.find((k) => String(k.id) === String(focusedKickId))
+      : kicks.find((k) => k.runId === focusedRunId);
     if (match) {
       setExpandedRows(new Set([match.id]));
       if (!isMobile) {
@@ -1592,7 +1593,7 @@ function KickLogPage({
         });
       }
     }
-  }, [loading, initialKickId, initialRunId, kicks, isMobile]);
+  }, [loading, focusedKickId, focusedRunId, kicks, isMobile]);
 
   function getAuctionScanUrls(kick) {
     if (!kick) {
@@ -1710,7 +1711,7 @@ function KickLogPage({
       offset: offset > 0 && !focusedView ? String(offset) : null,
       status: statusFilter !== "all" ? statusFilter : null,
       q: debouncedSearchTerm.trim() || null,
-      run_id: initialRunId || null,
+      run_id: focusedRunId || null,
       ...overrides,
     };
     return params;
@@ -1734,11 +1735,21 @@ function KickLogPage({
     if (expanding) {
       navigateTo("kicks", buildNavParams({ kick_id: String(kick.id) }));
     } else {
+      if (focusedKickId && String(focusedKickId) === String(kick.id)) {
+        setFocusedKickId(null);
+      }
       navigateTo("kicks", buildNavParams({ kick_id: null }));
     }
     if (expanding) {
       ensureAuctionScanLink(kick.id);
     }
+  }
+
+  function clearFocusedView() {
+    setFocusedKickId(null);
+    setFocusedRunId(null);
+    setExpandedRows(new Set());
+    navigateTo("kicks", buildNavParams({ kick_id: null, run_id: null }));
   }
 
   return (
@@ -1749,12 +1760,13 @@ function KickLogPage({
           <input
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            disabled={focusedView}
             placeholder="token symbol, auction address, tx hash"
           />
         </label>
         <label className="control control-status">
           <span>Status</span>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} disabled={focusedView}>
             <option value="all">All</option>
             <option value="confirmed">Confirmed</option>
             <option value="failed">Failed</option>
@@ -1763,8 +1775,13 @@ function KickLogPage({
       </section>
 
       {focusedView ? (
-        <div className="toolbar-meta">
-          {initialKickId ? `Showing selected kick ${initialKickId}` : `Showing run ${initialRunId}`}
+        <div className="kick-log-focusbar">
+          <div className="toolbar-meta">
+            {focusedKickId ? `Showing selected kick ${focusedKickId}` : `Showing run ${focusedRunId}`}
+          </div>
+          <button type="button" className="kick-log-page-btn" onClick={clearFocusedView}>
+            Show all logs
+          </button>
         </div>
       ) : (
         <KickLogPager
@@ -1811,8 +1828,8 @@ function KickLogPage({
                     onToggle={() => toggleRow(kick)}
                     onOpenAuctionScan={openAuctionScanLink}
                     rowRef={
-                      (initialKickId != null && String(kick.id) === String(initialKickId))
-                      || (initialKickId == null && kick.runId === initialRunId)
+                      (focusedKickId != null && String(kick.id) === String(focusedKickId))
+                      || (focusedKickId == null && focusedRunId != null && kick.runId === focusedRunId)
                         ? highlightedRowRef
                         : undefined
                     }

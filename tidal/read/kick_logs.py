@@ -82,6 +82,9 @@ class KickLogReadService:
 
         features = self._get_schema_features()
         operation_type_expr, source_type_expr, resolved_source_address_expr = self._build_kick_source_expressions(features)
+        token_symbol_expr = "COALESCE(k.token_symbol, '')" if features["kick_txs.token_symbol"] else "''"
+        want_symbol_expr = "COALESCE(k.want_symbol, '')" if features["kick_txs.want_symbol"] else "''"
+        search_operation_type_expr = "COALESCE(k.operation_type, 'kick')" if features["kick_txs.operation_type"] else "'kick'"
         clauses: list[str] = []
         params: dict[str, object] = {"limit": limit, "offset": offset}
         if status is not None:
@@ -94,13 +97,13 @@ class KickLogReadService:
         if q is not None and str(q).strip():
             clauses.append(
                 "("
-                "LOWER(COALESCE(k.token_symbol, '')) LIKE :q OR "
-                "LOWER(COALESCE(k.want_symbol, '')) LIKE :q OR "
+                f"LOWER({token_symbol_expr}) LIKE :q OR "
+                f"LOWER({want_symbol_expr}) LIKE :q OR "
                 "LOWER(COALESCE(k.auction_address, '')) LIKE :q OR "
                 "LOWER(COALESCE(k.tx_hash, '')) LIKE :q OR "
                 f"LOWER(COALESCE({resolved_source_address_expr}, '')) LIKE :q OR "
                 "LOWER(COALESCE(k.run_id, '')) LIKE :q OR "
-                "LOWER(COALESCE(k.operation_type, 'kick')) LIKE :q"
+                f"LOWER({search_operation_type_expr}) LIKE :q"
                 ")"
             )
             params["q"] = f"%{str(q).strip().lower()}%"

@@ -33,17 +33,17 @@ Separate the CLI client wallet from this machine whenever possible.
 
 After following [Install](install.md), review:
 
-- `~/.tidal/config.yaml`
-- `~/.tidal/.env`
-- `~/.tidal/kick.yaml` if you need pricing overrides, ignore rules, or cooldown changes
+- `config/server.yaml`
+- `config/.env` for local repo use, or `TIDAL_ENV_FILE` for a secret path outside Git
+- `TIDAL_HOME` if you want state outside the repo checkout
 
 Then run:
 
 ```bash
-tidal-server db migrate
-tidal-server auth create --label cli-client-name
-tidal-server scan run
-tidal-server api serve
+tidal-server db migrate --config config/server.yaml
+tidal-server auth create --label cli-client-name --config config/server.yaml
+tidal-server scan run --config config/server.yaml
+tidal-server api serve --config config/server.yaml
 ```
 
 If you plan to reconcile receipts in the API process, set `RPC_URL` so the background reconciler can start.
@@ -58,17 +58,16 @@ One simple production shape is:
 - API bind: `127.0.0.1:8020`
 - reverse proxy: nginx terminating TLS at `api.tidal.wavey.info`
 
-Example `~/.tidal/.env`:
+Example `config/.env`:
 
 ```bash
 RPC_URL=http://127.0.0.1:8545
 TOKEN_PRICE_AGG_KEY=...
 ```
 
-Example `~/.tidal/config.yaml` overrides:
+Example `config/server.yaml` overrides:
 
 ```yaml
-db_path: state/tidal.db
 tidal_api_host: 127.0.0.1
 tidal_api_port: 8020
 scan_interval_seconds: 300
@@ -80,22 +79,22 @@ scan_auto_settle_enabled: false
 Scanner daemon:
 
 ```bash
-tidal-server scan daemon --interval-seconds 300
+tidal-server scan daemon --config config/server.yaml --interval-seconds 300
 ```
 
 Kick daemon:
 
 ```bash
-tidal-server kick daemon --broadcast --sender 0xYourAddress --account wavey3
+tidal-server kick daemon --config config/server.yaml --broadcast --sender 0xYourAddress --account wavey3
 ```
 
 API:
 
 ```bash
-tidal-server api serve
+tidal-server api serve --config config/server.yaml
 ```
 
-The API host and port normally come from `~/.tidal/config.yaml`:
+The API host and port normally come from `config/server.yaml`:
 
 - `tidal_api_host`
 - `tidal_api_port`
@@ -113,9 +112,10 @@ After=network.target
 Type=simple
 User=wavey
 Group=wavey
-Environment=TIDAL_HOME=/home/wavey/.tidal
-EnvironmentFile=/home/wavey/.tidal/.env
-ExecStart=/home/wavey/.local/bin/tidal-server api serve
+WorkingDirectory=/home/wavey/tidal
+Environment=TIDAL_HOME=/var/lib/tidal
+EnvironmentFile=/home/wavey/tidal/config/.env
+ExecStart=/home/wavey/.local/bin/tidal-server api serve --config /home/wavey/tidal/config/server.yaml
 Restart=on-failure
 RestartSec=5
 
@@ -134,9 +134,10 @@ After=network.target
 Type=oneshot
 User=wavey
 Group=wavey
-Environment=TIDAL_HOME=/home/wavey/.tidal
-EnvironmentFile=/home/wavey/.tidal/.env
-ExecStart=/home/wavey/.local/bin/tidal-server scan run
+WorkingDirectory=/home/wavey/tidal
+Environment=TIDAL_HOME=/var/lib/tidal
+EnvironmentFile=/home/wavey/tidal/config/.env
+ExecStart=/home/wavey/.local/bin/tidal-server scan run --config /home/wavey/tidal/config/server.yaml
 ```
 
 Pair the scan oneshot with a systemd timer or external scheduler.
@@ -186,19 +187,19 @@ Then issue the certificate with your normal ACME flow, for example `certbot --ng
 Create:
 
 ```bash
-tidal-server auth create --label alice
+tidal-server auth create --label alice --config config/server.yaml
 ```
 
 List:
 
 ```bash
-tidal-server auth list
+tidal-server auth list --config config/server.yaml
 ```
 
 Revoke:
 
 ```bash
-tidal-server auth revoke alice
+tidal-server auth revoke alice --config config/server.yaml
 ```
 
 The API stores only SHA-256 hashes of keys. The plaintext key is shown once at creation time.

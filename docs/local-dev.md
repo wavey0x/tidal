@@ -21,31 +21,34 @@ Use `uv run ...` for Python-side commands from the checkout instead of activatin
 
 ## Secrets And Config
 
-Initialize the local config home first:
+Initialize the local client home and tracked server config first:
 
 ```bash
 uv run tidal init
+uv run tidal-server init-config
 ```
 
-Put secrets in `~/.tidal/.env`:
+Put client secrets in `~/.tidal/.env`:
 
 ```bash
-RPC_URL=https://...
-TOKEN_PRICE_AGG_KEY=...
 TIDAL_API_KEY=...
+RPC_URL=https://...
 ```
 
-Put operational settings in `~/.tidal/config.yaml`. The scaffold written by `tidal init` already includes:
+Put shared server runtime settings in `config/server.yaml`.
+Put server secrets in `config/.env` for local repo work.
 
-- SQLite path
-- role-labeled sections for shared defaults, server operator settings, and CLI client convenience values
-- scanner and API server defaults
-- transaction guardrails
+The tracked server config already includes:
+
+- scanner and API defaults
+- multicall and pricing settings
+- monitored fee burners
+- the embedded `kick:` policy block
 
 Settings precedence is:
 
 ```text
-environment variables > ~/.tidal/config.yaml > Python defaults
+environment variables > config/server.yaml > Python defaults
 ```
 
 See [Configuration](config.md) for the full schema.
@@ -53,7 +56,7 @@ See [Configuration](config.md) for the full schema.
 ## Initialize The Database
 
 ```bash
-uv run tidal-server db migrate
+uv run tidal-server db migrate --config config/server.yaml
 ```
 
 This applies Alembic migrations to the configured SQLite database.
@@ -77,13 +80,13 @@ export TIDAL_API_KEY=<printed-key>
 Run one scan:
 
 ```bash
-uv run tidal-server scan run
+uv run tidal-server scan run --config config/server.yaml
 ```
 
 Start the API:
 
 ```bash
-uv run tidal-server api serve
+uv run tidal-server api serve --config config/server.yaml
 ```
 
 By default the API listens on `0.0.0.0:8787`. Override with `TIDAL_API_HOST` and `TIDAL_API_PORT` if needed.

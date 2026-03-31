@@ -12,9 +12,19 @@ from tidal.transaction_service.types import AuctionInspection
 
 
 def _write_txn_config(tmp_path: Path) -> Path:
-    config_path = tmp_path / "config.yaml"
+    config_path = tmp_path / "server.yaml"
     config_path.write_text(
-        f"db_path: {tmp_path / 'test.db'}\nrpc_url: https://example-rpc.invalid\n",
+        (
+            f"db_path: {tmp_path / 'test.db'}\n"
+            "rpc_url: https://example-rpc.invalid\n"
+            "kick:\n"
+            "  default_profile: volatile\n"
+            "  profiles:\n"
+            "    volatile:\n"
+            "      start_price_buffer_bps: 1000\n"
+            "      min_price_buffer_bps: 500\n"
+            "      step_decay_rate_bps: 25\n"
+        ),
         encoding="utf-8",
     )
     return config_path
@@ -27,14 +37,26 @@ def _isolate_runtime_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("TIDAL_HOME", raising=False)
     monkeypatch.delenv("TIDAL_CONFIG", raising=False)
     monkeypatch.delenv("TIDAL_ENV_FILE", raising=False)
-    monkeypatch.delenv("TIDAL_KICK_PATH", raising=False)
 
 
 def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    app_home.mkdir(parents=True)
-    (app_home / "config.yaml").write_text("db_path: state/tidal.db\n", encoding="utf-8")
+    project_root = tmp_path / "repo"
+    config_dir = project_root / "config"
+    config_dir.mkdir(parents=True)
+    (project_root / "pyproject.toml").write_text("[project]\nname='tidal'\nversion='0'\n", encoding="utf-8")
+    (config_dir / "server.yaml").write_text(
+        (
+            f"db_path: {tmp_path / 'tidal.db'}\n"
+            "kick:\n"
+            "  default_profile: volatile\n"
+            "  profiles:\n"
+            "    volatile:\n"
+            "      start_price_buffer_bps: 1000\n"
+            "      min_price_buffer_bps: 500\n"
+            "      step_decay_rate_bps: 25\n"
+        ),
+        encoding="utf-8",
+    )
 
     captured_urls: list[str] = []
 
@@ -45,13 +67,10 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
     monkeypatch.delenv("TIDAL_HOME", raising=False)
     monkeypatch.delenv("TIDAL_CONFIG", raising=False)
     monkeypatch.delenv("TIDAL_ENV_FILE", raising=False)
-    monkeypatch.delenv("TIDAL_KICK_PATH", raising=False)
-    monkeypatch.setenv("HOME", str(home_root))
-    monkeypatch.delenv("TIDAL_HOME", raising=False)
     monkeypatch.setattr("tidal.server_cli.run_migrations", fake_run_migrations)
 
-    cwd_a = tmp_path / "repo-a"
-    cwd_b = tmp_path / "repo-b"
+    cwd_a = project_root / "repo-a"
+    cwd_b = project_root / "repo-b"
     cwd_a.mkdir()
     cwd_b.mkdir()
 
@@ -65,8 +84,8 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
     assert result_a.exit_code == 0
     assert result_b.exit_code == 0
     assert captured_urls == [
-        f"sqlite:///{app_home / 'state' / 'tidal.db'}",
-        f"sqlite:///{app_home / 'state' / 'tidal.db'}",
+        f"sqlite:///{tmp_path / 'tidal.db'}",
+        f"sqlite:///{tmp_path / 'tidal.db'}",
     ]
 
 
@@ -95,8 +114,11 @@ class _StopDaemon(Exception):
 def test_scan_run_requires_rpc_url(tmp_path, monkeypatch) -> None:
     _isolate_runtime_env(tmp_path, monkeypatch)
     monkeypatch.delenv("RPC_URL", raising=False)
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("RPC_URL: ''\nDB_PATH: ./test.db\n", encoding="utf-8")
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        "RPC_URL: ''\nDB_PATH: ./test.db\nkick:\n  default_profile: volatile\n  profiles:\n    volatile:\n      start_price_buffer_bps: 1000\n      min_price_buffer_bps: 500\n      step_decay_rate_bps: 25\n",
+        encoding="utf-8",
+    )
 
     runner = CliRunner()
     result = runner.invoke(app, ["scan", "run", "--config", str(config_path)])
@@ -110,12 +132,19 @@ def test_scan_run_requires_keystore_when_auto_settle_enabled(tmp_path, monkeypat
     monkeypatch.setenv("RPC_URL", "https://example-rpc.invalid")
     monkeypatch.delenv("TXN_KEYSTORE_PATH", raising=False)
     monkeypatch.delenv("TXN_KEYSTORE_PASSPHRASE", raising=False)
-    config_path = tmp_path / "config.yaml"
+    config_path = tmp_path / "server.yaml"
     config_path.write_text(
         "db_path: ./test.db\n"
         "scan_auto_settle_enabled: true\n"
         "txn_keystore_path: ''\n"
-        "txn_keystore_passphrase: ''\n",
+        "txn_keystore_passphrase: ''\n"
+        "kick:\n"
+        "  default_profile: volatile\n"
+        "  profiles:\n"
+        "    volatile:\n"
+        "      start_price_buffer_bps: 1000\n"
+        "      min_price_buffer_bps: 500\n"
+        "      step_decay_rate_bps: 25\n",
         encoding="utf-8",
     )
 
@@ -215,8 +244,11 @@ def test_kick_daemon_threads_curve_quote_override(tmp_path, monkeypatch, flag_ar
 def test_auction_enable_tokens_requires_rpc_url(tmp_path, monkeypatch) -> None:
     _isolate_runtime_env(tmp_path, monkeypatch)
     monkeypatch.setenv("RPC_URL", "")
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("db_path: ./test.db\n", encoding="utf-8")
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        "db_path: ./test.db\nkick:\n  default_profile: volatile\n  profiles:\n    volatile:\n      start_price_buffer_bps: 1000\n      min_price_buffer_bps: 500\n      step_decay_rate_bps: 25\n",
+        encoding="utf-8",
+    )
 
     runner = CliRunner()
     result = runner.invoke(
@@ -282,8 +314,11 @@ def test_auction_enable_tokens_rejects_bypass_confirmation_without_broadcast() -
 def test_auction_settle_requires_rpc_url(tmp_path, monkeypatch) -> None:
     _isolate_runtime_env(tmp_path, monkeypatch)
     monkeypatch.setenv("RPC_URL", "")
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("db_path: ./test.db\n", encoding="utf-8")
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        "db_path: ./test.db\nkick:\n  default_profile: volatile\n  profiles:\n    volatile:\n      start_price_buffer_bps: 1000\n      min_price_buffer_bps: 500\n      step_decay_rate_bps: 25\n",
+        encoding="utf-8",
+    )
 
     runner = CliRunner()
     result = runner.invoke(

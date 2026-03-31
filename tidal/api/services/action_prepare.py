@@ -36,7 +36,6 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.runtime import build_txn_service, build_web3_client
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
-from tidal.transaction_service.kick_policy import load_kick_config
 from tidal.transaction_service.kicker import _GAS_ESTIMATE_BUFFER, _format_execution_error
 from tidal.transaction_service.types import KickResult, PreparedKick, PreparedSweepAndSettle
 
@@ -76,7 +75,7 @@ async def prepare_kick_action(
     sender: str | None,
     require_curve_quote: bool | None = None,
 ) -> tuple[str, list[str], dict[str, object]]:
-    kick_config = load_kick_config(settings.resolved_kick_path)
+    kick_config = settings.kick_config
     shortlist = build_shortlist(
         session,
         usd_threshold=settings.txn_usd_threshold,

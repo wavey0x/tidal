@@ -9,12 +9,12 @@
 ## Common Invocation
 
 ```bash
-tidal-server api serve
+tidal-server api serve --config config/server.yaml
 ```
 
 ## Runtime Behavior
 
-The API process reads its bind configuration from `~/.tidal/config.yaml`, typically:
+The API process reads its bind configuration from `config/server.yaml`, typically:
 
 - `tidal_api_host`
 - `tidal_api_port`

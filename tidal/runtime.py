@@ -41,7 +41,6 @@ from tidal.scanner.service import ScannerService
 from tidal.scanner.token_metadata import TokenMetadataService
 from tidal.paths import default_txn_lock_path
 from tidal.transaction_service.signer import TransactionSigner
-from tidal.transaction_service.kick_policy import load_kick_config
 
 
 def build_scanner_service(settings: Settings, session) -> ScannerService:
@@ -252,7 +251,7 @@ def build_txn_service(
         multicall_enabled=settings.multicall_enabled,
         multicall_auction_batch_calls=settings.multicall_auction_batch_calls,
     )
-    kick_config = load_kick_config(settings.resolved_kick_path)
+    kick_config = settings.kick_config
     resolved_require_curve_quote = (
         settings.txn_require_curve_quote
         if require_curve_quote is None

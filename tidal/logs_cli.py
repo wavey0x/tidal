@@ -26,7 +26,7 @@ def logs_kicks(
 ) -> None:
     """Show recent kick attempts."""
 
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     normalized_source = normalize_cli_address(source_address)
     normalized_auction = normalize_cli_address(auction_address)
     with cli_ctx.session() as session:
@@ -54,7 +54,7 @@ def logs_scans(
 ) -> None:
     """Show recent scan runs."""
 
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     with cli_ctx.session() as session:
         records = list_scan_runs(session, status=status, limit=limit or 20)
 
@@ -73,7 +73,7 @@ def logs_show(
 ) -> None:
     """Show one scan or kick run in detail."""
 
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     with cli_ctx.session() as session:
         detail = get_run_detail(session, run_id)
 

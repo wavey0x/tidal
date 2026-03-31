@@ -14,7 +14,7 @@ ConfigOption = Annotated[
         exists=True,
         file_okay=True,
         dir_okay=False,
-        help="Optional config.yaml path.",
+        help="Optional runtime config file path.",
     ),
 ]
 

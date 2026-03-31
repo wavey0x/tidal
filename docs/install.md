@@ -21,17 +21,22 @@ managed interpreter than the repo is actively exercised on.
 
 - `~/.tidal/config.yaml`
 - `~/.tidal/.env`
-- `~/.tidal/kick.yaml`
 - `~/.tidal/state/`
 - `~/.tidal/state/operator/`
 - `~/.tidal/run/`
 
-The scaffold is ordered for the common CLI-client case:
+This scaffold is client-focused:
 
 - API client settings first
 - local execution defaults next
-- shared runtime settings after that
-- server-only settings last
+- workstation execution settings after that
+
+## What `tidal-server init-config` Creates
+
+`tidal-server init-config` scaffolds tracked server config files in `./config/` by default:
+
+- `config/server.yaml`
+- `config/.env.example`
 
 ## CLI Client Install
 
@@ -48,7 +53,6 @@ Then review:
 
 - `~/.tidal/.env`: set `TIDAL_API_KEY`, plus keystore secrets if you will broadcast locally
 - `~/.tidal/config.yaml`: confirm `tidal_api_base_url`
-- `~/.tidal/kick.yaml`: usually leave this alone on a workstation; API-backed kick pricing, ignore rules, and cooldowns come from the server's `kick.yaml`
 
 Minimum client setup:
 
@@ -59,8 +63,6 @@ TIDAL_API_KEY=<cli-client-api-key>
 If you are using the hosted API at `https://api.tidal.wavey.info`, API keys are provided by wavey on request.
 
 The generated `config.yaml` already defaults `tidal_api_base_url` to the hosted API. If you are pointing at a different server, override that value there or pass `--api-base-url` per command.
-
-For normal API-backed `tidal` usage, changing the workstation's `~/.tidal/kick.yaml` does not change prepared kick behavior. The server that prepares the action is the side that loads `kick.yaml`.
 
 Verify the install:
 
@@ -84,24 +86,25 @@ If it pauses, it may be waiting for your SSH key passphrase.
 Use this on the machine that owns the shared database, scanner, and API.
 
 ```bash
-uv python install 3.12
-uv tool install --python 3.12 git+ssh://git@github.com/wavey0x/tidal.git
-uv tool update-shell
-tidal init
+git clone git@github.com:wavey0x/tidal.git
+cd tidal
+uv sync --extra dev
+uv run tidal-server init-config
 ```
 
 Then review:
 
-- `~/.tidal/.env`: at minimum `RPC_URL`, and usually `TOKEN_PRICE_AGG_KEY`
-- `~/.tidal/config.yaml`: scanner, API, and database settings
-- `~/.tidal/kick.yaml`: if you need pricing overrides, ignore rules, or cooldown changes
+- `config/server.yaml`: authoritative server runtime and kick policy
+- `config/.env.example`: documented server secrets
+- `config/.env` or `TIDAL_ENV_FILE`: actual server secrets such as `RPC_URL`
+- `TIDAL_HOME=/var/lib/tidal` or another non-repo state location
 
 Minimum server operator bootstrap:
 
 ```bash
-tidal-server db migrate
-tidal-server scan run
-tidal-server api serve
+uv run tidal-server db migrate --config config/server.yaml
+uv run tidal-server scan run --config config/server.yaml
+uv run tidal-server api serve --config config/server.yaml
 ```
 
 For a self-hosted server, create client API keys with `tidal-server auth create --label <name>`.
@@ -115,6 +118,7 @@ git clone git@github.com:wavey0x/tidal.git
 cd tidal
 uv sync --extra dev
 uv run tidal init
+uv run tidal-server init-config
 ```
 
 If you are troubleshooting a hanging tool install on a server, rerun with verbose logs so `uv`
@@ -127,9 +131,9 @@ uv tool install --python 3.12 -v git+ssh://git@github.com/wavey0x/tidal.git
 Then use `uv run` for Python-side commands from the checkout:
 
 ```bash
-uv run tidal-server db migrate
-uv run tidal-server scan run
-uv run tidal-server api serve
+uv run tidal-server db migrate --config config/server.yaml
+uv run tidal-server scan run --config config/server.yaml
+uv run tidal-server api serve --config config/server.yaml
 uv run pytest
 uv run mkdocs serve
 ```

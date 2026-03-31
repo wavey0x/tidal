@@ -1039,7 +1039,7 @@ def process_entries(
 
 
 async def async_main(args: argparse.Namespace) -> tuple[dict[str, Any], dict[tuple[str, str, str, int], AuctionSpec], Any]:
-    settings = load_settings(args.config)
+    settings = load_settings(args.config, mode="server")
     legacy_factory = normalize_address(args.legacy_factory)
     new_factory = normalize_address(args.new_factory)
     required_governance = normalize_address(args.required_governance)

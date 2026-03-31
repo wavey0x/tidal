@@ -136,7 +136,7 @@ def kick_run(
     configure_logging(verbose=verbose, output_mode=OutputMode.TEXT)
     if bypass_confirmation and not broadcast:
         raise typer.BadParameter("--bypass-confirmation requires --broadcast", param_hint="--bypass-confirmation")
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     normalized_source_type = _normalize_source_type_filter(source_type)
     normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
@@ -275,7 +275,7 @@ def kick_daemon(
     """Run the kick service continuously."""
 
     configure_logging(verbose=verbose, output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     try:
         cli_ctx.require_rpc()
     except ConfigurationError as exc:
@@ -362,7 +362,7 @@ def kick_inspect(
     """Explain why candidates are ready, skipped, or deferred."""
 
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     normalized_source_type = _normalize_source_type_filter(source_type)
     normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")

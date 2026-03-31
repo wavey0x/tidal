@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from tidal.transaction_service.kick_policy import load_kick_config
 from tidal.persistence.repositories import KickTxRepository
 from tidal.runtime import build_txn_service
 from tidal.transaction_service.evaluator import build_shortlist
@@ -66,7 +65,7 @@ def inspect_kick_candidates(
     limit: int | None = None,
     include_live_inspection: bool = True,
 ) -> KickInspectResult:
-    kick_config = load_kick_config(settings.resolved_kick_path)
+    kick_config = settings.kick_config
     shortlist = build_shortlist(
         session,
         usd_threshold=settings.txn_usd_threshold,

@@ -35,16 +35,19 @@ The server owns the database, scans, API, and audit history. CLI clients keep pr
 ```bash
 uv sync --extra dev
 uv run tidal init
-uv run tidal-server db migrate
-uv run tidal-server scan run
-uv run tidal-server api serve
+uv run tidal-server init-config
+uv run tidal-server db migrate --config config/server.yaml
+uv run tidal-server scan run --config config/server.yaml
+uv run tidal-server api serve --config config/server.yaml
 ```
 
 Required setup:
 
-- Run `uv run tidal init` to scaffold `~/.tidal/config.yaml`, `~/.tidal/.env`, and `~/.tidal/kick.yaml`.
-- Put secrets such as `RPC_URL` and API keys in `~/.tidal/.env`.
-- Put operational settings in `~/.tidal/config.yaml`.
+- Run `uv run tidal init` to scaffold client files under `~/.tidal/`.
+- Run `uv run tidal-server init-config` to scaffold tracked server files under `config/`.
+- Put client secrets in `~/.tidal/.env`.
+- Put server secrets in `config/.env` for local repo use, or point `TIDAL_ENV_FILE` at a path outside Git.
+- Put authoritative server runtime and kick policy in `config/server.yaml`.
 - If you want the UI locally, run `cd ui && npm install && npm run dev`.
 
 ### CLI client

@@ -397,7 +397,7 @@ def send_live_deployment(
 
 def main() -> None:
     args = parse_args()
-    settings = load_settings(args.config)
+    settings = load_settings(args.config, mode="server")
     w3 = build_sync_web3(settings)
     chain_id = int(w3.eth.chain_id)
 

@@ -88,10 +88,6 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         limited_candidates=[],
     )
     monkeypatch.setattr("tidal.api.services.action_prepare.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr(
-        "tidal.api.services.action_prepare.load_kick_config",
-        lambda path: SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
-    )
     monkeypatch.setattr("tidal.api.services.action_prepare.sort_candidates", lambda candidates: candidates)
 
     class _FakeBatchKickFn:
@@ -130,7 +126,7 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         settings=SimpleNamespace(
             txn_usd_threshold=100.0,
             txn_max_data_age_seconds=600,
-            resolved_kick_path="unused",
+            kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
             txn_max_gas_limit=500000,
             auction_kicker_address="0x5555555555555555555555555555555555555555",
             chain_id=1,

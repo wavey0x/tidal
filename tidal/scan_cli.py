@@ -51,7 +51,7 @@ def scan_run(config: ConfigOption = None, json_output: JsonOption = False) -> No
     """Run a single scan cycle."""
 
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     try:
         result = _run_scan_once(ctx=cli_ctx)
     except ConfigurationError as exc:
@@ -74,7 +74,7 @@ def scan_daemon(
     """Run the scanner continuously."""
 
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     try:
         _require_scan_runtime(cli_ctx)
     except ConfigurationError as exc:

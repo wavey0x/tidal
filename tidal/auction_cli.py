@@ -311,7 +311,7 @@ def deploy(
     configure_logging(output_mode=OutputMode.TEXT)
     if bypass_confirmation and not broadcast:
         raise typer.BadParameter("--bypass-confirmation requires --broadcast", param_hint="--bypass-confirmation")
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     try:
         w3 = cli_ctx.sync_web3()
     except ConfigurationError as exc:
@@ -467,7 +467,7 @@ def enable_tokens(
     configure_logging(output_mode=OutputMode.TEXT)
     if bypass_confirmation and not broadcast:
         raise typer.BadParameter("--bypass-confirmation requires --broadcast", param_hint="--bypass-confirmation")
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="AUCTION")
     normalized_extra_tokens = _normalize_address_list(extra_token, param_hint="--extra-token")
     normalized_sender = normalize_cli_address(sender, param_hint="--sender")
@@ -656,7 +656,7 @@ def settle(
     configure_logging(output_mode=OutputMode.TEXT)
     if bypass_confirmation and not broadcast:
         raise typer.BadParameter("--bypass-confirmation requires --broadcast", param_hint="--bypass-confirmation")
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="AUCTION")
     normalized_token_address = normalize_cli_address(token_address, param_hint="--token")
     normalized_sender = normalize_cli_address(sender, param_hint="--sender")

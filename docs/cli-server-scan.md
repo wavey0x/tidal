@@ -12,27 +12,27 @@
 Run one scan immediately:
 
 ```bash
-tidal-server scan run
+tidal-server scan run --config config/server.yaml
 ```
 
 Run the scanner continuously:
 
 ```bash
-tidal-server scan daemon --interval-seconds 300
+tidal-server scan daemon --config config/server.yaml --interval-seconds 300
 ```
 
 Emit machine-readable output:
 
 ```bash
-tidal-server scan run --json
+tidal-server scan run --config config/server.yaml --json
 ```
 
 ## Required Inputs
 
 At minimum, scanner execution needs:
 
-- `RPC_URL` in `~/.tidal/.env`
-- monitored strategy factories and fee burners in `~/.tidal/config.yaml`
+- `RPC_URL` in `config/.env` or `TIDAL_ENV_FILE`
+- monitored fee burners in `config/server.yaml`
 
 The scanner populates the shared SQLite cache that powers:
 

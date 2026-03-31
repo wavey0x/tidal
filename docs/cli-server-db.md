@@ -9,7 +9,7 @@
 ## Common Invocation
 
 ```bash
-tidal-server db migrate
+tidal-server db migrate --config config/server.yaml
 ```
 
 ## When To Run It
@@ -24,4 +24,4 @@ Run migrations:
 
 - `migrate` is safe to run repeatedly.
 - It does not require `RPC_URL`.
-- It operates on the database path resolved from `~/.tidal/config.yaml` and any `TIDAL_*` path overrides.
+- It operates on the database path resolved from `config/server.yaml` and any `TIDAL_*` path overrides.

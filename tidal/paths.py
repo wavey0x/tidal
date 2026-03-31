@@ -7,8 +7,9 @@ from pathlib import Path
 
 _APP_HOME_DIRNAME = ".tidal"
 _CONFIG_FILENAME = "config.yaml"
+_SERVER_CONFIG_DIRNAME = "config"
+_SERVER_CONFIG_FILENAME = "server.yaml"
 _ENV_FILENAME = ".env"
-_KICK_FILENAME = "kick.yaml"
 _STATE_DIRNAME = "state"
 _OPERATOR_STATE_DIRNAME = "operator"
 _RUN_DIRNAME = "run"
@@ -37,8 +38,19 @@ def default_env_path() -> Path:
     return tidal_home() / _ENV_FILENAME
 
 
-def default_kick_path() -> Path:
-    return tidal_home() / _KICK_FILENAME
+def find_project_root(start: str | Path | None = None) -> Path | None:
+    current = resolve_path(start or Path.cwd())
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return None
+
+
+def default_server_config_path(start: str | Path | None = None) -> Path | None:
+    project_root = find_project_root(start)
+    if project_root is None:
+        return None
+    return project_root / _SERVER_CONFIG_DIRNAME / _SERVER_CONFIG_FILENAME
 
 
 def default_state_dir() -> Path:

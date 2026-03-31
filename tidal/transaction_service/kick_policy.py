@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -133,7 +134,7 @@ def _load_raw_kick_config(kick_path: Path) -> dict[str, object]:
     return raw
 
 
-def _build_pricing_policy(raw: dict[str, object]) -> PricingPolicy:
+def _build_pricing_policy(raw: Mapping[str, object]) -> PricingPolicy:
     default_profile_name = str(raw.get("default_profile") or "").strip()
     if not default_profile_name:
         raise ValueError("kick config must define default_profile")
@@ -210,7 +211,7 @@ def _build_pricing_policy(raw: dict[str, object]) -> PricingPolicy:
     )
 
 
-def _build_token_sizing_policy(raw: dict[str, object]) -> TokenSizingPolicy:
+def _build_token_sizing_policy(raw: Mapping[str, object]) -> TokenSizingPolicy:
     raw_limits = raw.get("usd_kick_limit") or {}
     if not isinstance(raw_limits, dict):
         raise ValueError("usd_kick_limit must be a mapping")
@@ -226,7 +227,7 @@ def _build_token_sizing_policy(raw: dict[str, object]) -> TokenSizingPolicy:
     return TokenSizingPolicy(token_overrides=token_overrides)
 
 
-def _build_ignore_policy(raw: dict[str, object]) -> IgnorePolicy:
+def _build_ignore_policy(raw: Mapping[str, object]) -> IgnorePolicy:
     raw_ignore = raw.get("ignore") or []
     if not isinstance(raw_ignore, list):
         raise ValueError("ignore must be a list")
@@ -273,7 +274,7 @@ def _build_ignore_policy(raw: dict[str, object]) -> IgnorePolicy:
     )
 
 
-def _build_cooldown_policy(raw: dict[str, object]) -> CooldownPolicy:
+def _build_cooldown_policy(raw: Mapping[str, object]) -> CooldownPolicy:
     default_minutes = _coerce_non_negative_int(raw.get("cooldown_minutes", 60), field_name="cooldown_minutes")
 
     raw_cooldown = raw.get("cooldown") or []
@@ -304,14 +305,18 @@ def _build_cooldown_policy(raw: dict[str, object]) -> CooldownPolicy:
     )
 
 
+def build_kick_config(raw: Mapping[str, object] | None = None) -> KickConfig:
+    resolved_raw = raw or {}
+    return KickConfig(
+        pricing_policy=_build_pricing_policy(resolved_raw),
+        token_sizing_policy=_build_token_sizing_policy(resolved_raw),
+        ignore_policy=_build_ignore_policy(resolved_raw),
+        cooldown_policy=_build_cooldown_policy(resolved_raw),
+    )
+
+
 def load_kick_config(kick_path: Path | None = None) -> KickConfig:
     if kick_path is None:
         raise ValueError("kick_path is required")
     resolved_path = Path(kick_path).expanduser().resolve()
-    raw = _load_raw_kick_config(resolved_path)
-    return KickConfig(
-        pricing_policy=_build_pricing_policy(raw),
-        token_sizing_policy=_build_token_sizing_policy(raw),
-        ignore_policy=_build_ignore_policy(raw),
-        cooldown_policy=_build_cooldown_policy(raw),
-    )
+    return build_kick_config(_load_raw_kick_config(resolved_path))

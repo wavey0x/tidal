@@ -31,13 +31,13 @@ Client-side config values that are often useful in `~/.tidal/config.yaml`:
 - `prepared_action_max_age_seconds`
 - shared RPC timeout settings if you also do local preview/broadcast work
 
-For API-backed `tidal` workflows, prepared kick behavior comes from the server's `kick.yaml`, not the workstation's.
+For API-backed `tidal` workflows, prepared kick behavior comes from the server's tracked `config/server.yaml`, not the workstation.
 
 That means:
 
-- editing local `~/.tidal/kick.yaml` does not change the profile, ignore rules, or cooldown shown by a hosted or remote API
-- edit `kick.yaml` on the server host if you want kick prepare behavior to change
-- local `kick.yaml` only matters when this machine is also running the server-side execution path
+- editing local `~/.tidal/config.yaml` does not change the server-side `kick:` policy
+- edit `config/server.yaml` on the server checkout if you want shared prepare behavior to change
+- the authoritative pricing, ignore, and cooldown rules live under `kick:` in that file
 
 ## Wallet Flags
 
@@ -123,7 +123,7 @@ The CLI will:
 5. broadcast locally
 6. report broadcast and receipt data back to the API
 
-Because preparation happens through the API, the confirmation panel reflects server-side `kick.yaml` config.
+Because preparation happens through the API, the confirmation panel reflects server-side `config/server.yaml` policy.
 The client also enforces a local age limit for prepared transactions. If you wait longer than `prepared_action_max_age_seconds` before sending, that prepared transaction is skipped and you need to re-run.
 
 Useful flags:

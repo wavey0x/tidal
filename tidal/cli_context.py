@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import typer
 
@@ -52,12 +52,13 @@ class ExecutionContext:
 @dataclass(slots=True)
 class CLIContext:
     config_path: Path | None = None
+    mode: Literal["client", "server"] = "client"
     api_base_url: str | None = None
     api_key: str | None = None
     settings: Settings = field(init=False)
 
     def __post_init__(self) -> None:
-        self.settings = load_settings(self.config_path)
+        self.settings = load_settings(self.config_path, mode=self.mode)
         if self.api_base_url is None:
             self.api_base_url = self.settings.tidal_api_base_url
         if self.api_key is None:

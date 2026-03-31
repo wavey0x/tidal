@@ -30,7 +30,7 @@ def auth_create(
     config: ConfigOption = None,
 ) -> None:
     """Create a new API key for an operator."""
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     with cli_ctx.session() as session:
         existing = session.execute(
             select(models.api_keys.c.label).where(models.api_keys.c.label == label)
@@ -60,7 +60,7 @@ def auth_list(
     config: ConfigOption = None,
 ) -> None:
     """List all API keys."""
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     with cli_ctx.session() as session:
         rows = session.execute(
             select(
@@ -88,7 +88,7 @@ def auth_revoke(
     config: ConfigOption = None,
 ) -> None:
     """Revoke an API key by label."""
-    cli_ctx = CLIContext(config)
+    cli_ctx = CLIContext(config, mode="server")
     with cli_ctx.session() as session:
         row = session.execute(
             select(models.api_keys.c.label, models.api_keys.c.revoked_at).where(

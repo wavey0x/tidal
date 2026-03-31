@@ -1,129 +1,124 @@
 # Configuration
 
+## Role Split
+
+Tidal now has two config homes:
+
+- client config in `~/.tidal/`
+- server config in tracked repo files under `config/`
+
+That split is intentional:
+
+- `tidal` is a workstation CLI
+- `tidal-server` is the shared execution runtime
+
 ## Precedence
 
-Tidal loads settings in this order:
+Client commands load:
 
 ```text
 environment variables > ~/.tidal/config.yaml > Python defaults
 ```
 
-Secrets belong in `~/.tidal/.env`. Operational knobs belong in `~/.tidal/config.yaml`.
+Server commands load:
+
+```text
+environment variables > config/server.yaml > Python defaults
+```
+
+An explicit `--config` or `TIDAL_CONFIG` override wins in either case.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `~/.tidal/config.yaml` | Runtime settings for scanner, API, multicall, pricing, and transaction behavior |
-| `~/.tidal/.env` | Secrets such as `RPC_URL`, API keys, and keystore secrets |
-| `~/.tidal/kick.yaml` | Kick pricing, token caps, ignore rules, and cooldown policy for the runtime executing prepare logic |
+| `~/.tidal/config.yaml` | Client-only workstation config for `tidal` |
+| `~/.tidal/.env` | Client secrets such as `TIDAL_API_KEY`, `RPC_URL`, and keystore secrets |
+| `config/server.yaml` | Tracked server runtime config and kick policy for `tidal-server` |
+| `config/.env.example` | Documented server secret names |
+| `config/.env` or `TIDAL_ENV_FILE` | Actual server secrets outside normal Git workflow |
 
-## Role Model
+## Client Config
 
-Tidal uses one runtime config format, but not every key matters to every user:
+Run `tidal init` to scaffold the client files under `~/.tidal/`.
 
-- `CLI client`: runs `tidal`, calls the API, and may sign/broadcast locally.
-- `Server operator`: runs `tidal-server`, owns scans, SQLite, API serving, and reconciliation.
-
-The generated scaffold in `~/.tidal/config.yaml` is ordered for the common CLI-client case:
-
-- `CLI client defaults`
-- `Shared execution defaults`
-- `Shared runtime`
-- `Server operator only`
-
-## `~/.tidal/.env`
-
-Common environment variables:
-
-- CLI client:
-  `TIDAL_API_KEY`, `TXN_KEYSTORE_PATH`, `TXN_KEYSTORE_PASSPHRASE`
-- Server operator:
-  `RPC_URL`, `TOKEN_PRICE_AGG_KEY`
-- Either role when useful:
-  `TIDAL_API_BASE_URL`, `TIDAL_API_HOST`, `TIDAL_API_PORT`
-
-Less common but supported:
-
-- `DB_PATH`
-- `CHAIN_ID`
-- any setting declared in `tidal/config.py`
-
-## `~/.tidal/config.yaml`
-
-Run `tidal init` to scaffold the default files under `~/.tidal/`. The generated `config.yaml` is the best starting point.
-
-### CLI client defaults
-
-These are at the top of the scaffold because the CLI client is the common case:
+The client scaffold is intentionally narrow. It is for:
 
 - `tidal_api_base_url`
 - `tidal_api_request_timeout_seconds`
-
-### Shared execution defaults
-
-These affect local execution and server-side transaction logic:
-
-- `auction_kicker_address`
-- `txn_usd_threshold`
-- `txn_max_base_fee_gwei`
-- `txn_max_priority_fee_gwei`
-- `txn_max_gas_limit`
-- `txn_start_price_buffer_bps`
-- `txn_min_price_buffer_bps`
-- `txn_quote_spot_warning_threshold_pct`
-- `txn_max_data_age_seconds`
 - `prepared_action_max_age_seconds`
-- `txn_require_curve_quote`
-- `max_batch_kick_size`
-- `batch_kick_delay_seconds`
+- local broadcast and fee-preview settings such as:
+  `chain_id`, `auction_kicker_address`, `txn_*`, `rpc_timeout_seconds`, `rpc_retry_attempts`
 
-`prepared_action_max_age_seconds` is a CLI-side safety guard for API-backed broadcast flows. If the operator waits too long between prepare and send, the client skips that prepared transaction and tells the user to re-run so quotes are refreshed.
+`prepared_action_max_age_seconds` is a CLI-side safety guard. If you wait too long between prepare and send, the client skips that prepared transaction and tells you to re-run.
 
-### Shared runtime
+Normal API-backed workstation use does not need a local kick-policy file anymore.
 
-Used by both roles, or by any command that needs local RPC access:
+## Server Config
 
-- `db_path`
-- `chain_id`
-- `rpc_timeout_seconds`
-- `rpc_retry_attempts`
+Run `tidal-server init-config` to scaffold the tracked server files under `config/`.
 
-### Server operator only
+`config/server.yaml` is the authoritative runtime document for:
 
-These drive scanning, cached state, discovery, and API serving:
+- API bind settings
+- scanner settings
+- multicall and pricing refresh settings
+- monitored fee burners
+- server-side transaction execution defaults
+- kick pricing, ignore rules, and cooldown policy
 
-- `scan_interval_seconds`
-- `scan_concurrency`
-- `scan_auto_settle_enabled`
-- `monitored_fee_burners`
-- `multicall_enabled`
-- `multicall_address`
-- `multicall_discovery_batch_calls`
-- `multicall_rewards_batch_calls`
-- `multicall_rewards_index_max`
-- `multicall_balance_batch_calls`
-- `multicall_overflow_queue_max`
-- `multicall_auction_batch_calls`
-- `auction_factory_address`
-- `price_refresh_enabled`
-- `token_price_agg_base_url`
-- `price_timeout_seconds`
-- `price_retry_attempts`
-- `price_concurrency`
-- `price_delay_seconds`
-- `auctionscan_base_url`
-- `auctionscan_api_base_url`
-- `auctionscan_recheck_seconds`
-- `tidal_api_host`
-- `tidal_api_port`
-- `tidal_api_receipt_reconcile_interval_seconds`
-- `tidal_api_receipt_reconcile_threshold_seconds`
-- `tidal_api_cors_allowed_origins`
+Use `config/.env` for local repo development, or point `TIDAL_ENV_FILE` to a path outside the repo for production.
+
+For mutable state, prefer `TIDAL_HOME=/var/lib/tidal` or another non-repo path.
+
+## `kick:` Section
+
+Server-side kick policy now lives inside `config/server.yaml` under `kick:`.
+
+Example shape:
+
+```yaml
+kick:
+  default_profile: volatile
+
+  profiles:
+    volatile:
+      start_price_buffer_bps: 1000
+      min_price_buffer_bps: 500
+      step_decay_rate_bps: 25
+
+    stable:
+      start_price_buffer_bps: 100
+      min_price_buffer_bps: 50
+      step_decay_rate_bps: 2
+
+  profile_overrides:
+    - auction: "0xAuction"
+      token: "0xSellToken"
+      profile: stable
+
+  usd_kick_limit:
+    "0xToken": 10000
+
+  ignore:
+    - source: "0xSource"
+    - auction: "0xAuction"
+    - auction: "0xAuction"
+      token: "0xSellToken"
+
+  cooldown_minutes: 60
+
+  cooldown:
+    - auction: "0xAuction"
+      token: "0xSellToken"
+      minutes: 180
+```
+
+`cooldown` applies to the `(auction, token)` pair, not the whole auction or source.
 
 ## `monitored_fee_burners`
 
-`config.yaml` stores fee burners as a list:
+Server config stores fee burners as:
 
 ```yaml
 monitored_fee_burners:
@@ -132,94 +127,11 @@ monitored_fee_burners:
     label: "Human name"
 ```
 
-These entries are used by the scanner to:
+These entries drive:
 
-- load fee-burner balances
-- resolve source names
-- map fee burners to auctions using `(receiver, want)`
-
-## `~/.tidal/kick.yaml`
-
-This file controls four things:
-
-1. auction pricing profiles
-2. token-specific USD sizing caps
-3. manual ignore rules
-4. cooldown policy
-
-Runtime boundary:
-
-- for API-backed `tidal` commands, the server's `kick.yaml` is authoritative
-- a workstation's local `~/.tidal/kick.yaml` does not affect kick prepare results returned by a remote API
-- local `kick.yaml` matters when this machine is running `tidal-server` or other local transaction-service execution
-
-### Pricing profiles
-
-```yaml
-default_profile: volatile
-
-profiles:
-  volatile:
-    start_price_buffer_bps: 1000
-    min_price_buffer_bps: 500
-    step_decay_rate_bps: 50
-
-  stable:
-    start_price_buffer_bps: 100
-    min_price_buffer_bps: 50
-    step_decay_rate_bps: 2
-```
-
-### Profile overrides
-
-```yaml
-profile_overrides:
-  - auction: "0xAuction"
-    token: "0xSellToken"
-    profile: stable
-```
-
-Anything not listed falls back to `default_profile`.
-
-### USD kick caps
-
-Limit how much USD value of a specific sell token is used in one kick:
-
-```yaml
-usd_kick_limit:
-  "0xToken": 10000
-```
-
-This cap is applied after the live source balance is read and before the live quote is requested.
-
-### Ignore rules
-
-Use `ignore` to skip specific sources, auctions, or auction/token combinations:
-
-```yaml
-ignore:
-  - source: "0xSource"
-  - auction: "0xAuction"
-  - auction: "0xAuction"
-    token: "0xSellToken"
-```
-
-Ignored candidates are removed before same-auction ranking.
-
-### Cooldown policy
-
-Use `cooldown_minutes` for the global default, and `cooldown` for per-auction/token overrides:
-
-```yaml
-cooldown_minutes: 60
-
-cooldown:
-  - auction: "0xAuction"
-    token: "0xSellToken"
-    minutes: 180
-```
-
-Cooldown applies to the `(auction, token)` pair, not to the whole auction or whole source.
+- fee-burner balance scanning
+- source naming
+- fee-burner-to-auction mapping through `(receiver, want)`
 
 ## Important Defaults
 
@@ -233,13 +145,13 @@ Current defaults from `tidal/config.py` include:
 - `txn_max_priority_fee_gwei = 2`
 - `txn_quote_spot_warning_threshold_pct = 2`
 - `prepared_action_max_age_seconds = 300`
-- `cooldown_minutes = 60` in `kick.yaml`
+- `cooldown_minutes = 60` in `config/server.yaml`
 - `tidal_api_request_timeout_seconds = 30`
 
 ## Rule Of Thumb
 
-- run `tidal init`
-- put secrets in `~/.tidal/.env`
-- put operational settings in `~/.tidal/config.yaml`
-- if you use hosted or remote API-backed `tidal`, treat server-side `kick.yaml` as the source of truth
-- edit local `~/.tidal/kick.yaml` only when this machine owns the execution runtime
+- run `tidal init` on workstations
+- run `tidal-server init-config` in the repo checkout
+- keep client secrets in `~/.tidal/.env`
+- keep server secrets out of Git
+- treat `config/server.yaml` as the source of truth for shared runtime behavior

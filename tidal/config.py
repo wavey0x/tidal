@@ -2,26 +2,28 @@
 
 Precedence (highest wins): env vars > YAML config > Python defaults.
 
-Secrets live in an explicitly resolved ``.env`` file, while operational
-settings live in an explicitly resolved ``config.yaml``.
+Client commands load ``~/.tidal/config.yaml`` by default.
+Server commands load ``config/server.yaml`` by default.
+Secrets live in an explicitly resolved ``.env`` file.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import dotenv_values
 from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from tidal.paths import default_config_path, default_env_path, default_kick_path, resolve_path, tidal_home
+from tidal.paths import default_config_path, default_env_path, default_server_config_path, resolve_path, tidal_home
+from tidal.transaction_service.kick_policy import KickConfig, build_kick_config
 
 
 class MonitoredFeeBurner(BaseModel):
-    """Static fee burner registration from config.yaml."""
+    """Static fee burner registration from server config."""
 
     address: str
     want_address: str
@@ -43,7 +45,7 @@ class Settings(BaseSettings):
     _resolved_home_path: Path = PrivateAttr(default_factory=tidal_home)
     _resolved_config_path: Path = PrivateAttr(default_factory=default_config_path)
     _resolved_env_path: Path = PrivateAttr(default_factory=default_env_path)
-    _resolved_kick_path: Path = PrivateAttr(default_factory=default_kick_path)
+    _kick_config: KickConfig | None = PrivateAttr(default=None)
 
     rpc_url: str | None = Field(default=None, alias="RPC_URL")
     db_path: Path | None = Field(default=None, alias="DB_PATH")
@@ -179,10 +181,6 @@ class Settings(BaseSettings):
         return self._resolved_env_path
 
     @property
-    def resolved_kick_path(self) -> Path:
-        return self._resolved_kick_path
-
-    @property
     def resolved_db_path(self) -> Path:
         if self.db_path is None:
             return (self.resolved_home_path / "state" / "tidal.db").resolve()
@@ -198,18 +196,25 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         return f"sqlite:///{self.resolved_db_path}"
 
+    @property
+    def kick_config(self) -> KickConfig:
+        if self._kick_config is None:
+            raise RuntimeError("server kick policy is not loaded for these settings")
+        return self._kick_config
+
     def bind_runtime_paths(
         self,
         *,
         home_path: Path,
         config_path: Path,
         env_path: Path,
-        kick_path: Path,
     ) -> None:
         self._resolved_home_path = home_path
         self._resolved_config_path = config_path
         self._resolved_env_path = env_path
-        self._resolved_kick_path = kick_path
+
+    def bind_kick_config(self, kick_config: KickConfig | None) -> None:
+        self._kick_config = kick_config
 
     def _resolve_config_relative_path(self, value: str | Path) -> Path:
         path = Path(value).expanduser()
@@ -233,7 +238,7 @@ def _resolve_explicit_file_path(path: str | Path, *, label: str) -> Path:
     return resolved
 
 
-def _resolve_config_path(config_path: Path | None = None) -> Path:
+def _resolve_explicit_or_env_config_path(config_path: Path | None = None) -> Path | None:
     if config_path is not None:
         return _resolve_explicit_file_path(config_path, label="Config file")
 
@@ -241,10 +246,28 @@ def _resolve_config_path(config_path: Path | None = None) -> Path:
     if env_override:
         return _resolve_explicit_file_path(env_override, label="Config file")
 
-    return default_config_path()
+    return None
 
 
-def _resolve_env_path(config_path: Path) -> Path:
+def _resolve_server_config_path(config_path: Path | None = None) -> Path:
+    explicit = _resolve_explicit_or_env_config_path(config_path)
+    if explicit is not None:
+        return explicit
+
+    default_path = default_server_config_path()
+    if default_path is not None and default_path.is_file():
+        return default_path
+
+    hint = default_path if default_path is not None else Path("config/server.yaml")
+    raise FileNotFoundError(f"Server config file not found. Pass --config or create {hint}.")
+
+
+def _resolve_env_path(
+    config_path: Path,
+    *,
+    mode: Literal["client", "server"],
+    use_home_fallback: bool,
+) -> Path:
     env_override = os.getenv("TIDAL_ENV_FILE")
     if env_override:
         return _resolve_explicit_file_path(env_override, label="Environment file")
@@ -252,31 +275,41 @@ def _resolve_env_path(config_path: Path) -> Path:
     config_dir_env_path = (config_path.parent / ".env").resolve()
     if config_dir_env_path.is_file():
         return config_dir_env_path
+    if mode == "server" or not use_home_fallback:
+        return config_dir_env_path
 
     return default_env_path()
 
 
-def _resolve_kick_path(config_path: Path) -> Path:
-    env_override = os.getenv("TIDAL_KICK_PATH")
-    if env_override:
-        return resolve_path(env_override)
-
-    config_dir_kick_path = (config_path.parent / "kick.yaml").resolve()
-    if config_dir_kick_path.is_file():
-        return config_dir_kick_path
-
-    return default_kick_path()
-
-
-def load_settings(config_path: Path | None = None) -> Settings:
-    """Load settings from resolved config and env paths."""
-    resolved_config_path = _resolve_config_path(config_path)
-    resolved_env_path = _resolve_env_path(resolved_config_path)
-    resolved_kick_path = _resolve_kick_path(resolved_config_path)
+def load_settings(
+    config_path: Path | None = None,
+    *,
+    mode: Literal["client", "server"] = "client",
+) -> Settings:
+    """Load client or server settings from resolved config and env paths."""
+    if mode == "server":
+        resolved_config_path = _resolve_server_config_path(config_path)
+        use_home_env_fallback = False
+    else:
+        explicit = _resolve_explicit_or_env_config_path(config_path)
+        if explicit is not None:
+            resolved_config_path = explicit
+            use_home_env_fallback = False
+        else:
+            resolved_config_path = default_config_path()
+            use_home_env_fallback = True
+    resolved_env_path = _resolve_env_path(
+        resolved_config_path,
+        mode=mode,
+        use_home_fallback=use_home_env_fallback,
+    )
 
     config_data: dict[str, Any] = {}
     if resolved_config_path.is_file():
         config_data = _load_yaml_config(resolved_config_path)
+    kick_raw = config_data.pop("kick", None)
+    if mode == "server" and not isinstance(kick_raw, dict):
+        raise ValueError(f"Server config must define a 'kick' mapping: {resolved_config_path}")
 
     env_data: dict[str, Any] = {}
     if resolved_env_path.is_file():
@@ -291,6 +324,14 @@ def load_settings(config_path: Path | None = None) -> Settings:
         home_path=tidal_home(),
         config_path=resolved_config_path,
         env_path=resolved_env_path,
-        kick_path=resolved_kick_path,
     )
+    settings.bind_kick_config(build_kick_config(kick_raw) if mode == "server" else None)
     return settings
+
+
+def load_client_settings(config_path: Path | None = None) -> Settings:
+    return load_settings(config_path, mode="client")
+
+
+def load_server_settings(config_path: Path | None = None) -> Settings:
+    return load_settings(config_path, mode="server")

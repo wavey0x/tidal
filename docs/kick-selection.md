@@ -10,7 +10,7 @@ The kick engine should answer:
 
 The system deliberately separates cached ranking from live transaction pricing.
 
-Manual ignore rules and cooldown rules both live in `~/.tidal/kick.yaml`.
+Manual ignore rules and cooldown rules live under `kick:` in `config/server.yaml`.
 
 ## Shortlist Inputs
 
@@ -92,7 +92,7 @@ This is why `kick inspect --show-all` may show more interesting tokens than `kic
 
 ## Ignore Rules
 
-Before same-auction ranking, Tidal applies any manual `ignore` rules from `kick.yaml`.
+Before same-auction ranking, Tidal applies any manual `ignore` rules from the server `kick:` policy.
 
 An ignore rule can target:
 

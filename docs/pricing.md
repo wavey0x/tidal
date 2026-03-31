@@ -76,9 +76,9 @@ curve quote unavailable (status: ...)
 
 ## Auction Pricing Profiles
 
-Pricing profiles come from `~/.tidal/kick.yaml` by default.
+Pricing profiles come from the server's `kick:` section in `config/server.yaml`.
 
-For API-backed `tidal` workflows, that means the `kick.yaml` on the server running action preparation, not the local workstation copy.
+For API-backed `tidal` workflows, that means the tracked server config on the runtime preparing the action, not the local workstation copy.
 
 If a confirmation panel shows an unexpected decay or profile, check the server runtime first.
 
@@ -163,4 +163,4 @@ This is a diagnostic warning, not an automatic rejection.
 - Do not use live quote data to rank the shortlist.
 - Do not assume the warning means the on-chain transaction is wrong.
 - Treat large warning deviations as a signal to inspect the want-token USD mark or quote path.
-- Stable-looking pairs should usually be mapped to the `stable` pricing profile in the authoritative runtime `kick.yaml`.
+- Stable-looking pairs should usually be mapped to the `stable` pricing profile in the authoritative server config.

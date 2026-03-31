@@ -1,9 +1,10 @@
 from decimal import Decimal
 
 import pytest
+import yaml
 
 from tidal.resources import read_template_text
-from tidal.transaction_service.kick_policy import load_kick_config
+from tidal.transaction_service.kick_policy import build_kick_config, load_kick_config
 
 
 def test_load_kick_config_reads_token_overrides(tmp_path):
@@ -203,10 +204,8 @@ profile_overrides:
 
 
 def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
-    kick_path = tmp_path / "kick.yaml"
-    kick_path.write_text(read_template_text("kick.yaml"), encoding="utf-8")
-
-    config = load_kick_config(kick_path)
+    server_raw = yaml.safe_load(read_template_text("server.yaml"))
+    config = build_kick_config(server_raw["kick"])
 
     stable_profile = config.pricing_policy.resolve(
         "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693",

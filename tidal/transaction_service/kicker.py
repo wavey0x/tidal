@@ -19,6 +19,7 @@ from tidal.auction_price_units import (
     compute_minimum_price_scaled_1e18,
     compute_minimum_quote_unscaled,
     compute_starting_price_unscaled,
+    format_buffer_pct,
     scaled_price_to_public_raw,
 )
 from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
@@ -1089,8 +1090,6 @@ class AuctionKicker:
             kick_summaries = []
             for pk in prepared_kicks:
                 want_sym = pk.candidate.want_symbol or "want-token"
-                buffer_pct = pk.start_price_buffer_bps / 100
-                min_buffer_pct = pk.min_price_buffer_bps / 100
                 kick_summaries.append(
                     {
                         "source": pk.candidate.source_address,
@@ -1105,11 +1104,17 @@ class AuctionKicker:
                         "sell_amount": pk.normalized_balance,
                         "usd_value": pk.usd_value_str,
                         "starting_price": pk.starting_price_str,
-                        "starting_price_display": f"{pk.starting_price_unscaled:,} {want_sym} (+{buffer_pct:.0f}% buffer)",
+                        "starting_price_display": (
+                            f"{pk.starting_price_unscaled:,} {want_sym} "
+                            f"(+{format_buffer_pct(pk.start_price_buffer_bps)} buffer)"
+                        ),
                         "minimum_price": pk.minimum_price_str,
                         "minimum_price_scaled_1e18": pk.minimum_price_scaled_1e18_str,
                         "minimum_quote": pk.minimum_quote_unscaled_str,
-                        "minimum_quote_display": f"{pk.minimum_quote_unscaled:,} {want_sym} (-{min_buffer_pct:.0f}% buffer)",
+                        "minimum_quote_display": (
+                            f"{pk.minimum_quote_unscaled:,} {want_sym} "
+                            f"(-{format_buffer_pct(pk.min_price_buffer_bps)} buffer)"
+                        ),
                         "minimum_price_display": f"{pk.minimum_price_scaled_1e18:,} (scaled 1e18 floor)",
                         "sell_price_usd": pk.candidate.price_usd,
                         "want_address": pk.candidate.want_address,

@@ -10,7 +10,7 @@ from typing import Any
 import typer
 from eth_utils import to_checksum_address
 
-from tidal.auction_price_units import scaled_price_to_rate
+from tidal.auction_price_units import format_buffer_pct, scaled_price_to_rate
 from tidal.cli_context import CLIContext, normalize_cli_address
 from tidal.cli_options import (
     AccountOption,
@@ -250,13 +250,13 @@ def _kick_submission_summary(
     starting_price_display = prepared.get("startingPriceDisplay")
     if starting_price_display is None and starting_price is not None:
         starting_price_display = (
-            f"{int(str(starting_price)):,} {want_symbol or '???'} (+{buffer_bps / 100:.0f}% buffer)"
+            f"{int(str(starting_price)):,} {want_symbol or '???'} (+{format_buffer_pct(buffer_bps)} buffer)"
         )
 
     minimum_quote_display = prepared.get("minimumQuoteDisplay")
     if minimum_quote_display is None and minimum_quote is not None:
         minimum_quote_display = (
-            f"{int(str(minimum_quote)):,} {want_symbol or '???'} (-{min_buffer_bps / 100:.0f}% buffer)"
+            f"{int(str(minimum_quote)):,} {want_symbol or '???'} (-{format_buffer_pct(min_buffer_bps)} buffer)"
         )
     minimum_price_display = prepared.get("minimumPriceDisplay")
     if minimum_price_display is None and minimum_price_scaled_1e18 is not None:

@@ -74,7 +74,7 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         normalized_balance="1000",
         quote_amount_str="2500",
         start_price_buffer_bps=1000,
-        min_price_buffer_bps=500,
+        min_price_buffer_bps=50,
         step_decay_rate_bps=50,
         pricing_profile_name="stable",
         settle_token=None,
@@ -151,6 +151,9 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
     assert status == "ok"
     assert warnings == []
     assert data["actionId"] == "action-1"
+    preview_item = data["preview"]["preparedOperations"][0]
+    assert preview_item["startingPriceDisplay"] == "2,750 USDC (+10.00% buffer)"
+    assert preview_item["minimumQuoteDisplay"] == "2,375 USDC (-0.50% buffer)"
 
 
 @pytest.mark.asyncio

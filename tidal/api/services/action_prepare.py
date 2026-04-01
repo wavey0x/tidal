@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
 from tidal.api.services.action_audit import create_prepared_action
+from tidal.auction_price_units import format_buffer_pct
 from tidal.auction_settlement import (
     build_auction_settlement_call,
     decide_auction_settlement,
@@ -940,7 +941,7 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
             "startingPrice": item.starting_price_unscaled_str,
             "startingPriceDisplay": (
                 f"{item.starting_price_unscaled:,} {item.candidate.want_symbol or 'want-token'} "
-                f"(+{item.start_price_buffer_bps / 100:.0f}% buffer)"
+                f"(+{format_buffer_pct(item.start_price_buffer_bps)} buffer)"
             ),
             "minimumPrice": item.minimum_price_str,
             "minimumPriceDisplay": (
@@ -949,7 +950,7 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
             "minimumQuote": item.minimum_quote_unscaled_str,
             "minimumQuoteDisplay": (
                 f"{item.minimum_quote_unscaled:,} {item.candidate.want_symbol or 'want-token'} "
-                f"(-{item.min_price_buffer_bps / 100:.0f}% buffer)"
+                f"(-{format_buffer_pct(item.min_price_buffer_bps)} buffer)"
             ),
             "minimumPriceScaled1e18": item.minimum_price_scaled_1e18_str,
             "quoteAmount": item.quote_amount_str,

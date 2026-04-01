@@ -14,6 +14,10 @@ def normalized_token_amount(raw_amount: int, decimals: int) -> Decimal:
     return Decimal(to_decimal_string(raw_amount, decimals))
 
 
+def format_buffer_pct(buffer_bps: int) -> str:
+    return f"{Decimal(buffer_bps) / Decimal(100):.2f}%"
+
+
 def compute_starting_price_unscaled(*, amount_out_raw: int, want_decimals: int, buffer_bps: int) -> int:
     quote_amount = normalized_token_amount(amount_out_raw, want_decimals)
     buffer = Decimal(1) + Decimal(buffer_bps) / Decimal(10_000)

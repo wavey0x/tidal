@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import shutil
 import sys
@@ -523,6 +524,19 @@ def _format_broadcast_value(value: Any) -> str:
     return str(value)
 
 
+def _format_broadcast_at(value: Any) -> str:
+    if value is None:
+        return "-"
+    raw = str(value)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw
+    if parsed.tzinfo is None:
+        return parsed.strftime("%b %d, %Y %H:%M:%S")
+    return parsed.strftime("%b %d, %Y %H:%M:%S %Z")
+
+
 def render_broadcast_records(records: list[BroadcastRecord]) -> None:
     if not records:
         return
@@ -544,7 +558,7 @@ def render_broadcast_records(records: list[BroadcastRecord]) -> None:
             lines.append(f"  Operation:    {record.operation}")
         lines.append(f"  Sender:       {_format_broadcast_value(record.sender)}")
         lines.append(f"  Tx hash:      {record.tx_hash}")
-        lines.append(f"  Broadcast at: {_format_broadcast_value(record.broadcast_at)}")
+        lines.append(f"  Broadcast at: {_format_broadcast_at(record.broadcast_at)}")
         if record.receipt_status is not None:
             lines.append(f"  Receipt:      {record.receipt_status}")
         else:

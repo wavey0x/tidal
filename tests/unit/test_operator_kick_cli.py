@@ -146,6 +146,8 @@ class _BroadcastClient:
                             "minimumQuote": "2375",
                             "quoteAmount": "2500",
                             "usdValue": "2500",
+                            "bufferBps": 1000,
+                            "minBufferBps": 50,
                             "pricingProfileName": "stable",
                             "stepDecayRateBps": 50,
                             "settleToken": None,
@@ -345,8 +347,8 @@ def test_operator_kick_run_broadcast_prepares_candidates_one_by_one(tmp_path, mo
     assert f"Auction:     {to_checksum_address('0x2222222222222222222222222222222222222222')}" in result.output
     assert f"From:        {to_checksum_address('0x9999999999999999999999999999999999999999')}" in result.output
     assert "Quote out:   2,500.00 USDC" in result.output
-    assert "Start quote: 2,750 USDC (+10% buffer)" in result.output
-    assert "Min quote:   2,375 USDC (-5% buffer)" in result.output
+    assert "Start quote: 2,750 USDC (+10.00% buffer)" in result.output
+    assert "Min quote:   2,375 USDC (-0.50% buffer)" in result.output
     assert "Submitting transaction..." in result.output
     assert "Confirmed" in result.output
     assert "Gas limit:   252,000" in result.output

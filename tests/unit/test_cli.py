@@ -26,11 +26,11 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
                 "sell_amount": "1000",
                 "usd_value": "2500",
                 "starting_price": "2750",
-                "starting_price_display": "2,750 USDC (+10% buffer)",
+                "starting_price_display": "2,750 USDC (+10.00% buffer)",
                 "minimum_price": "2375000000000000000",
                 "minimum_quote": "2375",
-                "minimum_quote_display": "2,375 USDC (-5% buffer)",
-                "minimum_price_display": "2,375 USDC (-5% buffer)",
+                "minimum_quote_display": "2,375 USDC (-5.00% buffer)",
+                "minimum_price_display": "2,375 USDC (-5.00% buffer)",
                 "want_symbol": "USDC",
                 "want_price_usd": "1",
                 "buffer_bps": 1000,
@@ -64,7 +64,7 @@ def test_make_confirm_fn_displays_pricing_profile(capsys):
     assert "From:        -" in output
     assert "Gas limit:   252,000" in output
     assert "Rate:        2.5000 quoted | 2.7500 start | 2.3750 floor USDC/CRV" in output
-    assert "Min quote:   2,375 USDC (-5% buffer)" in output
+    assert "Min quote:   2,375 USDC (-5.00% buffer)" in output
     assert "Profile:     stable | decay 0.01%" in output
     assert "Submitting transaction..." in output
     confirm_mock.assert_called_once_with("Send this transaction?", default=False)
@@ -82,11 +82,11 @@ def test_make_confirm_fn_warns_on_sell_vs_quote_mismatch(capsys):
                 "sell_amount": "3473.41",
                 "usd_value": "10000",
                 "starting_price": "1725",
-                "starting_price_display": "1,725 crvUSD (+10% buffer)",
+                "starting_price_display": "1,725 crvUSD (+10.00% buffer)",
                 "minimum_price": "428685355313654305",
                 "minimum_quote": "1489",
-                "minimum_quote_display": "1,489 crvUSD (-5% buffer)",
-                "minimum_price_display": "1,489 crvUSD (-5% buffer)",
+                "minimum_quote_display": "1,489 crvUSD (-5.00% buffer)",
+                "minimum_price_display": "1,489 crvUSD (-5.00% buffer)",
                 "want_symbol": "crvUSD",
                 "want_price_usd": "1",
                 "buffer_bps": 1000,
@@ -133,11 +133,11 @@ def test_make_confirm_fn_respects_quote_spot_warning_threshold(capsys):
                 "sell_amount": "1000",
                 "usd_value": "1000",
                 "starting_price": "1090",
-                "starting_price_display": "1,090 USDC (+10% buffer)",
+                "starting_price_display": "1,090 USDC (+10.00% buffer)",
                 "minimum_price": "940000000000000000",
                 "minimum_quote": "940",
-                "minimum_quote_display": "940 USDC (-5% buffer)",
-                "minimum_price_display": "940 USDC (-5% buffer)",
+                "minimum_quote_display": "940 USDC (-5.00% buffer)",
+                "minimum_price_display": "940 USDC (-5.00% buffer)",
                 "want_symbol": "USDC",
                 "want_price_usd": "1",
                 "buffer_bps": 1000,
@@ -187,6 +187,7 @@ def test_make_execution_report_fn_renders_confirmed_panel(capsys):
     output = capsys.readouterr().out
     assert "Confirmed" in output
     assert "Operation:    kick" in output
+    assert "Broadcast at: Mar 29, 2026 18:57:32 UTC" in output
     assert "Explorer:" not in output
     assert "Gas used:" not in output
     assert "Gas estimate:" not in output
@@ -311,7 +312,7 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
                 operation="settle",
                 sender="0x1111111111111111111111111111111111111111",
                 tx_hash="0xabc",
-                broadcast_at="2026-03-28T15:04:05+00:00",
+                broadcast_at="2026-03-28T15:04:05.123456+00:00",
                 chain_id=1,
                 receipt_status="CONFIRMED",
                 block_number=12345,
@@ -326,7 +327,7 @@ def test_render_broadcast_records_includes_sender_hash_and_datetime(capsys):
     assert "Operation:    settle" in output
     assert "Sender:       0x1111111111111111111111111111111111111111" in output
     assert "Tx hash:      0xabc" in output
-    assert "Broadcast at: 2026-03-28T15:04:05+00:00" in output
+    assert "Broadcast at: Mar 28, 2026 15:04:05 UTC" in output
     assert "Receipt:      CONFIRMED" in output
     assert "Explorer:" not in output
     assert "Block:" not in output
@@ -480,7 +481,7 @@ def test_render_kick_run_summary_shows_transaction_block(capsys):
     assert "Operation:    kick" in output
     assert "Sender:       0x1111111111111111111111111111111111111111" in output
     assert "Tx hash:      0xabc" in output
-    assert "Broadcast at: 2026-03-28T15:04:05+00:00" in output
+    assert "Broadcast at: Mar 28, 2026 15:04:05 UTC" in output
     assert "Receipt:      CONFIRMED" in output
 
 

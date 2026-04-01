@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,7 @@ from tidal.transaction_service.kick_policy import PricingPolicy, PricingProfile,
 from tidal.transaction_service.kicker import AuctionKicker, _DEFAULT_PRIORITY_FEE_GWEI
 from tidal.transaction_service.types import (
     KickCandidate,
+    KickRecoveryPlan,
     KickResult,
     PreparedKick,
     PreparedSweepAndSettle,
@@ -263,10 +265,62 @@ async def test_kick_estimate_failed_decodes_execution_failed(session):
 
         kicker = _make_kicker(session, web3_client=web3_client)
         candidate = _make_candidate()
-        result = await kicker.kick(candidate, "run-1")
+        with patch.object(kicker, "_plan_recovery", AsyncMock(return_value=None)):
+            result = await kicker.kick(candidate, "run-1")
 
     assert result.status == "ESTIMATE_FAILED"
     assert result.error_message == "call to 0xA00E…6693 failed: active auction"
+
+
+@pytest.mark.asyncio
+async def test_execute_single_falls_back_to_extended_kick_for_active_auction(session):
+    web3_client = MagicMock()
+    web3_client.get_base_fee = AsyncMock(return_value=int(0.1 * 1e9))
+    web3_client.get_max_priority_fee = AsyncMock(return_value=int(0.05 * 1e9))
+    web3_client.get_transaction_count = AsyncMock(return_value=5)
+    web3_client.send_raw_transaction = AsyncMock(return_value="0xtxhash123")
+    web3_client.get_transaction_receipt = AsyncMock(
+        return_value={
+            "status": 1,
+            "gasUsed": 200000,
+            "effectiveGasPrice": int(0.15 * 1e9),
+            "blockNumber": 12345678,
+        }
+    )
+
+    mock_contract = MagicMock()
+    standard_fn = MagicMock()
+    standard_fn._encode_transaction_data = MagicMock(return_value="0xdeadbeef")
+    extended_fn = MagicMock()
+    extended_fn._encode_transaction_data = MagicMock(return_value="0xfeedface")
+    mock_contract.functions.kick = MagicMock(return_value=standard_fn)
+    mock_contract.functions.kickExtended = MagicMock(return_value=extended_fn)
+    web3_client.contract = MagicMock(return_value=mock_contract)
+
+    selector = keccak(text="ExecutionFailed(uint256,address,string)")[:4]
+    payload = "0x" + (
+        selector
+        + encode(
+            ["uint256", "address", "string"],
+            [3, "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693", "active auction"],
+        )
+    ).hex()
+    web3_client.estimate_gas = AsyncMock(side_effect=[RuntimeError(payload, payload), 200000])
+
+    kicker = _make_kicker(session, web3_client=web3_client)
+    prepared = _make_prepared_kick()
+    recovered = replace(
+        prepared,
+        recovery_plan=KickRecoveryPlan(
+            settle_after_start=("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",),
+        ),
+    )
+
+    with patch.object(kicker, "_plan_recovery", AsyncMock(return_value=recovered)):
+        result = await kicker.execute_single(prepared, "run-1")
+
+    assert result.status == "CONFIRMED"
+    mock_contract.functions.kickExtended.assert_called_once()
 
 
 @pytest.mark.asyncio

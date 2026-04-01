@@ -301,6 +301,7 @@ def _kick_submission_summary(
                 "start_rate": prepared.get("startRate"),
                 "floor_rate": floor_rate,
                 "settle_token": prepared.get("settleToken"),
+                "recovery_plan": prepared.get("recoveryPlan"),
             }
         ],
         "batch_size": 1,

@@ -12,7 +12,7 @@ tidal_api_cors_allowed_origins: []
 scan_interval_seconds: 300
 scan_concurrency: 20
 scan_auto_settle_enabled: true
-auction_kicker_address: "0x846475a1B97AC57861813206749c1b0f592383eF"
+auction_kicker_address: "0x17D6e65317d42Ce40F06538B68e824669E1F679e"
 txn_usd_threshold: 100
 txn_max_base_fee_gwei: 0.5
 txn_max_priority_fee_gwei: 2

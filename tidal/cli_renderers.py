@@ -427,6 +427,23 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
         precision_line = None
         if quote_amount > 0 and starting_price > quote_amount * 2:
             precision_line = f"               ↳ ceiled lot based on {quote_amount:.4f} quote"
+        recovery_line = None
+        recovery_plan = k.get("recovery_plan")
+        if isinstance(recovery_plan, dict):
+            recovery_parts: list[str] = []
+            stage_labels = (
+                ("settleAfterStart", "after start"),
+                ("settleAfterMin", "after min"),
+                ("settleAfterDecay", "after decay"),
+            )
+            for key, label in stage_labels:
+                tokens = recovery_plan.get(key)
+                if isinstance(tokens, list) and tokens:
+                    token_count = len(tokens)
+                    token_label = "lot" if token_count == 1 else "lots"
+                    recovery_parts.append(f"{token_count} stale {token_label} {label}")
+            if recovery_parts:
+                recovery_line = f"  Recovery:    {' | '.join(recovery_parts)}"
 
         content = []
         if divergence_line:
@@ -443,6 +460,8 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
             f"  Min quote:   {k.get('minimum_quote_display') or k.get('minimum_price_display') or '-'}",
             f"  Profile:     {profile_name} | decay {step_decay_str}",
         ])
+        if recovery_line:
+            content.append(recovery_line)
         if rate_line:
             content.append(rate_line)
         if precision_line:

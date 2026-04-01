@@ -228,6 +228,13 @@ AUCTION_ABI = [
         "type": "function",
     },
     {
+        "inputs": [],
+        "name": "startingPrice",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [{"internalType": "address", "name": "_from", "type": "address"}],
         "name": "available",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
@@ -249,10 +256,28 @@ AUCTION_ABI = [
         "type": "function",
     },
     {
+        "inputs": [],
+        "name": "stepDuration",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [{"internalType": "uint256", "name": "_stepDecayRate", "type": "uint256"}],
         "name": "setStepDecayRate",
         "outputs": [],
         "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "name": "auctions",
+        "outputs": [
+            {"internalType": "uint64", "name": "kicked", "type": "uint64"},
+            {"internalType": "uint64", "name": "scaler", "type": "uint64"},
+            {"internalType": "uint128", "name": "initialAvailable", "type": "uint128"},
+        ],
+        "stateMutability": "view",
         "type": "function",
     },
 ]
@@ -306,6 +331,33 @@ AUCTION_KICKER_ABI = [
             {"internalType": "address", "name": "settleToken", "type": "address"},
         ],
         "name": "kick",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"internalType": "address", "name": "source", "type": "address"},
+                    {"internalType": "address", "name": "auction", "type": "address"},
+                    {"internalType": "address", "name": "sellToken", "type": "address"},
+                    {"internalType": "uint256", "name": "sellAmount", "type": "uint256"},
+                    {"internalType": "address", "name": "wantToken", "type": "address"},
+                    {"internalType": "uint256", "name": "startingPrice", "type": "uint256"},
+                    {"internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
+                    {"internalType": "uint256", "name": "stepDecayRateBps", "type": "uint256"},
+                    {"internalType": "address", "name": "settleToken", "type": "address"},
+                    {"internalType": "address[]", "name": "settleAfterStart", "type": "address[]"},
+                    {"internalType": "address[]", "name": "settleAfterMin", "type": "address[]"},
+                    {"internalType": "address[]", "name": "settleAfterDecay", "type": "address[]"},
+                ],
+                "internalType": "struct AuctionKicker.KickParamsExtended",
+                "name": "p",
+                "type": "tuple",
+            }
+        ],
+        "name": "kickExtended",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function",

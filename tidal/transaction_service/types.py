@@ -66,6 +66,19 @@ class KickCandidate:
 
 
 @dataclass(slots=True)
+class KickRecoveryPlan:
+    """Staged settle instructions for the extended kick path."""
+
+    settle_after_start: tuple[str, ...] = ()
+    settle_after_min: tuple[str, ...] = ()
+    settle_after_decay: tuple[str, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.settle_after_start or self.settle_after_min or self.settle_after_decay)
+
+
+@dataclass(slots=True)
 class PreparedKick:
     """Output of the prepare phase — everything needed to include this kick in a batch."""
 
@@ -87,6 +100,7 @@ class PreparedKick:
     step_decay_rate_bps: int
     pricing_profile_name: str
     settle_token: str | None = None
+    recovery_plan: KickRecoveryPlan | None = None
     quote_response_json: str | None = None
     want_price_usd_str: str | None = None
 

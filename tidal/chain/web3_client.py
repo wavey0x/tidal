@@ -38,6 +38,16 @@ class Web3Client:
 
         return int(await call_with_retries(_call, attempts=self.retry_attempts))
 
+    async def get_latest_block_timestamp(self) -> int:
+        async def _call() -> int:
+            block = await asyncio.wait_for(
+                self.w3.eth.get_block("latest"),
+                timeout=self.timeout_seconds,
+            )
+            return int(block["timestamp"])
+
+        return int(await call_with_retries(_call, attempts=self.retry_attempts))
+
     async def get_balance(self, address: str) -> int:
         async def _call() -> int:
             balance = await asyncio.wait_for(

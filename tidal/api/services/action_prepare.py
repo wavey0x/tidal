@@ -36,7 +36,7 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.runtime import build_txn_service, build_web3_client
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
-from tidal.transaction_service.kicker import _GAS_ESTIMATE_BUFFER, _format_execution_error
+from tidal.transaction_service.kicker import _GAS_ESTIMATE_BUFFER, _format_execution_error, _is_active_auction_error
 from tidal.transaction_service.types import KickResult, PreparedKick, PreparedSweepAndSettle
 
 STRATEGY_DEPLOY_CONTEXT_SQL = """
@@ -194,34 +194,84 @@ async def prepare_kick_action(
         )
 
     if prepared_kicks:
-        kick_tuples = [txn_service.kicker._kick_args(prepared) for prepared in prepared_kicks]
-        data = kicker_contract.functions.batchKick(kick_tuples)._encode_transaction_data()
-        gas_cap = settings.txn_max_gas_limit * max(len(prepared_kicks), 1)
-        gas_estimate, gas_limit, gas_warning = await _estimate_transaction(
-            web3_client,
-            settings,
-            sender=sender,
-            to_address=settings.auction_kicker_address,
-            data=data,
-            gas_cap=gas_cap,
-        )
-        if gas_warning:
-            warnings.append(gas_warning)
-            skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
-            prepared_kicks = []
-        else:
-            transactions.append(
-                {
-                    "operation": "kick",
-                    "to": normalize_address(settings.auction_kicker_address),
-                    "data": data,
-                    "value": "0x0",
-                    "chainId": settings.chain_id,
-                    "sender": sender,
-                    "gasEstimate": gas_estimate,
-                    "gasLimit": gas_limit,
-                }
+        if len(prepared_kicks) == 1:
+            prepared_kick, transaction, gas_warning = await _prepare_single_kick_transaction(
+                txn_service=txn_service,
+                kicker_contract=kicker_contract,
+                settings=settings,
+                sender=sender,
+                prepared=prepared_kicks[0],
             )
+            if gas_warning:
+                warnings.append(gas_warning)
+                skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
+                prepared_kicks = []
+            elif prepared_kick is not None and transaction is not None:
+                prepared_kicks = [prepared_kick]
+                transactions.append(transaction)
+            else:
+                prepared_kicks = []
+        else:
+            kick_tuples = [txn_service.kicker._kick_args(prepared) for prepared in prepared_kicks]
+            data = kicker_contract.functions.batchKick(kick_tuples)._encode_transaction_data()
+            gas_cap = settings.txn_max_gas_limit * max(len(prepared_kicks), 1)
+            gas_estimate, gas_limit, gas_warning = await _estimate_transaction(
+                web3_client,
+                settings,
+                sender=sender,
+                to_address=settings.auction_kicker_address,
+                data=data,
+                gas_cap=gas_cap,
+            )
+            if gas_warning:
+                if _is_active_auction_error(gas_warning):
+                    individual_prepared: list[PreparedKick] = []
+                    individual_transactions: list[dict[str, object]] = []
+                    individual_skips: list[dict[str, object]] = []
+                    individual_warnings: list[str] = []
+                    for prepared in prepared_kicks:
+                        recovered_kick, transaction, individual_warning = await _prepare_single_kick_transaction(
+                            txn_service=txn_service,
+                            kicker_contract=kicker_contract,
+                            settings=settings,
+                            sender=sender,
+                            prepared=prepared,
+                        )
+                        if individual_warning:
+                            individual_warnings.append(individual_warning)
+                            individual_skips.extend(
+                                _prepared_kick_gas_estimate_skips([prepared], reason=individual_warning)
+                            )
+                            continue
+                        if recovered_kick is not None and transaction is not None:
+                            individual_prepared.append(recovered_kick)
+                            individual_transactions.append(transaction)
+                    if individual_transactions:
+                        prepared_kicks = individual_prepared
+                        transactions.extend(individual_transactions)
+                        warnings.extend(individual_warnings)
+                        skipped_prepare.extend(individual_skips)
+                    else:
+                        warnings.append(gas_warning)
+                        skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
+                        prepared_kicks = []
+                else:
+                    warnings.append(gas_warning)
+                    skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
+                    prepared_kicks = []
+            else:
+                transactions.append(
+                    {
+                        "operation": "kick",
+                        "to": normalize_address(settings.auction_kicker_address),
+                        "data": data,
+                        "value": "0x0",
+                        "chainId": settings.chain_id,
+                        "sender": sender,
+                        "gasEstimate": gas_estimate,
+                        "gasLimit": gas_limit,
+                    }
+                )
 
     preview["skippedDuringPrepare"] = skipped_prepare
     preview["preparedOperations"] = [
@@ -771,6 +821,86 @@ async def _estimate_transaction(
     return gas_estimate, gas_limit, None
 
 
+def _serialize_recovery_plan(plan) -> dict[str, list[str]] | None:  # noqa: ANN001
+    if plan is None or plan.is_empty:
+        return None
+    return {
+        "settleAfterStart": list(plan.settle_after_start),
+        "settleAfterMin": list(plan.settle_after_min),
+        "settleAfterDecay": list(plan.settle_after_decay),
+    }
+
+
+async def _prepare_single_kick_transaction(
+    *,
+    txn_service,
+    kicker_contract,
+    settings: Settings,
+    sender: str | None,
+    prepared: PreparedKick,
+) -> tuple[PreparedKick | None, dict[str, object] | None, str | None]:
+    standard_data = kicker_contract.functions.kick(*txn_service.kicker._kick_args(prepared))._encode_transaction_data()
+    gas_estimate, gas_limit, gas_warning = await _estimate_transaction(
+        txn_service.kicker.web3_client,
+        settings,
+        sender=sender,
+        to_address=settings.auction_kicker_address,
+        data=standard_data,
+        gas_cap=settings.txn_max_gas_limit,
+    )
+    if gas_warning is None:
+        return (
+            prepared,
+            {
+                "operation": "kick",
+                "to": normalize_address(settings.auction_kicker_address),
+                "data": standard_data,
+                "value": "0x0",
+                "chainId": settings.chain_id,
+                "sender": sender,
+                "gasEstimate": gas_estimate,
+                "gasLimit": gas_limit,
+            },
+            None,
+        )
+
+    if not _is_active_auction_error(gas_warning):
+        return None, None, gas_warning
+
+    recovered = await txn_service.kicker.plan_recovery(prepared)
+    if recovered is None:
+        return None, None, gas_warning
+
+    extended_data = kicker_contract.functions.kickExtended(
+        *txn_service.kicker._kick_extended_args(recovered)
+    )._encode_transaction_data()
+    gas_estimate, gas_limit, extended_warning = await _estimate_transaction(
+        txn_service.kicker.web3_client,
+        settings,
+        sender=sender,
+        to_address=settings.auction_kicker_address,
+        data=extended_data,
+        gas_cap=settings.txn_max_gas_limit,
+    )
+    if extended_warning is not None:
+        return None, None, extended_warning
+
+    return (
+        recovered,
+        {
+            "operation": "kick",
+            "to": normalize_address(settings.auction_kicker_address),
+            "data": extended_data,
+            "value": "0x0",
+            "chainId": settings.chain_id,
+            "sender": sender,
+            "gasEstimate": gas_estimate,
+            "gasLimit": gas_limit,
+        },
+        None,
+    )
+
+
 def _prepared_sweep_preview(items: list[PreparedSweepAndSettle]) -> list[dict[str, object]]:
     return [
         {
@@ -833,6 +963,7 @@ def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]
             "startRate": item.start_rate,
             "floorRate": item.floor_rate,
             "settleToken": item.settle_token,
+            "recoveryPlan": _serialize_recovery_plan(item.recovery_plan),
         }
         for item in items
     ]

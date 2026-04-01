@@ -6,7 +6,7 @@ import ast
 import asyncio
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 import structlog
@@ -29,6 +29,7 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.scanner.auction_state import AuctionStateReader
 from tidal.time import utcnow_iso
+from tidal.transaction_service.auction_recovery import plan_prepared_kick_recovery
 from tidal.transaction_service.kick_policy import (
     PricingPolicy,
     PricingProfile,
@@ -38,6 +39,7 @@ from tidal.transaction_service.signer import TransactionSigner
 from tidal.transaction_service.types import (
     AuctionInspection,
     KickCandidate,
+    KickRecoveryPlan,
     KickResult,
     KickStatus,
     PreparedKick,
@@ -214,6 +216,10 @@ def _format_execution_error(exc: Exception) -> str:
     if reverted_messages:
         return reverted_messages[0]
     return str(exc)
+
+
+def _is_active_auction_error(message: str | None) -> bool:
+    return bool(message and "active auction" in message.lower())
 
 
 def _candidate_key(candidate: KickCandidate) -> tuple[str, str]:
@@ -518,6 +524,39 @@ class AuctionKicker:
             "settle_token": pk.settle_token,
             "normalized_balance": pk.normalized_balance,
         }
+
+    async def _plan_recovery(self, prepared_kick: PreparedKick) -> PreparedKick | None:
+        plan = await plan_prepared_kick_recovery(
+            prepared_kick=prepared_kick,
+            web3_client=self.web3_client,
+            erc20_reader=self._resolve_erc20_reader(),
+        )
+        if plan is None or plan.is_empty:
+            return None
+        return replace(prepared_kick, recovery_plan=plan)
+
+    async def plan_recovery(self, prepared_kick: PreparedKick) -> PreparedKick | None:
+        return await self._plan_recovery(prepared_kick)
+
+    async def _estimate_transaction_data(
+        self,
+        *,
+        tx_data: str,
+        to_address: str,
+        sender_address: str,
+    ) -> tuple[int | None, str | None]:
+        try:
+            gas_estimate = await self.web3_client.estimate_gas(
+                {
+                    "from": sender_address,
+                    "to": to_address,
+                    "data": tx_data,
+                    "chainId": self.chain_id,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return None, _format_execution_error(exc)
+        return int(gas_estimate), None
 
     async def inspect_candidates(
         self,
@@ -1276,14 +1315,48 @@ class AuctionKicker:
             to_checksum_address(pk.settle_token) if pk.settle_token else "0x0000000000000000000000000000000000000000",
         )
 
+    @staticmethod
+    def _kick_extended_args(pk: PreparedKick) -> tuple:
+        plan = pk.recovery_plan or KickRecoveryPlan()
+        return (
+            (
+                to_checksum_address(pk.candidate.source_address),
+                to_checksum_address(pk.candidate.auction_address),
+                to_checksum_address(pk.candidate.token_address),
+                pk.sell_amount,
+                to_checksum_address(pk.candidate.want_address),
+                pk.starting_price_unscaled,
+                pk.minimum_price_scaled_1e18,
+                pk.step_decay_rate_bps,
+                to_checksum_address(pk.settle_token) if pk.settle_token else "0x0000000000000000000000000000000000000000",
+                [to_checksum_address(address) for address in plan.settle_after_start],
+                [to_checksum_address(address) for address in plan.settle_after_min],
+                [to_checksum_address(address) for address in plan.settle_after_decay],
+            ),
+        )
+
     async def execute_batch(
         self,
         prepared_kicks: list[PreparedKick],
         run_id: str,
     ) -> list[KickResult]:
+        if len(prepared_kicks) == 1 or any(prepared_kick.recovery_plan is not None for prepared_kick in prepared_kicks):
+            return [await self.execute_single(prepared_kick, run_id) for prepared_kick in prepared_kicks]
+
+        signer = self._require_signer()
         kicker_address, kicker_contract = self._kicker_contract()
         kick_tuples = [self._kick_args(pk) for pk in prepared_kicks]
         tx_data = kicker_contract.functions.batchKick(kick_tuples)._encode_transaction_data()
+        _, estimate_error = await self._estimate_transaction_data(
+            tx_data=tx_data,
+            to_address=kicker_address,
+            sender_address=signer.checksum_address,
+        )
+        if _is_active_auction_error(estimate_error):
+            results: list[KickResult] = []
+            for prepared_kick in prepared_kicks:
+                results.append(await self.execute_single(prepared_kick, run_id))
+            return results
         return await self._execute_tx(prepared_kicks, tx_data, kicker_address, run_id)
 
     async def execute_single(
@@ -1291,9 +1364,36 @@ class AuctionKicker:
         prepared_kick: PreparedKick,
         run_id: str,
     ) -> KickResult:
+        signer = self._require_signer()
         kicker_address, kicker_contract = self._kicker_contract()
-        tx_data = kicker_contract.functions.kick(*self._kick_args(prepared_kick))._encode_transaction_data()
-        results = await self._execute_tx([prepared_kick], tx_data, kicker_address, run_id)
+        execution_kick = prepared_kick
+
+        if execution_kick.recovery_plan is None:
+            standard_tx_data = kicker_contract.functions.kick(*self._kick_args(prepared_kick))._encode_transaction_data()
+            _, estimate_error = await self._estimate_transaction_data(
+                tx_data=standard_tx_data,
+                to_address=kicker_address,
+                sender_address=signer.checksum_address,
+            )
+            if _is_active_auction_error(estimate_error):
+                recovered = await self._plan_recovery(prepared_kick)
+                if recovered is not None:
+                    execution_kick = recovered
+                else:
+                    return self._fail(
+                        run_id,
+                        prepared_kick.candidate,
+                        utcnow_iso(),
+                        status=KickStatus.ESTIMATE_FAILED,
+                        error_message=estimate_error or "active auction",
+                        **self._pk_audit_kwargs(prepared_kick),
+                    )
+
+        if execution_kick.recovery_plan is not None:
+            tx_data = kicker_contract.functions.kickExtended(*self._kick_extended_args(execution_kick))._encode_transaction_data()
+        else:
+            tx_data = kicker_contract.functions.kick(*self._kick_args(execution_kick))._encode_transaction_data()
+        results = await self._execute_tx([execution_kick], tx_data, kicker_address, run_id)
         return results[0]
 
     async def execute_sweep_and_settle(

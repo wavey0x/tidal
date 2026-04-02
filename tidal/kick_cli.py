@@ -121,6 +121,35 @@ def _candidate_review_queue(
     return queue
 
 
+def _is_active_above_minimum_price_skip(reason: str | None) -> bool:
+    if not reason:
+        return False
+    return "active above minimumprice" in reason.lower()
+
+
+def _should_stop_after_same_auction_skip(
+    *,
+    candidate: KickInspectEntry,
+    skip_entries: list[dict[str, str | None]],
+    remaining_candidates: list[KickInspectEntry],
+) -> bool:
+    if not skip_entries or not remaining_candidates:
+        return False
+
+    candidate_auction = candidate.auction_address.lower()
+    if not all(
+        (entry.get("auction_address") or "").lower() == candidate_auction
+        and _is_active_above_minimum_price_skip(entry.get("reason"))
+        for entry in skip_entries
+    ):
+        return False
+
+    return any(
+        next_candidate.auction_address.lower() == candidate_auction
+        for next_candidate in remaining_candidates
+    )
+
+
 def _prepare_skips(data: dict[str, object], *, candidate: KickInspectEntry | None = None) -> list[dict[str, str | None]]:
     preview = data.get("preview")
     if not isinstance(preview, dict):
@@ -386,20 +415,28 @@ def kick_run(
     del verbose
     require_no_confirmation_for_json(json_output=json_output, no_confirmation=no_confirmation)
     cli_ctx = CLIContext(config, api_base_url=api_base_url, api_key=api_key)
-    try:
-        cli_ctx.verify_authenticated_api_access()
-    except (ConfigurationError, ControlPlaneError) as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
     normalized_source_type = _normalize_source_type_filter(source_type)
     normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
-    exec_ctx = cli_ctx.resolve_execution(
-        required=True,
-        required_for="kick execution",
-        keystore_path=keystore,
-        password_file=password_file,
-    )
+    try:
+        if json_output:
+            exec_ctx = cli_ctx.resolve_execution(
+                required=True,
+                required_for="kick execution",
+                keystore_path=keystore,
+                password_file=password_file,
+            )
+        else:
+            with progress_status("Resolving operator context..."):
+                exec_ctx = cli_ctx.resolve_execution(
+                    required=True,
+                    required_for="kick execution",
+                    keystore_path=keystore,
+                    password_file=password_file,
+                )
+    except ConfigurationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     payload = {
         "sourceType": normalized_source_type,
         "sourceAddress": normalized_source_address,
@@ -408,7 +445,7 @@ def kick_run(
         "sender": exec_ctx.sender,
         "includeLiveInspection": False,
     }
-    preview_fee_context = _resolve_preview_fee_context(cli_ctx) if not json_output else None
+    preview_fee_context: dict[str, float] | None = None
     local_warnings: list[str] = []
     try:
         with cli_ctx.control_plane_client(auth=True) as client:
@@ -429,6 +466,7 @@ def kick_run(
             prepare_feedback_emitted = False
             broadcast_feedback_emitted = False
             sent_transaction = False
+            short_circuit_same_auction_feedback_emitted = False
 
             if review_candidates:
                 total_candidates = len(review_candidates)
@@ -462,10 +500,27 @@ def kick_run(
                                     auction_address=skip["auction_address"],
                                 )
                             render_warnings(warnings)
+                            remaining_candidates = review_candidates[index:]
+                            if (
+                                normalized_source_type == "fee_burner"
+                                and _should_stop_after_same_auction_skip(
+                                    candidate=candidate,
+                                    skip_entries=skip_entries,
+                                    remaining_candidates=remaining_candidates,
+                                )
+                            ):
+                                typer.echo(
+                                    "Auction is still active above minimumPrice. Ending review for the remaining same-auction candidates."
+                                )
+                                short_circuit_same_auction_feedback_emitted = True
+                                break
                         continue
 
                     prepared_candidate_count += 1
                     if not json_output:
+                        if preview_fee_context is None:
+                            with progress_status("Loading network fee preview..."):
+                                preview_fee_context = _resolve_preview_fee_context(cli_ctx)
                         summary = _kick_submission_summary(
                             prepared_data,
                             candidate=candidate,
@@ -489,7 +544,7 @@ def kick_run(
                         else:
                             render_action_preview(
                                 prepared_data,
-                                heading=f"Prepared kick action ({index}/{total_ready})",
+                                heading=f"Prepared kick action ({index}/{total_candidates})",
                             )
                         render_warnings(warnings)
                     if not no_confirmation and not typer.confirm("Send this transaction?", default=False):
@@ -561,6 +616,8 @@ def kick_run(
                 typer.echo("Kick transaction sent. Ending run after the first submitted candidate.")
         elif inspect_result.ready_count == 0:
             typer.echo("No ready kick candidates.")
+        elif short_circuit_same_auction_feedback_emitted:
+            pass
         elif prepared_candidate_count == 0 and prepare_feedback_emitted:
             pass
         elif prepared_candidate_count > 0 and skipped_confirmation_count == prepared_candidate_count:

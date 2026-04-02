@@ -6,7 +6,6 @@ from eth_utils import to_checksum_address
 from typer.testing import CliRunner
 
 from tidal.cli import app as operator_app
-from tidal.control_plane.client import ControlPlaneError
 import tidal.kick_cli as operator_kick_cli_module
 
 
@@ -245,6 +244,65 @@ class _PrepareNoopClient:
                             "tokenSymbol": "CRV",
                             "wantSymbol": "USDC",
                             "reason": "candidate was skipped during prepare",
+                        }
+                    ]
+                },
+                "transactions": [],
+            },
+        }
+
+
+class _FeeBurnerSameAuctionNoopClient:
+    def __init__(self) -> None:
+        self.inspect_calls: list[dict[str, object]] = []
+        self.prepare_calls: list[dict[str, object]] = []
+
+    def __enter__(self) -> "_FeeBurnerSameAuctionNoopClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        del exc_type, exc, tb
+
+    def inspect_kicks(self, body: dict[str, object]) -> dict[str, object]:
+        self.inspect_calls.append(body)
+        return {
+            "status": "ok",
+            "warnings": [],
+            "data": _inspect_payload(
+                [
+                    _entry(
+                        token_address="0x3333333333333333333333333333333333333333",
+                        source_address="0x1111111111111111111111111111111111111111",
+                        auction_address="0x2222222222222222222222222222222222222222",
+                        state="ready",
+                        source_type="fee_burner",
+                    )
+                ],
+                deferred_same_auction=[
+                    _deferred_entry(
+                        token_address="0x4444444444444444444444444444444444444444",
+                        source_address="0x1111111111111111111111111111111111111111",
+                        auction_address="0x2222222222222222222222222222222222222222",
+                    )
+                ],
+            ),
+        }
+
+    def prepare_kicks(self, body: dict[str, object]) -> dict[str, object]:
+        self.prepare_calls.append(body)
+        return {
+            "status": "noop",
+            "warnings": [],
+            "data": {
+                "preview": {
+                    "skippedDuringPrepare": [
+                        {
+                            "sourceName": "yCRV Fee Burner",
+                            "sourceAddress": "0x1111111111111111111111111111111111111111",
+                            "auctionAddress": "0x2222222222222222222222222222222222222222",
+                            "tokenSymbol": "CRV",
+                            "wantSymbol": "USDC",
+                            "reason": "auction still active above minimumPrice",
                         }
                     ]
                 },
@@ -507,6 +565,51 @@ def test_operator_kick_run_prepare_noop_does_not_repeat_generic_footer(tmp_path,
     assert "No kick transactions were sent." not in result.output
 
 
+def test_operator_kick_run_fee_burner_active_auction_skip_stops_after_first_candidate(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _FeeBurnerSameAuctionNoopClient()
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "verify_authenticated_api_access",
+        lambda self: pytest.fail("kick run should not preflight authenticated API access"),
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module,
+        "_resolve_preview_fee_context",
+        lambda *_args, **_kwargs: pytest.fail("fee preview should not load when prepare returns noop"),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        operator_app,
+        ["kick", "run", "--source-type", "fee-burner", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 2
+    assert [call["tokenAddress"] for call in client.prepare_calls] == [
+        "0x3333333333333333333333333333333333333333",
+    ]
+    assert result.output.count("Skip") == 1
+    assert "Auction still active above minimumPrice" in result.output
+    assert "Ending review for the remaining same-auction candidates." in result.output
+    assert "Kick (2 of 2)" not in result.output
+    assert "No kick transactions were sent." not in result.output
+
+
 def test_operator_kick_run_declined_confirmations_reports_skipped_summary(tmp_path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     client = _BroadcastClient()
@@ -689,34 +792,34 @@ def test_operator_kick_run_no_confirmation_still_blocks_stale_prepared_transacti
     assert "Prepared transaction expired after 5 minutes" in result.output
 
 
-def test_operator_kick_run_checks_api_auth_before_resolving_execution(tmp_path, monkeypatch) -> None:
+def test_operator_kick_run_does_not_preflight_api_auth_before_resolving_execution(tmp_path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
-    call_order: list[str] = []
-
-    def fake_verify(self) -> None:  # noqa: ANN001
-        call_order.append("verify")
-        raise ControlPlaneError("TIDAL_API_KEY is invalid for Tidal API at https://api.example.com", status_code=401)
-
-    def fail_resolve(self, **kwargs):  # noqa: ANN001, ARG001
-        raise AssertionError("resolve_execution should not run when API auth validation fails")
+    client = _PrepareNoopClient()
 
     monkeypatch.setattr(
         operator_kick_cli_module.CLIContext,
         "verify_authenticated_api_access",
-        fake_verify,
+        lambda self: pytest.fail("kick run should not preflight authenticated API access"),
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
     )
     monkeypatch.setattr(
         operator_kick_cli_module.CLIContext,
         "resolve_execution",
-        fail_resolve,
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
     )
 
     runner = CliRunner()
     result = runner.invoke(operator_app, ["kick", "run", "--config", str(config_path)])
 
-    assert result.exit_code == 1
-    assert "TIDAL_API_KEY is invalid" in result.output
-    assert call_order == ["verify"]
+    assert result.exit_code == 2
+    assert "Skip" in result.output
 
 
 def test_operator_kick_run_json_requires_no_confirmation(tmp_path) -> None:

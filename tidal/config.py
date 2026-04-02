@@ -81,7 +81,7 @@ class Settings(BaseSettings):
         alias="MULTICALL_OVERFLOW_QUEUE_MAX",
     )
     multicall_auction_batch_calls: int = Field(
-        default=500,
+        default=100,
         alias="MULTICALL_AUCTION_BATCH_CALLS",
     )
     auction_factory_address: str = Field(

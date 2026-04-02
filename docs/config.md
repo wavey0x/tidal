@@ -60,8 +60,7 @@ Run `tidal-server init-config` to scaffold the tracked server files under `confi
 
 `config/server.yaml` is the authoritative runtime document for:
 
-- scanner settings
-- multicall and pricing refresh settings
+- chain and contract wiring that should move with the repo
 - monitored fee burners
 - server-side transaction execution defaults
 - kick pricing, ignore rules, and cooldown policy
@@ -75,6 +74,8 @@ Some deployment-wiring values now default in code and do not need `.env` or YAML
 - `token_price_agg_base_url = https://prices.wavey.info`
 - `auctionscan_base_url = https://auctionscan.info`
 - `auctionscan_api_base_url = https://auctionscan.info/api`
+
+Most scanner, pricing, multicall, and receipt-reconcile tuning also defaults in code now. Leave those out of the tracked file unless you deliberately need an override through environment variables.
 
 Server mutable files default under `~/.tidal/server/`:
 
@@ -155,6 +156,8 @@ Current defaults from `tidal/config.py` include:
 - `token_price_agg_base_url = https://prices.wavey.info`
 - `auctionscan_base_url = https://auctionscan.info`
 - `auctionscan_api_base_url = https://auctionscan.info/api`
+- `scan_concurrency = 20`
+- `multicall_auction_batch_calls = 100`
 - `rpc_timeout_seconds = 10`
 - `price_timeout_seconds = 10`
 - `txn_usd_threshold = 100`

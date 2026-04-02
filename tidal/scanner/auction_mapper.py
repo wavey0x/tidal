@@ -63,7 +63,7 @@ class StrategyAuctionMapper:
         required_governance_address: str,
         multicall_client: MulticallClient | None = None,
         multicall_enabled: bool = True,
-        multicall_auction_batch_calls: int = 500,
+        multicall_auction_batch_calls: int = 100,
     ) -> None:
         self.web3_client = web3_client
         self.chain_id = chain_id

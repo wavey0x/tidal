@@ -86,12 +86,15 @@ tidal-server kick run --config config/server.yaml --no-confirmation
 
 Common server settings include:
 
-- `scan_concurrency`
+- `auction_factory_address`
+- `auction_kicker_address`
 - `monitored_fee_burners`
 - `kick`
 
 The API bind defaults live in code: `tidal_api_host=0.0.0.0` and `tidal_api_port=8787`.
 Set them explicitly only when you need a non-default bind.
+
+Most scanner, pricing, multicall, and reconcile tuning also now defaults in code. Only override those via environment variables when you are intentionally tuning a deployment.
 
 Scan auto-settle is not configured in `server.yaml`.
 Enable it explicitly with `--auto-settle` when needed.

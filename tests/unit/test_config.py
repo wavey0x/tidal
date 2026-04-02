@@ -159,6 +159,7 @@ kick:
     assert settings.token_price_agg_base_url == "https://prices.wavey.info"
     assert settings.auctionscan_base_url == "https://auctionscan.info"
     assert settings.auctionscan_api_base_url == "https://auctionscan.info/api"
+    assert settings.multicall_auction_batch_calls == 100
     assert settings.kick_config.pricing_policy.default_profile_name == "volatile"
 
 

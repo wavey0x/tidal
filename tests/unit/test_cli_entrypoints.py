@@ -66,11 +66,18 @@ def test_server_init_config_creates_tracked_server_config(tmp_path, monkeypatch)
     env_scaffold = (repo_root / "config" / ".env.example").read_text(encoding="utf-8")
     assert "kick:" in scaffold
     assert "profile_overrides:" in scaffold
+    assert "auction_factory_address:" in scaffold
+    assert "auction_kicker_address:" in scaffold
     assert "tidal_api_host:" not in scaffold
     assert "tidal_api_port:" not in scaffold
     assert "token_price_agg_base_url:" not in scaffold
     assert "auctionscan_base_url:" not in scaffold
     assert "auctionscan_api_base_url:" not in scaffold
+    assert "tidal_api_receipt_reconcile_interval_seconds:" not in scaffold
+    assert "scan_concurrency:" not in scaffold
+    assert "rpc_timeout_seconds:" not in scaffold
+    assert "multicall_auction_batch_calls:" not in scaffold
+    assert "price_timeout_seconds:" not in scaffold
     assert "TIDAL_API_HOST=" not in env_scaffold
     assert "TIDAL_API_PORT=" not in env_scaffold
     assert "TOKEN_PRICE_AGG_BASE_URL=" not in env_scaffold
@@ -79,6 +86,7 @@ def test_server_init_config_creates_tracked_server_config(tmp_path, monkeypatch)
     assert "scan_auto_settle_enabled" not in scaffold
     assert "scan_interval_seconds" not in scaffold
     settings = load_server_settings(repo_root / "config" / "server.yaml")
+    assert settings.multicall_auction_batch_calls == 100
     assert settings.kick_config.pricing_policy.default_profile_name == "volatile"
     assert "Server config:" in result.output
     assert "Env example:" in result.output

@@ -44,9 +44,10 @@ The scanner populates the shared SQLite cache that powers:
 
 Common server operator settings for this command:
 
-- `scan_concurrency`
+- `auction_factory_address`
 - `monitored_fee_burners`
-- `rpc_timeout_seconds`
+
+Most scanner tuning, including `SCAN_CONCURRENCY` and `RPC_TIMEOUT_SECONDS`, now defaults in code. Override it through environment variables only when you are deliberately tuning a deployment.
 
 ## Auto-Settle Note
 

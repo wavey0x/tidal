@@ -1,6 +1,12 @@
 # Configuration Notes
 
-This file captures suggestions for simplifying `config/server.yaml` without changing behavior yet.
+This file captures the simplification direction for `config/server.yaml`.
+
+Current status:
+
+- deployment-wiring values such as API bind host/port and public service URLs now default in code
+- tracked `server.yaml` keeps shared execution policy and contract wiring
+- most scanner, pricing, and API tuning knobs now default in code instead of the tracked file
 
 ## Core Model
 

@@ -128,7 +128,7 @@ def read_auction_fields_many(
 
     multicall_address = getattr(settings, "multicall_address", None)
     multicall_enabled = bool(getattr(settings, "multicall_enabled", False) and multicall_address)
-    batch_size = max(int(getattr(settings, "multicall_auction_batch_calls", 500)), 1)
+    batch_size = max(int(getattr(settings, "multicall_auction_batch_calls", 100)), 1)
 
     if multicall_enabled:
         multicall = w3.eth.contract(address=to_checksum_address(multicall_address), abi=MULTICALL3_ABI)

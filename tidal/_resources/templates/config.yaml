@@ -10,7 +10,7 @@ tidal_api_request_timeout_seconds: 30
 # Local execution defaults used for review and local sending.
 chain_id: 1
 prepared_action_max_age_seconds: 300
-auction_kicker_address: "0x846475a1B97AC57861813206749c1b0f592383eF"
+auction_kicker_address: "0x26c28bDFE5207dC6a27a8dd886D1FbE068586A2d"
 txn_usd_threshold: 100
 txn_max_base_fee_gwei: 0.5
 txn_max_priority_fee_gwei: 2

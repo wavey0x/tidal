@@ -18,7 +18,7 @@ from tidal.auction_settlement import (
     decide_auction_settlement,
     inspect_auction_settlement,
 )
-from tidal.chain.contracts.abis import AUCTION_KICKER_ABI, TRADE_HANDLER_ABI
+from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.cli_support import build_sync_web3
 from tidal.config import Settings
 from tidal.normalizers import normalize_address
@@ -628,9 +628,12 @@ async def prepare_enable_tokens_action(
         source=source,
         discovery=discovery,
     )
+    warnings = list(source.warnings) + list(discovery.notes)
+    if not inspection.in_configured_factory:
+        warnings.append("Auction is not in the configured factory.")
     eligible = [probe for probe in probes if probe.status == "eligible"]
     if not eligible:
-        return "noop", discovery.notes, {
+        return "noop", warnings, {
             "preview": {
                 "inspection": _serialize(inspection),
                 "source": _serialize(source),
@@ -641,32 +644,6 @@ async def prepare_enable_tokens_action(
         }
 
     selected_tokens = [probe.token_address for probe in eligible]
-    commands, state = enabler.build_enable_plan(inspection=inspection, tokens=selected_tokens)
-    preview = enabler.preview_execution(
-        trade_handler_address=inspection.governance,
-        commands=commands,
-        state=state,
-        caller_address=sender,
-    )
-    trade_handler = w3.eth.contract(address=to_checksum_address(inspection.governance), abi=TRADE_HANDLER_ABI)
-    data = trade_handler.functions.execute(commands, state)._encode_transaction_data()
-    tx = {
-        "operation": "enable-tokens",
-        "to": normalize_address(inspection.governance),
-        "data": data,
-        "value": "0x0",
-        "chainId": settings.chain_id,
-        "sender": sender,
-        "gasEstimate": preview.gas_estimate,
-        "gasLimit": min(int(preview.gas_estimate * _GAS_ESTIMATE_BUFFER), settings.txn_max_gas_limit) if preview.gas_estimate is not None else None,
-    }
-    warnings = list(source.warnings) + list(discovery.notes)
-    if not inspection.in_configured_factory:
-        warnings.append("Auction is not in the configured factory.")
-    if not inspection.governance_matches_required:
-        warnings.append("Auction governance does not match the configured Yearn trade handler.")
-    if preview.error_message:
-        warnings.append(preview.error_message)
     preview_payload = {
         "inspection": _serialize(inspection),
         "source": _serialize(source),
@@ -678,9 +655,50 @@ async def prepare_enable_tokens_action(
             for probe in probes
         ],
         "selectedTokens": selected_tokens,
-        "commandsCount": len(commands),
-        "stateSlots": len(state),
-        "preview": _serialize(preview),
+    }
+
+    try:
+        execution_plan = enabler.build_execution_plan(
+            inspection=inspection,
+            tokens=selected_tokens,
+            caller_address=sender,
+        )
+    except RuntimeError as exc:
+        warnings.append(str(exc))
+        return "error", warnings, {
+            "preview": preview_payload,
+            "transactions": [],
+        }
+
+    if execution_plan.error_message:
+        warnings.append(execution_plan.error_message)
+
+    preview_payload.update(
+        {
+            "executionTarget": execution_plan.to_address,
+            "previewSender": sender,
+            "previewSenderAuthorized": execution_plan.sender_authorized,
+            "authorizationTarget": execution_plan.authorization_target,
+            "executionPreview": {
+                "call_succeeded": execution_plan.call_succeeded,
+                "gas_estimate": execution_plan.gas_estimate,
+                "error_message": execution_plan.error_message,
+            },
+        }
+    )
+    tx = {
+        "operation": "enable-tokens",
+        "to": normalize_address(execution_plan.to_address),
+        "data": execution_plan.data,
+        "value": "0x0",
+        "chainId": settings.chain_id,
+        "sender": sender,
+        "gasEstimate": execution_plan.gas_estimate,
+        "gasLimit": (
+            min(int(execution_plan.gas_estimate * _GAS_ESTIMATE_BUFFER), settings.txn_max_gas_limit)
+            if execution_plan.gas_estimate is not None
+            else None
+        ),
     }
     action_id = create_prepared_action(
         session,

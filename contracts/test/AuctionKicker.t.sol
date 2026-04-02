@@ -16,6 +16,23 @@ contract WeiRollCommandLibHarness {
     }
 }
 
+contract EnableAuctionMock {
+    address public immutable governance;
+    address[] internal enabled;
+
+    constructor(address governance_) {
+        governance = governance_;
+    }
+
+    function enable(address token) external {
+        enabled.push(token);
+    }
+
+    function getAllEnabledAuctions() external view returns (address[] memory) {
+        return enabled;
+    }
+}
+
 contract AuctionKickerTest is Test {
     using stdStorage for StdStorage;
 
@@ -506,5 +523,45 @@ contract AuctionKickerTest is Test {
         assertFalse(IAuction(AUCTION).isActive(CRV));
         assertEq(IERC20(CRV).balanceOf(AUCTION), 0);
         assertEq(IERC20(CRV).balanceOf(STRATEGY), strategyBaseBalance + amount);
+    }
+
+    function test_enableTokens_keeperEnablesTokenThroughTradeHandler() public {
+        EnableAuctionMock mockAuction = new EnableAuctionMock(TRADE_HANDLER);
+        address[] memory sellTokens = new address[](1);
+        sellTokens[0] = CVX;
+
+        vm.prank(keeper);
+        kicker.enableTokens(address(mockAuction), sellTokens);
+
+        address[] memory enabled = mockAuction.getAllEnabledAuctions();
+        bool found;
+        for (uint256 i = 0; i < enabled.length; i++) {
+            if (enabled[i] == CVX) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found);
+    }
+
+    function test_enableTokens_revert_notKeeperOrOwner() public {
+        address[] memory sellTokens = new address[](1);
+        sellTokens[0] = CVX;
+
+        vm.expectRevert("unauthorized");
+        vm.prank(makeAddr("not-authorized"));
+        kicker.enableTokens(ALT_AUCTION, sellTokens);
+    }
+
+    function test_enableTokens_revert_governanceMismatch() public {
+        address fakeAuction = makeAddr("fake-auction");
+        vm.mockCall(fakeAuction, abi.encodeWithSelector(IAuction.governance.selector), abi.encode(makeAddr("other")));
+
+        address[] memory sellTokens = new address[](1);
+        sellTokens[0] = CVX;
+
+        vm.expectRevert("governance mismatch");
+        vm.prank(keeper);
+        kicker.enableTokens(fakeAuction, sellTokens);
     }
 }

@@ -8,8 +8,10 @@ from tidal.api.services.action_prepare import (
     _estimate_transaction,
     load_strategy_deploy_defaults,
     prepare_deploy_browser_action,
+    prepare_enable_tokens_action,
     prepare_kick_action,
 )
+from tidal.ops.auction_enable import AuctionInspection, SourceResolution, TokenDiscovery, TokenProbe
 from tidal.transaction_service.types import KickCandidate, PreparedKick
 
 
@@ -273,6 +275,131 @@ async def test_prepare_kick_action_skips_unsendable_batch_kick_when_gas_estimate
         }
     ]
     create_prepared_action.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prepare_enable_tokens_action_targets_auction_kicker(monkeypatch) -> None:
+    inspection = AuctionInspection(
+        auction_address="0x1111111111111111111111111111111111111111",
+        governance="0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b",
+        want="0x2222222222222222222222222222222222222222",
+        receiver="0x3333333333333333333333333333333333333333",
+        version="1.0.0",
+        in_configured_factory=True,
+        governance_matches_required=True,
+        enabled_tokens=(),
+    )
+    source = SourceResolution(
+        source_type="strategy",
+        source_address="0x3333333333333333333333333333333333333333",
+        source_name="Test Strategy",
+        warnings=(),
+    )
+    eligible_probe = TokenProbe(
+        token_address="0x4444444444444444444444444444444444444444",
+        origins=("manual",),
+        symbol="CRV",
+        decimals=18,
+        raw_balance=1,
+        normalized_balance="1",
+        status="eligible",
+        reason="eligible",
+    )
+    execution_plan = SimpleNamespace(
+        to_address="0x5555555555555555555555555555555555555555",
+        data="0xdeadbeef",
+        call_succeeded=True,
+        gas_estimate=210000,
+        error_message=None,
+        sender_authorized=True,
+        authorization_target="0x5555555555555555555555555555555555555555",
+    )
+    enabler = SimpleNamespace(
+        inspect_auction=lambda auction: inspection,
+        resolve_source=lambda inspection: source,
+        discover_tokens=lambda **kwargs: TokenDiscovery(tokens_by_address={eligible_probe.token_address: {"manual"}}, notes=[]),
+        probe_tokens=lambda **kwargs: [eligible_probe],
+        build_execution_plan=lambda **kwargs: execution_plan,
+    )
+
+    monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
+    monkeypatch.setattr("tidal.api.services.action_prepare.AuctionTokenEnabler", lambda w3, settings: enabler)
+    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-enable")
+
+    status, warnings, data = await prepare_enable_tokens_action(
+        settings=SimpleNamespace(
+            chain_id=1,
+            txn_max_gas_limit=500000,
+        ),
+        session=object(),
+        operator_id="tester",
+        auction_address=inspection.auction_address,
+        sender="0x6666666666666666666666666666666666666666",
+        extra_tokens=[],
+    )
+
+    assert status == "ok"
+    assert warnings == []
+    assert data["transactions"][0]["to"] == execution_plan.to_address
+    assert data["transactions"][0]["data"] == execution_plan.data
+    assert data["preview"]["executionTarget"] == execution_plan.to_address
+    assert data["preview"]["previewSenderAuthorized"] is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_enable_tokens_action_returns_error_on_governance_mismatch(monkeypatch) -> None:
+    inspection = AuctionInspection(
+        auction_address="0x1111111111111111111111111111111111111111",
+        governance="0x9999999999999999999999999999999999999999",
+        want="0x2222222222222222222222222222222222222222",
+        receiver="0x3333333333333333333333333333333333333333",
+        version="1.0.0",
+        in_configured_factory=True,
+        governance_matches_required=False,
+        enabled_tokens=(),
+    )
+    source = SourceResolution(
+        source_type="strategy",
+        source_address="0x3333333333333333333333333333333333333333",
+        source_name="Test Strategy",
+        warnings=(),
+    )
+    eligible_probe = TokenProbe(
+        token_address="0x4444444444444444444444444444444444444444",
+        origins=("manual",),
+        symbol="CRV",
+        decimals=18,
+        raw_balance=1,
+        normalized_balance="1",
+        status="eligible",
+        reason="eligible",
+    )
+    enabler = SimpleNamespace(
+        inspect_auction=lambda auction: inspection,
+        resolve_source=lambda inspection: source,
+        discover_tokens=lambda **kwargs: TokenDiscovery(tokens_by_address={eligible_probe.token_address: {"manual"}}, notes=[]),
+        probe_tokens=lambda **kwargs: [eligible_probe],
+        build_execution_plan=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("governance mismatch")),
+    )
+
+    monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
+    monkeypatch.setattr("tidal.api.services.action_prepare.AuctionTokenEnabler", lambda w3, settings: enabler)
+
+    status, warnings, data = await prepare_enable_tokens_action(
+        settings=SimpleNamespace(
+            chain_id=1,
+            txn_max_gas_limit=500000,
+        ),
+        session=object(),
+        operator_id="tester",
+        auction_address=inspection.auction_address,
+        sender="0x6666666666666666666666666666666666666666",
+        extra_tokens=[],
+    )
+
+    assert status == "error"
+    assert warnings == ["governance mismatch"]
+    assert data["transactions"] == []
 
 
 @pytest.mark.asyncio

@@ -320,6 +320,16 @@ ERC20_ABI = [
 AUCTION_KICKER_ABI = [
     {
         "inputs": [
+            {"internalType": "address", "name": "auction", "type": "address"},
+            {"internalType": "address[]", "name": "sellTokens", "type": "address[]"},
+        ],
+        "name": "enableTokens",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
             {"internalType": "address", "name": "source", "type": "address"},
             {"internalType": "address", "name": "auction", "type": "address"},
             {"internalType": "address", "name": "sellToken", "type": "address"},

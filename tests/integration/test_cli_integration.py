@@ -8,6 +8,9 @@ from typer.testing import CliRunner
 import tidal.auction_cli as auction_cli_module
 import tidal.kick_cli as kick_cli_module
 from tidal.server_cli import app
+from tidal.ops.auction_enable import AuctionInspection as EnableAuctionInspection
+from tidal.ops.auction_enable import EnableExecutionPlan
+from tidal.ops.auction_enable import SourceResolution, TokenDiscovery, TokenProbe
 from tidal.transaction_service.types import AuctionInspection
 
 
@@ -360,6 +363,98 @@ def test_auction_enable_tokens_json_requires_no_confirmation() -> None:
     assert result.exit_code != 0
     assert "Invalid value for --json" in result.output
     assert "--no-confirmation" in result.output
+
+
+def test_auction_enable_tokens_routes_through_auction_kicker(tmp_path, monkeypatch) -> None:
+    _isolate_runtime_env(tmp_path, monkeypatch)
+    config_path = _write_txn_config(tmp_path)
+
+    class _FakeEnabler:
+        def __init__(self, w3, settings) -> None:  # noqa: ANN001
+            del w3, settings
+
+        def inspect_auction(self, auction_address: str) -> EnableAuctionInspection:
+            return EnableAuctionInspection(
+                auction_address=auction_address,
+                governance="0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b",
+                want="0x1111111111111111111111111111111111111111",
+                receiver="0x2222222222222222222222222222222222222222",
+                version="1.0.0",
+                in_configured_factory=True,
+                governance_matches_required=True,
+                enabled_tokens=(),
+            )
+
+        def resolve_source(self, inspection: EnableAuctionInspection) -> SourceResolution:
+            del inspection
+            return SourceResolution(
+                source_type="strategy",
+                source_address="0x2222222222222222222222222222222222222222",
+                source_name="Test Strategy",
+            )
+
+        def discover_tokens(self, **kwargs) -> TokenDiscovery:  # noqa: ANN003
+            del kwargs
+            return TokenDiscovery(
+                tokens_by_address={"0x3333333333333333333333333333333333333333": {"manual"}},
+                notes=[],
+            )
+
+        def probe_tokens(self, **kwargs) -> list[TokenProbe]:  # noqa: ANN003
+            del kwargs
+            return [
+                TokenProbe(
+                    token_address="0x3333333333333333333333333333333333333333",
+                    origins=("manual",),
+                    symbol="CRV",
+                    decimals=18,
+                    raw_balance=1,
+                    normalized_balance="1",
+                    status="eligible",
+                    reason="eligible",
+                )
+            ]
+
+        def build_execution_plan(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return EnableExecutionPlan(
+                to_address="0x846475a1b97ac57861813206749c1b0f592383ef",
+                data="0xdeadbeef",
+                call_succeeded=True,
+                gas_estimate=210000,
+                error_message=None,
+                sender_authorized=True,
+                authorization_target="0x846475a1b97ac57861813206749c1b0f592383ef",
+            )
+
+        def send_enable_transaction(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return ("0x" + "1" * 64, 210000)
+
+    monkeypatch.setattr(auction_cli_module, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auction_cli_module.CLIContext, "sync_web3", lambda self: object())
+    monkeypatch.setattr(
+        auction_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(address="0x9999999999999999999999999999999999999999", checksum_address="0x9999999999999999999999999999999999999999"),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+    monkeypatch.setattr(auction_cli_module, "AuctionTokenEnabler", _FakeEnabler)
+    monkeypatch.setattr(auction_cli_module.typer, "confirm", lambda *args, **kwargs: True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["auction", "enable-tokens", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Execution plan:" in result.output
+    assert "target" in result.output
+    assert "keeper auth   yes" in result.output
+    assert "0x1111111111111111111111111111111111111111111111111111111111111111" in result.output
 
 
 def test_auction_settle_requires_rpc_url(tmp_path, monkeypatch) -> None:

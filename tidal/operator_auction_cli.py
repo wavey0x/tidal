@@ -131,11 +131,19 @@ def _handle_prepared_action(
             _noop_status_lines(command_name=command_name, data=data),
             border_style="yellow",
         )
+    elif response["status"] == "error":
+        render_status_panel(
+            "Preparation Failed",
+            ["No transaction was prepared."],
+            border_style="red",
+        )
     else:
         render_broadcast_result(broadcast_records)
 
     if response["status"] == "noop":
         raise typer.Exit(code=2)
+    if response["status"] == "error":
+        raise typer.Exit(code=1)
 
 
 @app.command("deploy")

@@ -491,23 +491,7 @@ def enable_tokens(
     eligible = [probe for probe in probes if probe.status == "eligible"]
     selected_addresses = [probe.token_address for probe in eligible]
 
-    if selected_addresses:
-        commands, state = enabler.build_enable_plan(
-            inspection=inspection,
-            tokens=selected_addresses,
-        )
-        preview = enabler.preview_execution(
-            trade_handler_address=inspection.governance,
-            commands=commands,
-            state=state,
-            caller_address=preview_sender,
-        )
-        preview_authorized = enabler.is_authorized_mech(inspection.governance, preview_sender) if preview_sender else None
-    else:
-        commands = []
-        state = []
-        preview = None
-        preview_authorized = enabler.is_authorized_mech(inspection.governance, preview_sender) if preview_sender else None
+    execution_plan = None
 
     warnings: list[str] = []
     if not inspection.in_configured_factory:
@@ -524,19 +508,29 @@ def enable_tokens(
     if not eligible:
         status = "noop"
     else:
+        try:
+            execution_plan = enabler.build_execution_plan(
+                inspection=inspection,
+                tokens=selected_addresses,
+                caller_address=preview_sender,
+            )
+        except RuntimeError as exc:
+            warnings.append(str(exc))
+            status = "error"
+
+    if status == "ok" and execution_plan is not None:
         prompt = (
             "Preview failed. Send enable-tokens transaction anyway?"
-            if preview is not None and not preview.call_succeeded
+            if not execution_plan.call_succeeded
             else "Send enable-tokens transaction?"
         )
         if no_confirmation or typer.confirm(prompt, default=False):
             if exec_ctx.signer is None:
                 raise SystemExit("Signer is required for enable-tokens execution.")
-            tx_hash, tx_gas_estimate = enabler.send_execute_transaction(
+            tx_hash, tx_gas_estimate = enabler.send_enable_transaction(
                 signer=exec_ctx.signer,
-                trade_handler_address=inspection.governance,
-                commands=commands,
-                state=state,
+                inspection=inspection,
+                tokens=selected_addresses,
             )
             tx_broadcast_at = utcnow_iso()
         else:
@@ -548,11 +542,11 @@ def enable_tokens(
         "discovery_notes": discovery.notes,
         "probes": [asdict(probe) for probe in probes],
         "selected_tokens": selected_addresses,
-        "preview": asdict(preview) if preview is not None else None,
+        "execution_target": execution_plan.to_address if execution_plan is not None else None,
+        "execution_preview": asdict(execution_plan) if execution_plan is not None else None,
         "preview_sender": preview_sender,
-        "preview_sender_authorized": preview_authorized,
-        "commands_count": len(commands),
-        "state_slots": len(state),
+        "preview_sender_authorized": execution_plan.sender_authorized if execution_plan is not None else None,
+        "authorization_target": execution_plan.authorization_target if execution_plan is not None else None,
         "tx_hash": tx_hash,
         "tx_gas_estimate": tx_gas_estimate,
         "tx_sender": preview_sender,
@@ -573,27 +567,27 @@ def enable_tokens(
             typer.echo()
         typer.echo(f"Discovered {len(discovery.tokens_by_address)} unique token candidate(s).")
         _print_probe_table(probes)
-        typer.echo("Wei-roll plan:")
-        typer.echo(f"  enable calls  {len(selected_addresses)}")
-        typer.echo(f"  commands      {len(commands)}")
-        typer.echo(f"  state slots   {len(state)}")
-        typer.echo()
-        if preview is not None:
+        if execution_plan is not None:
+            typer.echo("Execution plan:")
+            typer.echo(f"  target        {to_checksum_address(execution_plan.to_address)}")
             if preview_sender:
                 typer.echo(
-                    "Preview sender mech authorization: "
-                    f"{'yes' if preview_authorized else 'no'} ({to_checksum_address(preview_sender)})"
+                    "  keeper auth   "
+                    f"{'yes' if execution_plan.sender_authorized else 'no'} ({to_checksum_address(preview_sender)})"
                 )
             else:
-                typer.echo("Preview sender mech authorization: skipped")
-            typer.echo("Preview:")
-            typer.echo(f"  execute call  {'ok' if preview.call_succeeded else 'failed'}")
-            typer.echo(f"  gas estimate  {preview.gas_estimate if preview.gas_estimate is not None else 'unavailable'}")
-            if preview.error_message:
-                typer.echo(f"  detail        {preview.error_message}")
+                typer.echo("  keeper auth   skipped")
+            typer.echo(f"  enableTokens  {'ok' if execution_plan.call_succeeded else 'failed'}")
+            typer.echo(
+                f"  gas estimate  {execution_plan.gas_estimate if execution_plan.gas_estimate is not None else 'unavailable'}"
+            )
+            if execution_plan.error_message:
+                typer.echo(f"  detail        {execution_plan.error_message}")
             typer.echo()
         if status == "noop" and not eligible:
             typer.echo("No enable() calls need to be queued.")
+        elif status == "error":
+            typer.echo("Unable to prepare enable-tokens transaction.")
         elif status == "noop":
             typer.echo("Aborted before sending.")
         elif tx_hash is not None:

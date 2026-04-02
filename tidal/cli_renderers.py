@@ -290,6 +290,15 @@ def _prepared_action_detail_lines(action_type: str | None, preview: dict[str, An
             lines.append(f"  Tokens:      {selected_label}")
         else:
             lines.append(f"  Tokens:      {len(selected_tokens)} token(s)")
+        execution_target = preview.get("executionTarget")
+        if execution_target:
+            lines.append(f"  Execution:   AuctionKicker {_display_address(execution_target)}")
+        preview_sender = preview.get("previewSender")
+        if preview_sender:
+            lines.append(
+                f"  Keeper auth: {_display_bool(preview.get('previewSenderAuthorized'))} "
+                f"({_display_address(preview_sender)})"
+            )
         return lines
 
     if normalized_action_type == "settle":

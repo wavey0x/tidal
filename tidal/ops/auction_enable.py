@@ -12,10 +12,10 @@ from web3 import Web3
 from tidal.chain.contracts.abis import (
     AUCTION_ABI,
     AUCTION_FACTORY_ABI,
+    AUCTION_KICKER_ABI,
     ERC20_ABI,
     FEE_BURNER_ABI,
     STRATEGY_ABI,
-    TRADE_HANDLER_ABI,
 )
 from tidal.config import MonitoredFeeBurner
 from tidal.constants import CORE_REWARD_TOKENS, YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS, ZERO_ADDRESS
@@ -23,8 +23,6 @@ from tidal.normalizers import normalize_address, short_address, to_decimal_strin
 from tidal.persistence import models
 from tidal.persistence.db import Database
 from tidal.transaction_service.signer import TransactionSigner
-
-from .weiroll import build_enable_calls
 
 
 @dataclass(slots=True)
@@ -72,10 +70,14 @@ class TokenProbe:
 
 
 @dataclass(slots=True)
-class ExecutionPreview:
+class EnableExecutionPlan:
+    to_address: str
+    data: str
     call_succeeded: bool
     gas_estimate: int | None
     error_message: str | None = None
+    sender_authorized: bool | None = None
+    authorization_target: str | None = None
 
 
 def format_probe_reason(reason: str) -> str:
@@ -416,35 +418,41 @@ class AuctionTokenEnabler:
 
         return probes
 
-    def build_enable_plan(
+    def build_execution_plan(
         self,
         *,
         inspection: AuctionInspection,
         tokens: list[str],
-    ) -> tuple[list[bytes], list[bytes]]:
-        return build_enable_calls(inspection.auction_address, tokens)
-
-    def preview_execution(
-        self,
-        *,
-        trade_handler_address: str,
-        commands: list[bytes],
-        state: list[bytes],
         caller_address: str | None,
-    ) -> ExecutionPreview:
+    ) -> EnableExecutionPlan:
+        if not inspection.governance_matches_required:
+            raise RuntimeError(
+                "auction governance does not match the configured Yearn trade handler; "
+                "enable-tokens only supports standard Yearn auctions via AuctionKicker"
+            )
+        kicker_address = self._require_auction_kicker_address()
+        enable_fn = self._enable_tokens_function(
+            kicker_address=kicker_address,
+            inspection=inspection,
+            tokens=tokens,
+        )
+
         if not caller_address:
-            return ExecutionPreview(
+            return EnableExecutionPlan(
+                to_address=kicker_address,
+                data=enable_fn._encode_transaction_data(),
                 call_succeeded=False,
                 gas_estimate=None,
-                error_message="no caller address provided for execute() preview",
+                error_message="no caller address provided for enableTokens() preview",
+                sender_authorized=None,
+                authorization_target=kicker_address,
             )
 
         caller_address = normalize_address(caller_address)
-        trade_handler = self._trade_handler_contract(trade_handler_address)
-        execute_fn = trade_handler.functions.execute(commands, state)
+        sender_authorized = self.is_authorized_kicker(kicker_address, caller_address)
 
         try:
-            execute_fn.call({"from": to_checksum_address(caller_address)})
+            enable_fn.call({"from": to_checksum_address(caller_address)})
             call_succeeded = True
             error_message = None
         except Exception as exc:  # noqa: BLE001
@@ -452,39 +460,55 @@ class AuctionTokenEnabler:
             error_message = str(exc)
 
         try:
-            tx = execute_fn.build_transaction({"from": to_checksum_address(caller_address)})
+            tx = enable_fn.build_transaction({"from": to_checksum_address(caller_address)})
             gas_estimate = int(self.w3.eth.estimate_gas(tx))
         except Exception as exc:  # noqa: BLE001
             gas_estimate = None
             if error_message is None:
                 error_message = str(exc)
 
-        return ExecutionPreview(
+        return EnableExecutionPlan(
+            to_address=kicker_address,
+            data=enable_fn._encode_transaction_data(),
             call_succeeded=call_succeeded,
             gas_estimate=gas_estimate,
             error_message=error_message,
+            sender_authorized=sender_authorized,
+            authorization_target=kicker_address,
         )
 
-    def is_authorized_mech(self, trade_handler_address: str, caller_address: str) -> bool:
-        trade_handler = self._trade_handler_contract(trade_handler_address)
-        return bool(trade_handler.functions.mechs(to_checksum_address(caller_address)).call())
+    def is_authorized_kicker(self, kicker_address: str, caller_address: str) -> bool:
+        kicker = self._auction_kicker_contract(kicker_address)
+        checksum_caller = to_checksum_address(normalize_address(caller_address))
+        owner = normalize_address(kicker.functions.owner().call())
+        if normalize_address(owner) == normalize_address(caller_address):
+            return True
+        return bool(kicker.functions.keeper(checksum_caller).call())
 
-    def send_execute_transaction(
+    def send_enable_transaction(
         self,
         *,
         signer: TransactionSigner,
-        trade_handler_address: str,
-        commands: list[bytes],
-        state: list[bytes],
+        inspection: AuctionInspection,
+        tokens: list[str],
     ) -> tuple[str, int]:
-        if not self.is_authorized_mech(trade_handler_address, signer.address):
+        kicker_address = self._require_auction_kicker_address()
+        if not inspection.governance_matches_required:
             raise RuntimeError(
-                f"{to_checksum_address(signer.address)} is not an authorized mech on "
-                f"{to_checksum_address(trade_handler_address)}"
+                "auction governance does not match the configured Yearn trade handler; "
+                "enable-tokens only supports standard Yearn auctions via AuctionKicker"
+            )
+        if not self.is_authorized_kicker(kicker_address, signer.address):
+            raise RuntimeError(
+                f"{to_checksum_address(signer.address)} is not an authorized keeper on "
+                f"{to_checksum_address(kicker_address)}"
             )
 
-        trade_handler = self._trade_handler_contract(trade_handler_address)
-        execute_fn = trade_handler.functions.execute(commands, state)
+        enable_fn = self._enable_tokens_function(
+            kicker_address=kicker_address,
+            inspection=inspection,
+            tokens=tokens,
+        )
 
         latest_block = self.w3.eth.get_block("latest")
         base_fee = int(latest_block.get("baseFeePerGas") or 0)
@@ -499,7 +523,7 @@ class AuctionTokenEnabler:
             max_fee = int(self.w3.eth.gas_price)
             priority_fee = 0
 
-        tx = execute_fn.build_transaction(
+        tx = enable_fn.build_transaction(
             {
                 "from": signer.checksum_address,
                 "chainId": int(self.w3.eth.chain_id),
@@ -523,11 +547,36 @@ class AuctionTokenEnabler:
             abi=AUCTION_ABI,
         )
 
-    def _trade_handler_contract(self, trade_handler_address: str):
+    def _auction_kicker_contract(self, kicker_address: str):
         return self.w3.eth.contract(
-            address=to_checksum_address(normalize_address(trade_handler_address)),
-            abi=TRADE_HANDLER_ABI,
+            address=to_checksum_address(normalize_address(kicker_address)),
+            abi=AUCTION_KICKER_ABI,
         )
+
+    def _enable_tokens_function(
+        self,
+        *,
+        kicker_address: str,
+        inspection: AuctionInspection,
+        tokens: list[str],
+    ):
+        checksum_tokens = [to_checksum_address(normalize_address(token)) for token in tokens]
+        if not checksum_tokens:
+            raise RuntimeError("no eligible tokens to enable")
+        contract = self._auction_kicker_contract(kicker_address)
+        return contract.functions.enableTokens(
+            to_checksum_address(inspection.auction_address),
+            checksum_tokens,
+        )
+
+    def _require_auction_kicker_address(self) -> str:
+        raw_value = str(getattr(self.settings, "auction_kicker_address", "") or "").strip()
+        if not raw_value:
+            raise RuntimeError("auction_kicker_address is not configured")
+        kicker_address = normalize_address(raw_value)
+        if kicker_address == ZERO_ADDRESS:
+            raise RuntimeError("auction_kicker_address is not configured")
+        return kicker_address
 
     def _read_strategy_want(self, strategy_address: str) -> str | None:
         contract = self.w3.eth.contract(

@@ -14,6 +14,7 @@ contract AuctionKicker {
     bytes4 internal constant SETTLE_SELECTOR = bytes4(keccak256("settle(address)"));
     bytes4 internal constant SWEEP_SELECTOR = bytes4(keccak256("sweep(address)"));
     bytes4 internal constant KICK_SELECTOR = bytes4(keccak256("kick(address)"));
+    bytes4 internal constant ENABLE_SELECTOR = bytes4(keccak256("enable(address)"));
     address public constant tradeHandler = 0xb634316E06cC0B358437CbadD4dC94F1D3a92B3b;
 
     event OwnerUpdated(address indexed owner);
@@ -151,6 +152,30 @@ contract AuctionKicker {
 
         ITradeHandler(tradeHandler).execute(commands, state);
         emit SweepAndSettled(auction, sellToken);
+    }
+
+    function enableTokens(address auction, address[] calldata sellTokens) external onlyKeeperOrOwner {
+        require(sellTokens.length != 0, "no tokens");
+        require(IAuction(auction).governance() == tradeHandler, "governance mismatch");
+        require(sellTokens.length <= uint256(type(uint8).max) + 1, "too many tokens");
+
+        bytes[] memory state = new bytes[](sellTokens.length);
+        bytes32[] memory commands = new bytes32[](sellTokens.length);
+
+        for (uint256 i = 0; i < sellTokens.length; i++) {
+            address sellToken = sellTokens[i];
+            require(sellToken != address(0), "zero token");
+            state[i] = abi.encode(sellToken);
+            commands[i] = WeiRollCommandLib.cmdCall(
+                ENABLE_SELECTOR,
+                uint8(i),
+                WeiRollCommandLib.ARG_UNUSED,
+                WeiRollCommandLib.ARG_UNUSED,
+                auction
+            );
+        }
+
+        ITradeHandler(tradeHandler).execute(commands, state);
     }
 
     function _validateKick(address source, address auction, address sellToken, address wantToken, uint256 startingPrice)

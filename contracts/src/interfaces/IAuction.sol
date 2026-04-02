@@ -2,8 +2,10 @@
 pragma solidity ^0.8.20;
 
 interface IAuction {
+    function governance() external view returns (address);
     function want() external view returns (address);
     function receiver() external view returns (address);
+    function getAllEnabledAuctions() external view returns (address[] memory);
     function startingPrice() external view returns (uint256);
     function setStartingPrice(uint256 _startingPrice) external;
     function minimumPrice() external view returns (uint256);

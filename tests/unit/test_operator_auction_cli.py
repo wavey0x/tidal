@@ -57,9 +57,11 @@ class _EnableTokensClient:
                         }
                     ],
                     "selectedTokens": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-                    "commandsCount": 1,
-                    "stateSlots": 2,
-                    "preview": {
+                    "executionTarget": "0x846475a1b97ac57861813206749c1b0f592383ef",
+                    "previewSender": payload["sender"],
+                    "previewSenderAuthorized": True,
+                    "authorizationTarget": "0x846475a1b97ac57861813206749c1b0f592383ef",
+                    "executionPreview": {
                         "call_succeeded": False,
                         "gas_estimate": 215036,
                         "error_message": "execution reverted: !authorized",
@@ -68,7 +70,7 @@ class _EnableTokensClient:
                 "transactions": [
                     {
                         "operation": "enable-tokens",
-                        "to": "0xb634316e06cc0b358437cbadd4dc94f1d3a92b3b",
+                        "to": "0x846475a1b97ac57861813206749c1b0f592383ef",
                         "data": "0xdeadbeef",
                         "value": "0x0",
                         "chainId": 1,
@@ -203,6 +205,8 @@ def test_operator_auction_enable_tokens_uses_styled_submission_flow(tmp_path, mo
     assert "Review details" in result.output
     assert "Auction:" in result.output
     assert "Tokens:" in result.output
+    assert "Execution:" in result.output
+    assert "Keeper auth:" in result.output
     assert "Warnings" in result.output
     assert "Submitting transaction..." in result.output
     assert "Confirmed" in result.output
@@ -248,6 +252,62 @@ def test_operator_auction_enable_tokens_noop_skips_prepared_panel(tmp_path, monk
     assert "Prepared action" not in result.output
     assert "No Transaction Prepared" in result.output
     assert "No transaction was prepared." in result.output
+
+
+class _ErrorEnableTokensClient:
+    def __enter__(self) -> "_ErrorEnableTokensClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        del exc_type, exc, tb
+
+    def prepare_enable_tokens(self, auction_address: str, payload: dict[str, object]) -> dict[str, object]:
+        del auction_address, payload
+        return {
+            "status": "error",
+            "warnings": ["governance mismatch"],
+            "data": {
+                "preview": {},
+                "transactions": [],
+            },
+        }
+
+
+def test_operator_auction_enable_tokens_error_renders_failure_panel(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _ErrorEnableTokensClient()
+
+    monkeypatch.setattr(
+        operator_auction_cli_module.CLIContext,
+        "verify_authenticated_api_access",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        operator_auction_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_auction_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(signer=None, sender=None),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        operator_app,
+        [
+            "auction",
+            "enable-tokens",
+            "0xe92af59d00becd5f70d2ba11ae1a74751503a185",
+            "--config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Preparation Failed" in result.output
+    assert "governance mismatch" in result.output
 
 
 def test_operator_auction_settle_noop_shows_reason_and_price_state(tmp_path, monkeypatch) -> None:

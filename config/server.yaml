@@ -3,8 +3,6 @@
 # Set TIDAL_HOME in the service environment if you want mutable state outside the repo checkout.
 
 chain_id: 1
-tidal_api_host: "0.0.0.0"
-tidal_api_port: 8787
 tidal_api_receipt_reconcile_interval_seconds: 30
 tidal_api_receipt_reconcile_threshold_seconds: 60
 tidal_api_cors_allowed_origins: []
@@ -36,13 +34,10 @@ multicall_auction_batch_calls: 100
 auction_factory_address: "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
 
 price_refresh_enabled: true
-token_price_agg_base_url: https://prices.wavey.info
 price_timeout_seconds: 10
 price_retry_attempts: 3
 price_concurrency: 10
 price_delay_seconds: 0
-auctionscan_base_url: https://auctionscan.info
-auctionscan_api_base_url: https://auctionscan.info/api
 auctionscan_recheck_seconds: 90
 
 monitored_fee_burners:

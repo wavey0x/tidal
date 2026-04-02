@@ -7,6 +7,11 @@ def _clear_runtime_env(monkeypatch) -> None:
     for key in (
         "RPC_URL",
         "DB_PATH",
+        "TIDAL_API_HOST",
+        "TIDAL_API_PORT",
+        "TOKEN_PRICE_AGG_BASE_URL",
+        "AUCTIONSCAN_BASE_URL",
+        "AUCTIONSCAN_API_BASE_URL",
         "TXN_KEYSTORE_PATH",
         "TXN_KEYSTORE_PASSPHRASE",
         "TIDAL_HOME",
@@ -149,6 +154,11 @@ kick:
     assert settings.resolved_config_path == config_dir / "server.yaml"
     assert settings.resolved_env_path == server_home / ".env"
     assert settings.rpc_url == "https://server.invalid"
+    assert settings.tidal_api_host == "0.0.0.0"
+    assert settings.tidal_api_port == 8787
+    assert settings.token_price_agg_base_url == "https://prices.wavey.info"
+    assert settings.auctionscan_base_url == "https://auctionscan.info"
+    assert settings.auctionscan_api_base_url == "https://auctionscan.info/api"
     assert settings.kick_config.pricing_policy.default_profile_name == "volatile"
 
 

@@ -60,7 +60,6 @@ Run `tidal-server init-config` to scaffold the tracked server files under `confi
 
 `config/server.yaml` is the authoritative runtime document for:
 
-- API bind settings
 - scanner settings
 - multicall and pricing refresh settings
 - monitored fee burners
@@ -68,6 +67,14 @@ Run `tidal-server init-config` to scaffold the tracked server files under `confi
 - kick pricing, ignore rules, and cooldown policy
 
 Server runtime secrets default to `~/.tidal/server/.env`. For repo-local development, you can also point `TIDAL_ENV_FILE=config/.env`.
+
+Some deployment-wiring values now default in code and do not need `.env` or YAML unless you are overriding them:
+
+- `tidal_api_host = 0.0.0.0`
+- `tidal_api_port = 8787`
+- `token_price_agg_base_url = https://prices.wavey.info`
+- `auctionscan_base_url = https://auctionscan.info`
+- `auctionscan_api_base_url = https://auctionscan.info/api`
 
 Server mutable files default under `~/.tidal/server/`:
 
@@ -143,6 +150,11 @@ These entries drive:
 
 Current defaults from `tidal/config.py` include:
 
+- `tidal_api_host = 0.0.0.0`
+- `tidal_api_port = 8787`
+- `token_price_agg_base_url = https://prices.wavey.info`
+- `auctionscan_base_url = https://auctionscan.info`
+- `auctionscan_api_base_url = https://auctionscan.info/api`
 - `rpc_timeout_seconds = 10`
 - `price_timeout_seconds = 10`
 - `txn_usd_threshold = 100`

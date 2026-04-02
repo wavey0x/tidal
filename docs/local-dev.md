@@ -40,10 +40,18 @@ Put server secrets in `~/.tidal/server/.env`, or set `TIDAL_ENV_FILE=config/.env
 
 The tracked server config already includes:
 
-- scanner and API defaults
+- scanner defaults
 - multicall and pricing settings
 - monitored fee burners
 - the embedded `kick:` policy block
+
+Some deployment-wiring values stay in code by default:
+
+- `tidal_api_host = 0.0.0.0`
+- `tidal_api_port = 8787`
+- `token_price_agg_base_url = https://prices.wavey.info`
+- `auctionscan_base_url = https://auctionscan.info`
+- `auctionscan_api_base_url = https://auctionscan.info/api`
 
 Settings precedence is:
 
@@ -89,7 +97,7 @@ Start the API:
 uv run tidal-server api serve --config config/server.yaml
 ```
 
-By default the API listens on `0.0.0.0:8787`. Override with `TIDAL_API_HOST` and `TIDAL_API_PORT` if needed.
+By default the API listens on `0.0.0.0:8787`. Override with `TIDAL_API_HOST` and `TIDAL_API_PORT`, or add explicit YAML keys, only if needed.
 
 ## Use The CLI Client Against Local API
 

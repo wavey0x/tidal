@@ -86,11 +86,12 @@ tidal-server kick run --config config/server.yaml --no-confirmation --sender 0xY
 
 Common server settings include:
 
-- `tidal_api_host`
-- `tidal_api_port`
 - `scan_concurrency`
 - `monitored_fee_burners`
 - `kick`
+
+The API bind defaults live in code: `tidal_api_host=0.0.0.0` and `tidal_api_port=8787`.
+Set them explicitly only when you need a non-default bind.
 
 Scan auto-settle is not configured in `server.yaml`.
 Enable it explicitly with `--auto-settle` when needed.

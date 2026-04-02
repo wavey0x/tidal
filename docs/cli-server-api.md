@@ -14,7 +14,8 @@ tidal-server api serve --config config/server.yaml
 
 ## Runtime Behavior
 
-The API process reads its bind configuration from `config/server.yaml`, typically:
+The API process binds to `0.0.0.0:8787` by default.
+Override with environment variables or explicit `config/server.yaml` keys only when you need non-default wiring:
 
 - `tidal_api_host`
 - `tidal_api_port`

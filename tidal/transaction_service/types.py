@@ -270,6 +270,7 @@ class SkippedPreparedCandidate:
 
     candidate: KickCandidate
     reason: str
+    result: KickResult | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {

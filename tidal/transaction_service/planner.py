@@ -22,6 +22,7 @@ from tidal.transaction_service.types import (
     KickCandidate,
     KickPlan,
     KickResult,
+    KickStatus,
     PreparedKick,
     PreparedSweepAndSettle,
     SkippedPreparedCandidate,
@@ -54,6 +55,25 @@ def _cooldown_skip_payloads(shortlist) -> list[dict[str, object]]:  # noqa: ANN0
         }
         for decision in shortlist.cooldown_skips
     ]
+
+
+def _prepared_estimate_failure(prepared: PreparedKick, reason: str) -> SkippedPreparedCandidate:
+    return SkippedPreparedCandidate(
+        candidate=prepared.candidate,
+        reason=reason,
+        result=KickResult(
+            kick_tx_id=0,
+            status=KickStatus.ESTIMATE_FAILED,
+            error_message=reason,
+            sell_amount=prepared.sell_amount_str,
+            starting_price=prepared.starting_price_str,
+            minimum_price=prepared.minimum_price_str,
+            minimum_quote=prepared.minimum_quote_str,
+            live_balance_raw=prepared.live_balance_raw,
+            usd_value=prepared.usd_value_str,
+            quote_response_json=prepared.quote_response_json,
+        ),
+    )
 
 
 class KickPlanner:
@@ -148,7 +168,9 @@ class KickPlanner:
             )
             if isinstance(result, KickResult):
                 reason = result.error_message or "candidate was skipped during prepare"
-                plan.skipped_during_prepare.append(SkippedPreparedCandidate(candidate=candidate, reason=reason))
+                plan.skipped_during_prepare.append(
+                    SkippedPreparedCandidate(candidate=candidate, reason=reason, result=result)
+                )
                 continue
             if isinstance(result, PreparedSweepAndSettle):
                 intent = self._build_sweep_and_settle_intent(result, sender=sender)
@@ -168,9 +190,7 @@ class KickPlanner:
                 recovered_kick, tx_intent, warning = await self._prepare_single_kick_intent(prepared_kick, sender=sender)
                 if warning is not None:
                     plan.warnings.append(warning)
-                    plan.skipped_during_prepare.append(
-                        SkippedPreparedCandidate(candidate=prepared_kick.candidate, reason=warning)
-                    )
+                    plan.skipped_during_prepare.append(_prepared_estimate_failure(prepared_kick, warning))
                     continue
                 assert recovered_kick is not None and tx_intent is not None
                 plan.kick_operations.append(recovered_kick)
@@ -181,9 +201,7 @@ class KickPlanner:
             prepared_kick, tx_intent, warning = await self._prepare_single_kick_intent(prepared_kicks[0], sender=sender)
             if warning is not None:
                 plan.warnings.append(warning)
-                plan.skipped_during_prepare.append(
-                    SkippedPreparedCandidate(candidate=prepared_kicks[0].candidate, reason=warning)
-                )
+                plan.skipped_during_prepare.append(_prepared_estimate_failure(prepared_kicks[0], warning))
                 return plan
             assert prepared_kick is not None and tx_intent is not None
             plan.kick_operations.append(prepared_kick)
@@ -203,7 +221,7 @@ class KickPlanner:
         if not _is_active_auction_error(batch_warning):
             plan.warnings.append(batch_warning)
             plan.skipped_during_prepare.extend(
-                SkippedPreparedCandidate(candidate=prepared.candidate, reason=batch_warning)
+                _prepared_estimate_failure(prepared, batch_warning)
                 for prepared in prepared_kicks
             )
             return plan
@@ -216,7 +234,7 @@ class KickPlanner:
             recovered_kick, tx_intent, warning = await self._prepare_single_kick_intent(prepared, sender=sender)
             if warning is not None:
                 individual_warnings.append(warning)
-                individual_skips.append(SkippedPreparedCandidate(candidate=prepared.candidate, reason=warning))
+                individual_skips.append(_prepared_estimate_failure(prepared, warning))
                 continue
             assert recovered_kick is not None and tx_intent is not None
             successful_prepared.append(recovered_kick)
@@ -225,7 +243,7 @@ class KickPlanner:
         if not successful_intents:
             plan.warnings.append(batch_warning)
             plan.skipped_during_prepare.extend(
-                SkippedPreparedCandidate(candidate=prepared.candidate, reason=batch_warning)
+                _prepared_estimate_failure(prepared, batch_warning)
                 for prepared in prepared_kicks
             )
             return plan

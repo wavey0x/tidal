@@ -7,6 +7,7 @@ import fcntl
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import structlog
@@ -76,7 +77,7 @@ class TxnService:
         self.session = session
         self.kicker = kicker
         self.preparer = preparer
-        self.tx_builder = None
+        self.tx_builder = getattr(kicker, "tx_builder", None)
         self.executor = executor
         self.planner = planner
         self.txn_run_repository = txn_run_repository
@@ -89,6 +90,54 @@ class TxnService:
         self.max_batch_kick_size = max_batch_kick_size
         self.batch_kick_delay_seconds = batch_kick_delay_seconds
         self.execution_report_fn = execution_report_fn
+
+    def _persist_prepare_failure(self, run_id: str, candidate: KickCandidate, result: KickResult) -> KickResult:
+        if self.executor is None or result.status == KickStatus.SKIP:
+            return result
+        fail_fn = getattr(self.executor, "_fail", None)
+        if not callable(fail_fn):
+            return result
+        error_message = result.error_message or "candidate preparation failed"
+        persisted = fail_fn(
+            run_id,
+            candidate,
+            utcnow_iso(),
+            status=result.status,
+            error_message=error_message,
+            sell_amount=result.sell_amount,
+            starting_price=result.starting_price,
+            minimum_price=result.minimum_price,
+            minimum_quote=result.minimum_quote,
+            usd_value=result.usd_value,
+            quote_response_json=result.quote_response_json,
+        )
+        return replace(
+            persisted,
+            live_balance_raw=result.live_balance_raw,
+            tx_hash=result.tx_hash,
+            gas_used=result.gas_used,
+            gas_price_gwei=result.gas_price_gwei,
+            block_number=result.block_number,
+            quote_response_json=result.quote_response_json,
+            execution_report=result.execution_report,
+        )
+
+    def _apply_prepare_result(
+        self,
+        *,
+        run_id: str,
+        candidate: KickCandidate,
+        result: KickResult,
+        failed_messages: list[str],
+    ) -> tuple[int, int]:
+        result = self._persist_prepare_failure(run_id, candidate, result)
+        if result.status == KickStatus.SKIP:
+            return -1, 0
+        if result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+            if result.error_message:
+                failed_messages.append(result.error_message)
+            return 0, 1
+        return 0, 0
 
     def _emit_execution_report(self, result: KickResult) -> None:
         report = result.execution_report
@@ -215,10 +264,21 @@ class TxnService:
                     candidates=_candidate_order_log(plan.ranked_candidates),
                 )
 
-            kicks_attempted = len(plan.ranked_candidates) - len(plan.skipped_during_prepare)
+            kicks_attempted = len(plan.ranked_candidates)
             kicks_succeeded = 0
             kicks_failed = 0
             failed_messages: list[str] = []
+            for skipped in plan.skipped_during_prepare:
+                if skipped.result is None:
+                    continue
+                attempt_delta, failure_delta = self._apply_prepare_result(
+                    run_id=run_id,
+                    candidate=skipped.candidate,
+                    result=skipped.result,
+                    failed_messages=failed_messages,
+                )
+                kicks_attempted += attempt_delta
+                kicks_failed += failure_delta
 
             for prepared_operation in plan.sweep_operations:
                 exec_result = await executor.execute_sweep_and_settle(prepared_operation, run_id)
@@ -395,12 +455,14 @@ class TxnService:
                 inspection = (await preparer.inspect_candidates([candidate])).get(_candidate_key(candidate))
                 result = await preparer.prepare_kick(candidate, run_id, inspection=inspection)
                 if isinstance(result, KickResult):
-                    if result.status == KickStatus.SKIP:
-                        kicks_attempted -= 1
-                    elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                        kicks_failed += 1
-                        if result.error_message:
-                            failed_messages.append(result.error_message)
+                    attempt_delta, failure_delta = self._apply_prepare_result(
+                        run_id=run_id,
+                        candidate=candidate,
+                        result=result,
+                        failed_messages=failed_messages,
+                    )
+                    kicks_attempted += attempt_delta
+                    kicks_failed += failure_delta
                     continue
                 if isinstance(result, PreparedSweepAndSettle):
                     exec_result = await executor.execute_sweep_and_settle(result, run_id)
@@ -417,7 +479,7 @@ class TxnService:
                     kicks_attempted -= 1
         elif live and candidates_to_prepare:
             # Batch: prepare all in groups, then execute as one batch transaction.
-            prepare_results: list[PreparedKick | PreparedSweepAndSettle | KickResult] = []
+            prepare_results: list[tuple[KickCandidate, PreparedKick | PreparedSweepAndSettle | KickResult]] = []
             for batch_start in range(0, len(candidates_to_prepare), self.max_batch_kick_size):
                 if batch_start > 0:
                     await asyncio.sleep(self.batch_kick_delay_seconds)
@@ -426,15 +488,17 @@ class TxnService:
                 batch_results = await asyncio.gather(
                     *(preparer.prepare_kick(c, run_id, inspection=inspections.get(_candidate_key(c))) for c in group)
                 )
-                prepare_results.extend(batch_results)
-            for result in prepare_results:
+                prepare_results.extend(zip(group, batch_results, strict=True))
+            for candidate, result in prepare_results:
                 if isinstance(result, KickResult):
-                    if result.status == KickStatus.SKIP:
-                        kicks_attempted -= 1
-                    elif result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                        kicks_failed += 1
-                        if result.error_message:
-                            failed_messages.append(result.error_message)
+                    attempt_delta, failure_delta = self._apply_prepare_result(
+                        run_id=run_id,
+                        candidate=candidate,
+                        result=result,
+                        failed_messages=failed_messages,
+                    )
+                    kicks_attempted += attempt_delta
+                    kicks_failed += failure_delta
                 elif isinstance(result, PreparedSweepAndSettle):
                     prepared_sweep_and_settle.append(result)
                 else:

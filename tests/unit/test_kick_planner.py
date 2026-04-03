@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tidal.transaction_service.planner import KickPlanner
-from tidal.transaction_service.types import KickCandidate, KickRecoveryPlan, PreparedKick, TxIntent
+from tidal.transaction_service.types import KickCandidate, KickRecoveryPlan, KickStatus, PreparedKick, TxIntent
 
 
 def _settings() -> SimpleNamespace:
@@ -236,3 +236,5 @@ async def test_kick_planner_falls_back_from_batch_to_individual_intents() -> Non
     assert plan.warnings == ["Gas estimate failed: call to 0x4444…4444 failed: not enabled"]
     assert [skip.candidate.token_address for skip in plan.skipped_during_prepare] == [candidate_b.token_address]
     assert plan.skipped_during_prepare[0].reason == "Gas estimate failed: call to 0x4444…4444 failed: not enabled"
+    assert plan.skipped_during_prepare[0].result is not None
+    assert plan.skipped_during_prepare[0].result.status == KickStatus.ESTIMATE_FAILED

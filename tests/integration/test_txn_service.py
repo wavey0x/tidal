@@ -16,9 +16,11 @@ from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy
 from tidal.transaction_service.service import TxnService
 from tidal.transaction_service.types import (
     KickCandidate,
+    KickPlan,
     KickResult,
     KickStatus,
     PreparedKick,
+    SkippedPreparedCandidate,
     TransactionExecutionReport,
 )
 
@@ -338,6 +340,101 @@ async def test_live_skip_below_threshold_not_counted(session):
 
     assert result.kicks_attempted == 0
     assert result.kicks_succeeded == 0
+
+
+@pytest.mark.asyncio
+async def test_live_planner_prepare_error_counts_as_failure_and_persists(session):
+    _seed_candidate(session)
+    txn_run_repo = TxnRunRepository(session)
+    kick_tx_repo = KickTxRepository(session)
+    candidate = KickCandidate(
+        source_type="strategy",
+        source_address="0xstrategy1",
+        token_address="0xtoken1",
+        auction_address="0xauction1",
+        normalized_balance="1000",
+        price_usd="2.5",
+        want_address="0xwant1",
+        usd_value=2500.0,
+        decimals=18,
+    )
+    planner = AsyncMock()
+    planner.plan = AsyncMock(
+        return_value=KickPlan(
+            source_type=None,
+            source_address=None,
+            auction_address=None,
+            token_address=None,
+            limit=None,
+            eligible_count=1,
+            selected_count=1,
+            ready_count=1,
+            ranked_candidates=[candidate],
+            skipped_during_prepare=[
+                SkippedPreparedCandidate(
+                    candidate=candidate,
+                    reason="quote API failed: upstream timeout",
+                    result=KickResult(
+                        kick_tx_id=0,
+                        status=KickStatus.ERROR,
+                        error_message="quote API failed: upstream timeout",
+                    ),
+                )
+            ],
+        )
+    )
+    executor = MagicMock()
+
+    def _persist_fail(run_id, candidate, now_iso, *, status, error_message, **kwargs):  # noqa: ANN001
+        kick_tx_id = kick_tx_repo.insert(
+            {
+                "run_id": run_id,
+                "operation_type": "kick",
+                "source_type": candidate.source_type,
+                "source_address": candidate.source_address,
+                "strategy_address": candidate.source_address,
+                "token_address": candidate.token_address,
+                "auction_address": candidate.auction_address,
+                "status": status.value if isinstance(status, KickStatus) else status,
+                "created_at": now_iso,
+                "error_message": error_message,
+                "price_usd": candidate.price_usd,
+                "want_address": candidate.want_address,
+                "usd_value": kwargs.get("usd_value"),
+            }
+        )
+        return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
+
+    executor._fail = MagicMock(side_effect=_persist_fail)
+
+    service = TxnService(
+        session=session,
+        kicker=MagicMock(),
+        executor=executor,
+        planner=planner,
+        txn_run_repository=txn_run_repo,
+        kick_tx_repository=kick_tx_repo,
+        usd_threshold=100.0,
+        max_data_age_seconds=600,
+        cooldown_policy=CooldownPolicy(default_minutes=60, auction_token_overrides_minutes={}),
+        ignore_policy=IgnorePolicy(
+            ignored_sources=frozenset(),
+            ignored_auctions=frozenset(),
+            ignored_auction_tokens=frozenset(),
+        ),
+        lock_path=Path("/tmp/test_txn_daemon.lock"),
+    )
+
+    result = await service.run_once(live=True)
+
+    assert result.status == "FAILED"
+    assert result.kicks_attempted == 1
+    assert result.kicks_failed == 1
+    executor._fail.assert_called_once()
+    rows = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "ERROR"
+    assert rows[0]["error_message"] == "quote API failed: upstream timeout"
 
 
 @pytest.mark.asyncio

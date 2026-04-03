@@ -13,7 +13,7 @@ from tidal.api.services.action_prepare import (
 )
 from tidal.ops.auction_enable import AuctionInspection, SourceResolution, TokenDiscovery, TokenProbe
 from tidal.transaction_service.planner import KickPlanner
-from tidal.transaction_service.types import KickCandidate, KickRecoveryPlan, PreparedKick, TxIntent
+from tidal.transaction_service.types import KickCandidate, PreparedKick, TxIntent
 
 
 class _FailingWeb3Client:

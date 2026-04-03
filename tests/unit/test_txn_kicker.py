@@ -34,7 +34,6 @@ from tidal.transaction_service.types import (
     KickStatus,
     PreparedKick,
     PreparedSweepAndSettle,
-    TransactionExecutionReport,
 )
 
 

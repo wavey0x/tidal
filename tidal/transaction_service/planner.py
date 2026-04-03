@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from eth_utils import to_checksum_address
 from tidal.config import Settings
 from tidal.persistence.repositories import KickTxRepository
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
@@ -86,6 +87,10 @@ class KickPlanner:
         candidate_sorter: Callable[[list[KickCandidate]], list[KickCandidate]] | None = None,
         estimate_transaction_fn: Callable[..., Awaitable[tuple[int | None, int | None, str | None]]] | None = None,
     ) -> None:
+        if preparer is None:
+            raise ValueError("KickPlanner requires a preparer.")
+        if tx_builder is None:
+            raise ValueError("KickPlanner requires a tx builder.")
         self.session = session
         self.settings = settings
         self.preparer = preparer

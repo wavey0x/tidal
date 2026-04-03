@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -170,7 +171,7 @@ def _build_txn_service(session, *, preparer=None, executor=None, planner=None, l
         executor.execute_sweep_and_settle = AsyncMock()
 
     if lock_path is None:
-        lock_path = Path("/tmp/test_txn_daemon.lock")
+        lock_path = Path(f"/tmp/test_txn_daemon_{uuid.uuid4().hex}.lock")
 
     return TxnService(
         session=session,
@@ -436,7 +437,7 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
             ignored_auctions=frozenset(),
             ignored_auction_tokens=frozenset(),
         ),
-        lock_path=Path("/tmp/test_txn_daemon.lock"),
+        lock_path=Path(f"/tmp/test_txn_daemon_{uuid.uuid4().hex}.lock"),
     )
 
     result = await service.run_once(live=True)

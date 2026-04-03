@@ -108,6 +108,54 @@ class _FakeKickDeps:
 
 
 @pytest.mark.asyncio
+async def test_kick_planner_uses_direct_web3_estimation_path() -> None:
+    candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
+    prepared = _prepared(candidate)
+    shortlist = SimpleNamespace(
+        selected_candidates=[candidate],
+        eligible_candidates=[candidate],
+        ignored_skips=[],
+        cooldown_skips=[],
+        deferred_same_auction_count=0,
+        limited_candidates=[],
+    )
+    deps = _FakeKickDeps(prepared_by_token={candidate.token_address: prepared})
+    web3_client = SimpleNamespace(estimate_gas=AsyncMock(return_value=210000))
+
+    planner = KickPlanner(
+        session=object(),
+        settings=_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=object(),  # type: ignore[arg-type]
+        web3_client=web3_client,
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+    )
+
+    plan = await planner.plan(
+        source_type="strategy",
+        source_address=candidate.source_address,
+        auction_address=candidate.auction_address,
+        token_address=candidate.token_address,
+        limit=1,
+        sender="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        run_id="run-direct-web3",
+        batch=True,
+    )
+
+    assert plan.status() == "ok"
+    assert len(plan.tx_intents) == 1
+    assert plan.tx_intents[0].gas_estimate == 210000
+    assert plan.tx_intents[0].gas_limit == 252000
+    web3_client.estimate_gas.assert_awaited_once()
+    estimate_tx = web3_client.estimate_gas.await_args.args[0]
+    assert estimate_tx["from"] == "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+    assert estimate_tx["to"] == "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+    assert estimate_tx["chainId"] == 1
+
+
+@pytest.mark.asyncio
 async def test_kick_planner_recovers_single_candidate_after_active_auction_estimate_failure() -> None:
     candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
     prepared = _prepared(candidate)

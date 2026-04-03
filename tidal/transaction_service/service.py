@@ -72,6 +72,10 @@ class TxnService:
         batch_kick_delay_seconds: float = 5,
         execution_report_fn: Callable[[TransactionExecutionReport], None] | None = None,
     ):
+        if preparer is None:
+            raise ValueError("TxnService requires a preparer.")
+        if executor is None:
+            raise ValueError("TxnService requires an executor.")
         self.session = session
         self.preparer = preparer
         self.executor = executor

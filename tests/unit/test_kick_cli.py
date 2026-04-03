@@ -560,8 +560,8 @@ def test_operator_kick_run_prepare_noop_does_not_repeat_generic_footer(tmp_path,
     assert "Skip" in result.output
     assert "Candidate was skipped during prepare" in result.output
     assert "Attempted Pair: CRV -> USDC" in result.output
-    assert "Source:      Yearn Fee Burner (0x1111…1111)" in result.output
-    assert "Auction:     0x2222222222222222222222222222222222222222" in result.output
+    assert "Source:         Yearn Fee Burner (0x1111…1111)" in result.output
+    assert "Auction:        0x2222222222222222222222222222222222222222" in result.output
     assert "No kick transactions were sent." not in result.output
 
 

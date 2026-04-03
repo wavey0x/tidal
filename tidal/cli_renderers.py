@@ -93,17 +93,21 @@ def render_skip_panel(
     pair_left = token_symbol or "?"
     pair_right = want_symbol or "?"
     lines = [reason]
-    lines.append(f"  Attempted Pair: {pair_left} -> {pair_right}")
+    rows: list[tuple[str, str]] = [("Attempted Pair", f"{pair_left} -> {pair_right}")]
 
     if source_name and source_address and source_name != source_address:
-        lines.append(f"  Source:      {source_name} ({short_address(source_address)})")
+        rows.append(("Source", f"{source_name} ({short_address(source_address)})"))
     elif source_name:
-        lines.append(f"  Source:      {source_name}")
+        rows.append(("Source", source_name))
     elif source_address:
-        lines.append(f"  Source:      {source_address}")
+        rows.append(("Source", source_address))
 
     if auction_address:
-        lines.append(f"  Auction:     {auction_address}")
+        rows.append(("Auction", auction_address))
+
+    prefix_width = max(len(f"  {label}:") for label, _ in rows)
+    for label, value in rows:
+        lines.append(f"{f'  {label}:':<{prefix_width}} {value}")
 
     render_panel("Skip", lines, border_style="yellow")
 

@@ -22,6 +22,7 @@ from tidal.control_plane.client import ControlPlaneClient
 from tidal.control_plane.outbox import ActionReportOutbox
 from tidal.runtime import build_web3_client
 from tidal.time import utcnow_iso
+from tidal.transaction_service.types import TxIntent
 
 
 def render_action_preview(data: dict[str, Any], *, heading: str) -> None:
@@ -122,6 +123,12 @@ def _send_action_report(
             pass
 
 
+def _coerce_tx_intent(tx: TxIntent | dict[str, Any]) -> TxIntent:
+    if isinstance(tx, TxIntent):
+        return tx
+    return TxIntent.from_payload(tx)
+
+
 async def broadcast_prepared_action(
     *,
     settings,
@@ -129,7 +136,7 @@ async def broadcast_prepared_action(
     action_id: str,
     sender: str,
     signer,
-    transactions: list[dict[str, Any]],
+    transactions: list[TxIntent | dict[str, Any]],
     receipt_timeout_seconds: int = 120,
     outbox: ActionReportOutbox | None = None,
     progress_callback: Callable[[str], None] | None = None,
@@ -159,25 +166,26 @@ async def broadcast_prepared_action(
         )
 
         results: list[dict[str, Any]] = []
-        for tx_index, tx in enumerate(transactions):
-            tx_sender = str(tx.get("sender") or sender)
+        intents = [_coerce_tx_intent(tx) for tx in transactions]
+        for tx_index, tx in enumerate(intents):
+            tx_sender = str(tx.sender or sender)
             if tx_sender.lower() != sender.lower():
                 raise RuntimeError(f"prepared sender {tx_sender} does not match local sender {sender}")
 
-            checksum_to = to_checksum_address(str(tx["to"]))
+            checksum_to = to_checksum_address(tx.to)
             value = (
-                int(str(tx.get("value") or "0x0"), 16)
-                if str(tx.get("value") or "0").startswith("0x")
-                else int(tx.get("value") or 0)
+                int(str(tx.value or "0x0"), 16)
+                if str(tx.value or "0").startswith("0x")
+                else int(tx.value or 0)
             )
 
-            gas_limit = tx.get("gasLimit")
+            gas_limit = tx.gas_limit
             if gas_limit is None:
                 gas_limit = await web3_client.estimate_gas(
                     {
                         "from": checksum_sender,
                         "to": checksum_to,
-                        "data": tx["data"],
+                        "data": tx.data,
                         "value": value,
                         "chainId": settings.chain_id,
                     }
@@ -185,7 +193,7 @@ async def broadcast_prepared_action(
 
             full_tx = {
                 "to": checksum_to,
-                "data": tx["data"],
+                "data": tx.data,
                 "value": value,
                 "chainId": settings.chain_id,
                 "gas": int(gas_limit),
@@ -231,12 +239,12 @@ async def broadcast_prepared_action(
                 warning_label=f"control-plane broadcast report for transaction {tx_index + 1}",
             )
             record: dict[str, Any] = {
-                "operation": tx.get("operation"),
+                "operation": tx.operation,
                 "sender": sender,
                 "txHash": tx_hash,
                 "broadcastAt": broadcast_at,
                 "chainId": settings.chain_id,
-                "gasEstimate": tx.get("gasEstimate"),
+                "gasEstimate": tx.gas_estimate,
             }
             try:
                 receipt = await web3_client.get_transaction_receipt(tx_hash, timeout_seconds=receipt_timeout_seconds)
@@ -287,7 +295,7 @@ def execute_prepared_action_sync(
     action_id: str,
     sender: str,
     signer,
-    transactions: list[dict[str, Any]],
+    transactions: list[TxIntent | dict[str, Any]],
     outbox: ActionReportOutbox | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:  # noqa: ANN001

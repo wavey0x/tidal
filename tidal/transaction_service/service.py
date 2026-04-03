@@ -60,6 +60,7 @@ class TxnService:
         *,
         session,
         kicker: AuctionKicker,
+        planner=None,
         txn_run_repository: TxnRunRepository,
         kick_tx_repository: KickTxRepository,
         usd_threshold: float,
@@ -73,6 +74,7 @@ class TxnService:
     ):
         self.session = session
         self.kicker = kicker
+        self.planner = planner
         self.txn_run_repository = txn_run_repository
         self.kick_tx_repository = kick_tx_repository
         self.usd_threshold = usd_threshold
@@ -92,6 +94,18 @@ class TxnService:
             self.execution_report_fn(report)
         except Exception as exc:  # noqa: BLE001
             logger.warning("txn_execution_report_failed", error=str(exc), tx_hash=report.tx_hash)
+
+    def _planner_sender(self) -> str | None:
+        signer = getattr(self.kicker, "signer", None)
+        if signer is None:
+            return None
+        checksum_address = getattr(signer, "checksum_address", None)
+        if isinstance(checksum_address, str):
+            return checksum_address
+        address = getattr(signer, "address", None)
+        if isinstance(address, str):
+            return address
+        return None
 
     async def run_once(
         self,
@@ -158,6 +172,134 @@ class TxnService:
             "kicks_failed": 0,
             "live": 1 if live else 0,
         })
+
+        if live and self.planner is not None:
+            plan = await self.planner.plan(
+                source_type=source_type,
+                source_address=source_address,
+                auction_address=auction_address,
+                token_address=None,
+                limit=limit,
+                sender=self._planner_sender(),
+                run_id=run_id,
+                batch=batch,
+            )
+
+            logger.info(
+                "txn_run_started",
+                run_id=run_id,
+                live=live,
+                source_type=source_type,
+                source_address=source_address,
+                auction_address=auction_address,
+                candidates_shortlisted=len(plan.ranked_candidates),
+                candidates_eligible=plan.eligible_count,
+                ignored_count=len(plan.ignored_skips),
+                cooldown_count=len(plan.cooldown_skips),
+                deferred_same_auction_count=plan.deferred_same_auction_count,
+                limited_candidates_count=plan.limited_count,
+            )
+
+            if plan.ranked_candidates:
+                logger.info(
+                    "txn_candidates_ranked",
+                    run_id=run_id,
+                    source_type=source_type,
+                    source_address=source_address,
+                    auction_address=auction_address,
+                    candidates=_candidate_order_log(plan.ranked_candidates),
+                )
+
+            kicks_attempted = len(plan.ranked_candidates) - len(plan.skipped_during_prepare)
+            kicks_succeeded = 0
+            kicks_failed = 0
+            failed_messages: list[str] = []
+
+            for prepared_operation in plan.sweep_operations:
+                exec_result = await self.kicker.execute_sweep_and_settle(prepared_operation, run_id)
+                self._emit_execution_report(exec_result)
+                if exec_result.status == KickStatus.CONFIRMED:
+                    kicks_succeeded += 1
+                elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                    kicks_failed += 1
+                    if exec_result.error_message:
+                        failed_messages.append(exec_result.error_message)
+                elif exec_result.status == KickStatus.USER_SKIPPED:
+                    kicks_attempted -= 1
+
+            kick_intents = [intent for intent in plan.tx_intents if intent.operation == "kick"]
+            if plan.kick_operations:
+                if not batch or len(plan.kick_operations) == 1 or len(kick_intents) != 1:
+                    for prepared_kick in plan.kick_operations:
+                        exec_result = await self.kicker.execute_single(prepared_kick, run_id)
+                        self._emit_execution_report(exec_result)
+                        if exec_result.status == KickStatus.CONFIRMED:
+                            kicks_succeeded += 1
+                        elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                            kicks_failed += 1
+                            if exec_result.error_message:
+                                failed_messages.append(exec_result.error_message)
+                        elif exec_result.status == KickStatus.USER_SKIPPED:
+                            kicks_attempted -= 1
+                else:
+                    exec_results = await self.kicker.execute_batch(plan.kick_operations, run_id)
+                    for exec_result in exec_results:
+                        self._emit_execution_report(exec_result)
+                        if exec_result.status == KickStatus.CONFIRMED:
+                            kicks_succeeded += 1
+                        elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+                            kicks_failed += 1
+                            if exec_result.error_message:
+                                failed_messages.append(exec_result.error_message)
+                        elif exec_result.status == KickStatus.USER_SKIPPED:
+                            kicks_attempted -= 1
+
+            candidates_found = len(plan.ranked_candidates)
+            if kicks_failed > 0 and kicks_succeeded == 0:
+                status = "FAILED"
+            elif kicks_failed > 0:
+                status = "PARTIAL_SUCCESS"
+            else:
+                status = "SUCCESS"
+
+            finished_at = utcnow_iso()
+            self.txn_run_repository.finalize(
+                run_id,
+                finished_at=finished_at,
+                status=status,
+                candidates_found=candidates_found,
+                kicks_attempted=kicks_attempted,
+                kicks_succeeded=kicks_succeeded,
+                kicks_failed=kicks_failed,
+                error_summary=f"{kicks_failed} failures" if kicks_failed else None,
+            )
+
+            logger.info(
+                "txn_run_completed",
+                run_id=run_id,
+                status=status,
+                candidates_found=candidates_found,
+                attempted=kicks_attempted,
+                succeeded=kicks_succeeded,
+                failed=kicks_failed,
+            )
+
+            failure_summary = None
+            if failed_messages:
+                failure_summary = dict(Counter(failed_messages))
+
+            return TxnRunResult(
+                run_id=run_id,
+                status=status,
+                candidates_found=candidates_found,
+                kicks_attempted=kicks_attempted,
+                kicks_succeeded=kicks_succeeded,
+                kicks_failed=kicks_failed,
+                eligible_candidates_found=plan.eligible_count,
+                deferred_same_auction_count=plan.deferred_same_auction_count,
+                limited_candidate_count=plan.limited_count,
+                failure_summary=failure_summary,
+            )
 
         # 2. Shortlist candidates from SQLite.
         shortlist = build_shortlist(

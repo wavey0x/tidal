@@ -213,6 +213,7 @@ def build_txn_service(
 ):
     from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
     from tidal.transaction_service.kicker import AuctionKicker
+    from tidal.transaction_service.planner import KickPlanner
     from tidal.transaction_service.service import TxnService
     from tidal.transaction_service.signer import TransactionSigner
 
@@ -288,12 +289,19 @@ def build_txn_service(
         pricing_policy=kick_config.pricing_policy,
         token_sizing_policy=kick_config.token_sizing_policy,
     )
+    planner = KickPlanner(
+        session=session,
+        settings=settings,
+        kicker=kicker,
+        kick_tx_repository=kick_tx_repository,
+    )
 
     lock_path = default_txn_lock_path()
 
     return TxnService(
         session=session,
         kicker=kicker,
+        planner=planner,
         txn_run_repository=txn_run_repository,
         kick_tx_repository=kick_tx_repository,
         usd_threshold=settings.txn_usd_threshold,

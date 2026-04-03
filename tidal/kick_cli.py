@@ -583,14 +583,14 @@ def kick_run(
                     if exec_ctx.signer is None or exec_ctx.sender is None:
                         raise typer.Exit(code=1)
                     if json_output:
-                        action_records = execute_prepared_action_sync(
-                            settings=cli_ctx.settings,
-                            client=client,
-                            action_id=str(prepared_data["actionId"]),
-                            sender=exec_ctx.sender,
-                            signer=exec_ctx.signer,
-                            transactions=transactions,
-                        )
+                            action_records = execute_prepared_action_sync(
+                                settings=cli_ctx.settings,
+                                client=client,
+                                action_id=str(prepared_data["actionId"]),
+                                sender=exec_ctx.sender,
+                                signer=exec_ctx.signer,
+                                transactions=transactions,
+                            )
                     else:
                         typer.echo()
                         with submission_progress("Submitting transaction...") as update_progress:

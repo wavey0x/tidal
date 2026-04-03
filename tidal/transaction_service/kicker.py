@@ -7,7 +7,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from decimal import ROUND_FLOOR, Decimal
 
 import structlog
 from eth_abi import decode as abi_decode
@@ -46,6 +46,7 @@ from tidal.transaction_service.types import (
     PreparedKick,
     PreparedSweepAndSettle,
     TransactionExecutionReport,
+    TxIntent,
 )
 
 logger = structlog.get_logger(__name__)
@@ -1305,6 +1306,54 @@ class AuctionKicker:
     def _kicker_contract(self) -> tuple[str, object]:
         addr = to_checksum_address(self.auction_kicker_address)
         return addr, self.web3_client.contract(addr, AUCTION_KICKER_ABI)
+
+    def build_single_kick_intent(self, prepared_kick: PreparedKick, *, sender: str | None) -> TxIntent:
+        kicker_address, kicker_contract = self._kicker_contract()
+        if prepared_kick.recovery_plan is None:
+            tx_data = kicker_contract.functions.kick(*self._kick_args(prepared_kick))._encode_transaction_data()
+        else:
+            tx_data = kicker_contract.functions.kickExtended(*self._kick_extended_args(prepared_kick))._encode_transaction_data()
+        return TxIntent(
+            operation="kick",
+            to=normalize_address(kicker_address),
+            data=tx_data,
+            value="0x0",
+            chain_id=self.chain_id,
+            sender=sender,
+        )
+
+    def build_batch_kick_intent(self, prepared_kicks: list[PreparedKick], *, sender: str | None) -> TxIntent:
+        kicker_address, kicker_contract = self._kicker_contract()
+        kick_tuples = [self._kick_args(prepared_kick) for prepared_kick in prepared_kicks]
+        tx_data = kicker_contract.functions.batchKick(kick_tuples)._encode_transaction_data()
+        return TxIntent(
+            operation="kick",
+            to=normalize_address(kicker_address),
+            data=tx_data,
+            value="0x0",
+            chain_id=self.chain_id,
+            sender=sender,
+        )
+
+    def build_sweep_and_settle_intent(
+        self,
+        prepared_operation: PreparedSweepAndSettle,
+        *,
+        sender: str | None,
+    ) -> TxIntent:
+        kicker_address, kicker_contract = self._kicker_contract()
+        tx_data = kicker_contract.functions.sweepAndSettle(
+            to_checksum_address(prepared_operation.candidate.auction_address),
+            to_checksum_address(prepared_operation.sell_token),
+        )._encode_transaction_data()
+        return TxIntent(
+            operation="sweep-and-settle",
+            to=normalize_address(kicker_address),
+            data=tx_data,
+            value="0x0",
+            chain_id=self.chain_id,
+            sender=sender,
+        )
 
     @staticmethod
     def _kick_args(pk: PreparedKick) -> tuple:

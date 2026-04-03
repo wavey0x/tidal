@@ -12,13 +12,11 @@ from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
 from tidal.api.services.action_audit import create_prepared_action
-from tidal.auction_price_units import format_buffer_pct
 from tidal.auction_settlement import (
     build_auction_settlement_call,
     decide_auction_settlement,
     inspect_auction_settlement,
 )
-from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.cli_support import build_sync_web3
 from tidal.config import Settings
 from tidal.normalizers import normalize_address
@@ -37,8 +35,8 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.runtime import build_txn_service, build_web3_client
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
-from tidal.transaction_service.kicker import _GAS_ESTIMATE_BUFFER, _format_execution_error, _is_active_auction_error
-from tidal.transaction_service.types import KickResult, PreparedKick, PreparedSweepAndSettle
+from tidal.transaction_service.planner import KickPlanner
+from tidal.transaction_service.kicker import _GAS_ESTIMATE_BUFFER, _format_execution_error
 
 STRATEGY_DEPLOY_CONTEXT_SQL = """
 SELECT
@@ -76,212 +74,32 @@ async def prepare_kick_action(
     sender: str | None,
     require_curve_quote: bool | None = None,
 ) -> tuple[str, list[str], dict[str, object]]:
-    kick_config = settings.kick_config
-    shortlist = build_shortlist(
-        session,
-        usd_threshold=settings.txn_usd_threshold,
-        max_data_age_seconds=settings.txn_max_data_age_seconds,
+    txn_service = build_txn_service(settings, session, require_curve_quote=require_curve_quote)
+    planner = getattr(txn_service, "planner", None) or KickPlanner(
+        session=session,
+        settings=settings,
+        kicker=txn_service.kicker,
+        kick_tx_repository=KickTxRepository(session),
+        shortlist_builder=build_shortlist,
+        candidate_sorter=sort_candidates,
+        estimate_transaction_fn=_estimate_transaction,
+    )
+    plan = await planner.plan(
         source_type=source_type,  # type: ignore[arg-type]
         source_address=source_address,
         auction_address=auction_address,
         token_address=token_address,
         limit=limit,
-        ignore_policy=kick_config.ignore_policy,
-        cooldown_policy=kick_config.cooldown_policy,
-        kick_tx_repository=KickTxRepository(session),
+        sender=sender,
+        run_id="api-prepare",
+        batch=True,
     )
-    candidates_to_prepare = sort_candidates(shortlist.selected_candidates)
-    ignored_entries = [
-        {
-            "sourceAddress": decision.candidate.source_address,
-            "auctionAddress": decision.candidate.auction_address,
-            "tokenAddress": decision.candidate.token_address,
-            "tokenSymbol": decision.candidate.token_symbol,
-            "detail": decision.detail,
-        }
-        for decision in shortlist.ignored_skips
-    ]
-    cooldown_entries = [
-        {
-            "sourceAddress": decision.candidate.source_address,
-            "auctionAddress": decision.candidate.auction_address,
-            "tokenAddress": decision.candidate.token_address,
-            "tokenSymbol": decision.candidate.token_symbol,
-            "detail": decision.detail,
-        }
-        for decision in shortlist.cooldown_skips
-    ]
-
-    preview: dict[str, object] = {
-        "sourceType": source_type,
-        "sourceAddress": source_address,
-        "auctionAddress": auction_address,
-        "tokenAddress": token_address,
-        "limit": limit,
-        "eligibleCount": len(shortlist.eligible_candidates),
-        "selectedCount": len(shortlist.selected_candidates) + len(shortlist.limited_candidates),
-        "readyCount": len(shortlist.selected_candidates),
-        "ignoredCount": len(ignored_entries),
-        "ignoredSkips": ignored_entries,
-        "deferredSameAuctionCount": shortlist.deferred_same_auction_count,
-        "limitedCount": len(shortlist.limited_candidates),
-        "cooldownCount": len(cooldown_entries),
-        "cooldownSkips": cooldown_entries,
-    }
-    if not candidates_to_prepare:
-        preview["preparedOperations"] = []
-        return "noop", [], {"preview": preview, "transactions": []}
-
-    txn_service = build_txn_service(settings, session, require_curve_quote=require_curve_quote)
-    inspections = await txn_service.kicker.inspect_candidates(candidates_to_prepare)
-    prepared_kicks: list[PreparedKick] = []
-    prepared_sweep_and_settle: list[PreparedSweepAndSettle] = []
-    warnings: list[str] = []
-    skipped_prepare: list[dict[str, object]] = []
-
-    for candidate in candidates_to_prepare:
-        result = await txn_service.kicker.prepare_kick(
-            candidate,
-            run_id="api-prepare",
-            inspection=inspections.get((candidate.auction_address, candidate.token_address)),
-        )
-        if isinstance(result, KickResult):
-            skipped_prepare.append(
-                {
-                    "sourceAddress": candidate.source_address,
-                    "sourceName": candidate.source_name,
-                    "auctionAddress": candidate.auction_address,
-                    "tokenAddress": candidate.token_address,
-                    "tokenSymbol": candidate.token_symbol,
-                    "wantSymbol": candidate.want_symbol,
-                    "reason": result.error_message,
-                }
-            )
-            continue
-        if isinstance(result, PreparedSweepAndSettle):
-            prepared_sweep_and_settle.append(result)
-        else:
-            prepared_kicks.append(result)
-
-    transactions: list[dict[str, Any]] = []
-    web3_client = txn_service.kicker.web3_client
-    kicker_contract = web3_client.contract(settings.auction_kicker_address, AUCTION_KICKER_ABI)
-    for prepared in prepared_sweep_and_settle:
-        data = kicker_contract.functions.sweepAndSettle(
-            to_checksum_address(prepared.candidate.auction_address),
-            to_checksum_address(prepared.sell_token),
-        )._encode_transaction_data()
-        gas_estimate, gas_limit, gas_warning = await _estimate_transaction(
-            web3_client,
-            settings,
-            sender=sender,
-            to_address=settings.auction_kicker_address,
-            data=data,
-            gas_cap=settings.txn_max_gas_limit,
-        )
-        if gas_warning:
-            warnings.append(gas_warning)
-        transactions.append(
-            {
-                "operation": "sweep-and-settle",
-                "to": normalize_address(settings.auction_kicker_address),
-                "data": data,
-                "value": "0x0",
-                "chainId": settings.chain_id,
-                "sender": sender,
-                "gasEstimate": gas_estimate,
-                "gasLimit": gas_limit,
-            }
-        )
-
-    if prepared_kicks:
-        if len(prepared_kicks) == 1:
-            prepared_kick, transaction, gas_warning = await _prepare_single_kick_transaction(
-                txn_service=txn_service,
-                kicker_contract=kicker_contract,
-                settings=settings,
-                sender=sender,
-                prepared=prepared_kicks[0],
-            )
-            if gas_warning:
-                warnings.append(gas_warning)
-                skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
-                prepared_kicks = []
-            elif prepared_kick is not None and transaction is not None:
-                prepared_kicks = [prepared_kick]
-                transactions.append(transaction)
-            else:
-                prepared_kicks = []
-        else:
-            kick_tuples = [txn_service.kicker._kick_args(prepared) for prepared in prepared_kicks]
-            data = kicker_contract.functions.batchKick(kick_tuples)._encode_transaction_data()
-            gas_cap = settings.txn_max_gas_limit * max(len(prepared_kicks), 1)
-            gas_estimate, gas_limit, gas_warning = await _estimate_transaction(
-                web3_client,
-                settings,
-                sender=sender,
-                to_address=settings.auction_kicker_address,
-                data=data,
-                gas_cap=gas_cap,
-            )
-            if gas_warning:
-                if _is_active_auction_error(gas_warning):
-                    individual_prepared: list[PreparedKick] = []
-                    individual_transactions: list[dict[str, object]] = []
-                    individual_skips: list[dict[str, object]] = []
-                    individual_warnings: list[str] = []
-                    for prepared in prepared_kicks:
-                        recovered_kick, transaction, individual_warning = await _prepare_single_kick_transaction(
-                            txn_service=txn_service,
-                            kicker_contract=kicker_contract,
-                            settings=settings,
-                            sender=sender,
-                            prepared=prepared,
-                        )
-                        if individual_warning:
-                            individual_warnings.append(individual_warning)
-                            individual_skips.extend(
-                                _prepared_kick_gas_estimate_skips([prepared], reason=individual_warning)
-                            )
-                            continue
-                        if recovered_kick is not None and transaction is not None:
-                            individual_prepared.append(recovered_kick)
-                            individual_transactions.append(transaction)
-                    if individual_transactions:
-                        prepared_kicks = individual_prepared
-                        transactions.extend(individual_transactions)
-                        warnings.extend(individual_warnings)
-                        skipped_prepare.extend(individual_skips)
-                    else:
-                        warnings.append(gas_warning)
-                        skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
-                        prepared_kicks = []
-                else:
-                    warnings.append(gas_warning)
-                    skipped_prepare.extend(_prepared_kick_gas_estimate_skips(prepared_kicks, reason=gas_warning))
-                    prepared_kicks = []
-            else:
-                transactions.append(
-                    {
-                        "operation": "kick",
-                        "to": normalize_address(settings.auction_kicker_address),
-                        "data": data,
-                        "value": "0x0",
-                        "chainId": settings.chain_id,
-                        "sender": sender,
-                        "gasEstimate": gas_estimate,
-                        "gasLimit": gas_limit,
-                    }
-                )
-
-    preview["skippedDuringPrepare"] = skipped_prepare
-    preview["preparedOperations"] = [
-        *_prepared_sweep_preview(prepared_sweep_and_settle),
-        *_prepared_kick_preview(prepared_kicks),
-    ]
+    preview = plan.to_preview_payload()
+    transactions = plan.to_transaction_payloads()
+    warnings = list(plan.warnings)
 
     if not transactions:
-        return "noop", warnings, {"preview": preview, "transactions": []}
+        return plan.status(), warnings, {"preview": preview, "transactions": []}
 
     action_id = create_prepared_action(
         session,
@@ -838,169 +656,6 @@ async def _estimate_transaction(
         return None, None, f"Gas estimate failed: {_format_execution_error(exc)}"
     gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), gas_cap)
     return gas_estimate, gas_limit, None
-
-
-def _serialize_recovery_plan(plan) -> dict[str, list[str]] | None:  # noqa: ANN001
-    if plan is None or plan.is_empty:
-        return None
-    return {
-        "settleAfterStart": list(plan.settle_after_start),
-        "settleAfterMin": list(plan.settle_after_min),
-        "settleAfterDecay": list(plan.settle_after_decay),
-    }
-
-
-async def _prepare_single_kick_transaction(
-    *,
-    txn_service,
-    kicker_contract,
-    settings: Settings,
-    sender: str | None,
-    prepared: PreparedKick,
-) -> tuple[PreparedKick | None, dict[str, object] | None, str | None]:
-    standard_data = kicker_contract.functions.kick(*txn_service.kicker._kick_args(prepared))._encode_transaction_data()
-    gas_estimate, gas_limit, gas_warning = await _estimate_transaction(
-        txn_service.kicker.web3_client,
-        settings,
-        sender=sender,
-        to_address=settings.auction_kicker_address,
-        data=standard_data,
-        gas_cap=settings.txn_max_gas_limit,
-    )
-    if gas_warning is None:
-        return (
-            prepared,
-            {
-                "operation": "kick",
-                "to": normalize_address(settings.auction_kicker_address),
-                "data": standard_data,
-                "value": "0x0",
-                "chainId": settings.chain_id,
-                "sender": sender,
-                "gasEstimate": gas_estimate,
-                "gasLimit": gas_limit,
-            },
-            None,
-        )
-
-    if not _is_active_auction_error(gas_warning):
-        return None, None, gas_warning
-
-    recovered = await txn_service.kicker.plan_recovery(prepared)
-    if recovered is None:
-        return None, None, gas_warning
-
-    extended_data = kicker_contract.functions.kickExtended(
-        *txn_service.kicker._kick_extended_args(recovered)
-    )._encode_transaction_data()
-    gas_estimate, gas_limit, extended_warning = await _estimate_transaction(
-        txn_service.kicker.web3_client,
-        settings,
-        sender=sender,
-        to_address=settings.auction_kicker_address,
-        data=extended_data,
-        gas_cap=settings.txn_max_gas_limit,
-    )
-    if extended_warning is not None:
-        return None, None, extended_warning
-
-    return (
-        recovered,
-        {
-            "operation": "kick",
-            "to": normalize_address(settings.auction_kicker_address),
-            "data": extended_data,
-            "value": "0x0",
-            "chainId": settings.chain_id,
-            "sender": sender,
-            "gasEstimate": gas_estimate,
-            "gasLimit": gas_limit,
-        },
-        None,
-    )
-
-
-def _prepared_sweep_preview(items: list[PreparedSweepAndSettle]) -> list[dict[str, object]]:
-    return [
-        {
-            "operation": "sweep-and-settle",
-            "auctionAddress": item.candidate.auction_address,
-            "sourceAddress": item.candidate.source_address,
-            "sourceType": item.candidate.source_type,
-            "tokenAddress": item.sell_token,
-            "tokenSymbol": item.token_symbol,
-            "wantAddress": item.candidate.want_address,
-            "wantSymbol": item.candidate.want_symbol,
-            "reason": item.stuck_abort_reason,
-            "sellAmount": item.sell_amount_str,
-            "minimumPrice": item.minimum_price_public_str,
-            "minimumPriceScaled1e18": item.minimum_price_scaled_1e18_str,
-            "usdValue": item.usd_value_str,
-            "normalizedBalance": item.normalized_balance,
-        }
-        for item in items
-    ]
-
-
-def _prepared_kick_preview(items: list[PreparedKick]) -> list[dict[str, object]]:
-    return [
-        {
-            "operation": "kick",
-            "auctionAddress": item.candidate.auction_address,
-            "sourceAddress": item.candidate.source_address,
-            "sourceName": item.candidate.source_name,
-            "sourceType": item.candidate.source_type,
-            "tokenAddress": item.candidate.token_address,
-            "tokenSymbol": item.candidate.token_symbol,
-            "wantAddress": item.candidate.want_address,
-            "wantSymbol": item.candidate.want_symbol,
-            "wantPriceUsd": item.want_price_usd_str,
-            "sellAmount": item.normalized_balance,
-            "startingPrice": item.starting_price_unscaled_str,
-            "startingPriceDisplay": (
-                f"{item.starting_price_unscaled:,} {item.candidate.want_symbol or 'want-token'} "
-                f"(+{format_buffer_pct(item.start_price_buffer_bps)} buffer)"
-            ),
-            "minimumPrice": item.minimum_price_str,
-            "minimumPriceDisplay": (
-                f"{item.minimum_price_scaled_1e18:,} (scaled 1e18 floor)"
-            ),
-            "minimumQuote": item.minimum_quote_unscaled_str,
-            "minimumQuoteDisplay": (
-                f"{item.minimum_quote_unscaled:,} {item.candidate.want_symbol or 'want-token'} "
-                f"(-{format_buffer_pct(item.min_price_buffer_bps)} buffer)"
-            ),
-            "minimumPriceScaled1e18": item.minimum_price_scaled_1e18_str,
-            "quoteAmount": item.quote_amount_str,
-            "quoteResponseJson": item.quote_response_json,
-            "usdValue": item.usd_value_str,
-            "bufferBps": item.start_price_buffer_bps,
-            "minBufferBps": item.min_price_buffer_bps,
-            "pricingProfileName": item.pricing_profile_name,
-            "stepDecayRateBps": item.step_decay_rate_bps,
-            "quoteRate": item.quote_rate,
-            "startRate": item.start_rate,
-            "floorRate": item.floor_rate,
-            "settleToken": item.settle_token,
-            "recoveryPlan": _serialize_recovery_plan(item.recovery_plan),
-        }
-        for item in items
-    ]
-
-
-def _prepared_kick_gas_estimate_skips(items: list[PreparedKick], *, reason: str) -> list[dict[str, object]]:
-    return [
-        {
-            "sourceAddress": item.candidate.source_address,
-            "sourceName": item.candidate.source_name,
-            "auctionAddress": item.candidate.auction_address,
-            "tokenAddress": item.candidate.token_address,
-            "tokenSymbol": item.candidate.token_symbol,
-            "wantSymbol": item.candidate.want_symbol,
-            "reason": reason,
-        }
-        for item in items
-    ]
 
 
 def _serialize(value: object) -> Any:

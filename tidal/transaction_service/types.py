@@ -206,6 +206,7 @@ class KickResult:
     minimum_quote: str | None = None
     live_balance_raw: int | None = None
     usd_value: str | None = None
+    quote_response_json: str | None = None
     execution_report: TransactionExecutionReport | None = None
 
 

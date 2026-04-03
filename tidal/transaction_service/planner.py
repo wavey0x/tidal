@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from eth_utils import to_checksum_address
 
@@ -11,7 +12,12 @@ from tidal.config import Settings
 from tidal.normalizers import normalize_address
 from tidal.persistence.repositories import KickTxRepository
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
-from tidal.transaction_service.kicker import AuctionKicker, _GAS_ESTIMATE_BUFFER, _format_execution_error, _is_active_auction_error
+from tidal.transaction_service.kick_shared import (
+    _GAS_ESTIMATE_BUFFER,
+    _candidate_key,
+    _format_execution_error,
+    _is_active_auction_error,
+)
 from tidal.transaction_service.types import (
     KickCandidate,
     KickPlan,
@@ -22,10 +28,6 @@ from tidal.transaction_service.types import (
     SourceType,
     TxIntent,
 )
-
-
-def _candidate_key(candidate: KickCandidate) -> tuple[str, str]:
-    return candidate.auction_address, candidate.token_address
 
 
 def _ignore_skip_payloads(shortlist) -> list[dict[str, object]]:  # noqa: ANN001
@@ -62,15 +64,25 @@ class KickPlanner:
         *,
         session,
         settings: Settings,
-        kicker: AuctionKicker,
+        preparer: Any | None = None,
+        tx_builder: Any | None = None,
         kick_tx_repository: KickTxRepository,
+        web3_client: Any | None = None,
+        kicker: Any | None = None,
         shortlist_builder: Callable[..., object] | None = None,
         candidate_sorter: Callable[[list[KickCandidate]], list[KickCandidate]] | None = None,
         estimate_transaction_fn: Callable[..., Awaitable[tuple[int | None, int | None, str | None]]] | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
-        self.kicker = kicker
+        self.preparer = preparer or kicker
+        self.tx_builder = tx_builder or kicker
+        self.web3_client = (
+            web3_client
+            or getattr(self.preparer, "web3_client", None)
+            or getattr(self.tx_builder, "web3_client", None)
+            or getattr(kicker, "web3_client", None)
+        )
         self.kick_tx_repository = kick_tx_repository
         self.shortlist_builder = shortlist_builder or build_shortlist
         self.candidate_sorter = candidate_sorter or sort_candidates
@@ -88,6 +100,9 @@ class KickPlanner:
         run_id: str,
         batch: bool = True,
     ) -> KickPlan:
+        if self.preparer is None:
+            raise ValueError("KickPlanner requires a preparer.")
+
         kick_config = self.settings.kick_config
         shortlist = self.shortlist_builder(
             self.session,
@@ -122,11 +137,11 @@ class KickPlanner:
         if not candidates_to_prepare:
             return plan
 
-        inspections = await self.kicker.inspect_candidates(candidates_to_prepare)
+        inspections = await self.preparer.inspect_candidates(candidates_to_prepare)
         prepared_kicks: list[PreparedKick] = []
 
         for candidate in candidates_to_prepare:
-            result = await self.kicker.prepare_kick(
+            result = await self.preparer.prepare_kick(
                 candidate,
                 run_id=run_id,
                 inspection=inspections.get(_candidate_key(candidate)),
@@ -235,7 +250,7 @@ class KickPlanner:
         if not _is_active_auction_error(gas_warning):
             return None, None, gas_warning
 
-        recovered = await self.kicker.plan_recovery(prepared)
+        recovered = await self.preparer.plan_recovery(prepared)
         if recovered is None:
             return None, None, gas_warning
 
@@ -246,22 +261,30 @@ class KickPlanner:
         return recovered, extended_intent, None
 
     def _kicker_contract(self):
-        return self.kicker.web3_client.contract(
+        if self.web3_client is None:
+            raise RuntimeError("KickPlanner requires a web3 client for calldata fallback building.")
+        return self.web3_client.contract(
             address=to_checksum_address(self.settings.auction_kicker_address),
             abi=AUCTION_KICKER_ABI,
         )
 
     def _build_single_kick_intent(self, prepared: PreparedKick, *, sender: str | None) -> TxIntent:
-        if getattr(type(self.kicker), "build_single_kick_intent", None) is not None:
-            return self.kicker.build_single_kick_intent(prepared, sender=sender)
+        if self.tx_builder is None:
+            raise RuntimeError("KickPlanner requires a tx builder.")
+        if getattr(type(self.tx_builder), "build_single_kick_intent", None) is not None:
+            return self.tx_builder.build_single_kick_intent(prepared, sender=sender)
 
         kicker_contract = self._kicker_contract()
+        kick_args = getattr(self.tx_builder, "_kick_args", None)
+        if kick_args is None:
+            raise RuntimeError("tx builder does not support calldata fallback building")
         if prepared.recovery_plan is None:
-            tx_data = kicker_contract.functions.kick(*self.kicker._kick_args(prepared))._encode_transaction_data()
+            tx_data = kicker_contract.functions.kick(*kick_args(prepared))._encode_transaction_data()
         else:
-            tx_data = kicker_contract.functions.kickExtended(
-                *self.kicker._kick_extended_args(prepared)
-            )._encode_transaction_data()
+            kick_extended_args = getattr(self.tx_builder, "_kick_extended_args", None)
+            if kick_extended_args is None:
+                raise RuntimeError("tx builder does not support extended calldata fallback building")
+            tx_data = kicker_contract.functions.kickExtended(*kick_extended_args(prepared))._encode_transaction_data()
         return TxIntent(
             operation="kick",
             to=normalize_address(self.settings.auction_kicker_address),
@@ -272,11 +295,16 @@ class KickPlanner:
         )
 
     def _build_batch_kick_intent(self, prepared_kicks: list[PreparedKick], *, sender: str | None) -> TxIntent:
-        if getattr(type(self.kicker), "build_batch_kick_intent", None) is not None:
-            return self.kicker.build_batch_kick_intent(prepared_kicks, sender=sender)
+        if self.tx_builder is None:
+            raise RuntimeError("KickPlanner requires a tx builder.")
+        if getattr(type(self.tx_builder), "build_batch_kick_intent", None) is not None:
+            return self.tx_builder.build_batch_kick_intent(prepared_kicks, sender=sender)
 
         kicker_contract = self._kicker_contract()
-        kick_tuples = [self.kicker._kick_args(prepared_kick) for prepared_kick in prepared_kicks]
+        kick_args = getattr(self.tx_builder, "_kick_args", None)
+        if kick_args is None:
+            raise RuntimeError("tx builder does not support batch calldata fallback building")
+        kick_tuples = [kick_args(prepared_kick) for prepared_kick in prepared_kicks]
         tx_data = kicker_contract.functions.batchKick(kick_tuples)._encode_transaction_data()
         return TxIntent(
             operation="kick",
@@ -293,14 +321,16 @@ class KickPlanner:
         *,
         sender: str | None,
     ) -> TxIntent:
-        if getattr(type(self.kicker), "build_sweep_and_settle_intent", None) is not None:
-            return self.kicker.build_sweep_and_settle_intent(prepared_operation, sender=sender)
+        if self.tx_builder is None:
+            raise RuntimeError("KickPlanner requires a tx builder.")
+        if getattr(type(self.tx_builder), "build_sweep_and_settle_intent", None) is not None:
+            return self.tx_builder.build_sweep_and_settle_intent(prepared_operation, sender=sender)
         raise RuntimeError("kicker does not support sweep-and-settle planning")
 
     async def _estimate_intent(self, intent: TxIntent, *, gas_cap: int) -> str | None:
         if self.estimate_transaction_fn is not None:
             gas_estimate, gas_limit, gas_warning = await self.estimate_transaction_fn(
-                self.kicker.web3_client,
+                self.web3_client,
                 self.settings,
                 sender=intent.sender,
                 to_address=intent.to,
@@ -313,8 +343,10 @@ class KickPlanner:
 
         if intent.sender is None:
             return "No sender provided for gas estimation."
+        if self.web3_client is None:
+            return "No web3 client provided for gas estimation."
         try:
-            gas_estimate = await self.kicker.web3_client.estimate_gas(
+            gas_estimate = await self.web3_client.estimate_gas(
                 {
                     "from": to_checksum_address(intent.sender),
                     "to": to_checksum_address(intent.to),

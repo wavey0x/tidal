@@ -292,8 +292,10 @@ def build_txn_service(
     planner = KickPlanner(
         session=session,
         settings=settings,
-        kicker=kicker,
+        preparer=kicker.preparer,
+        tx_builder=kicker.tx_builder,
         kick_tx_repository=kick_tx_repository,
+        web3_client=web3_client,
     )
 
     lock_path = default_txn_lock_path()
@@ -301,6 +303,8 @@ def build_txn_service(
     return TxnService(
         session=session,
         kicker=kicker,
+        preparer=kicker.preparer,
+        executor=kicker.executor,
         planner=planner,
         txn_run_repository=txn_run_repository,
         kick_tx_repository=kick_tx_repository,

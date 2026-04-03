@@ -559,7 +559,7 @@ def test_operator_kick_run_prepare_noop_does_not_repeat_generic_footer(tmp_path,
     assert result.exit_code == 2
     assert "Skip" in result.output
     assert "Candidate was skipped during prepare" in result.output
-    assert "Pair:        CRV -> USDC" in result.output
+    assert "Attempted Pair: CRV -> USDC" in result.output
     assert "Source:      Yearn Fee Burner (0x1111…1111)" in result.output
     assert "Auction:     0x2222222222222222222222222222222222222222" in result.output
     assert "No kick transactions were sent." not in result.output
@@ -606,6 +606,7 @@ def test_operator_kick_run_fee_burner_active_auction_skip_stops_after_first_cand
     assert result.output.count("Skip") == 1
     assert "Auction still active above minimumPrice" in result.output
     assert "Ending review for the remaining same-auction candidates." in result.output
+    assert "Auction is still active above minimumPrice. Ending review" not in result.output
     assert "Kick (2 of 2)" not in result.output
     assert "No kick transactions were sent." not in result.output
 

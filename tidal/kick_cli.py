@@ -509,9 +509,7 @@ def kick_run(
                                     remaining_candidates=remaining_candidates,
                                 )
                             ):
-                                typer.echo(
-                                    "Auction is still active above minimumPrice. Ending review for the remaining same-auction candidates."
-                                )
+                                typer.echo("Ending review for the remaining same-auction candidates.")
                                 short_circuit_same_auction_feedback_emitted = True
                                 break
                         continue

@@ -16,7 +16,7 @@ from tidal.chain.web3_client import Web3Client
 from tidal.persistence.repositories import KickTxRepository
 from tidal.scanner.auction_state import AuctionStateReader
 from tidal.time import utcnow_iso
-from tidal.transaction_service.kicker import _format_execution_error
+from tidal.transaction_service.kick_shared import _format_execution_error
 from tidal.transaction_service.signer import TransactionSigner
 from tidal.types import ScanItemError
 

@@ -31,13 +31,9 @@ from tidal.ops.deploy import (
     read_factory_auction_addresses,
 )
 from tidal.ops.kick_inspect import inspect_kick_candidates
-from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.runtime import build_txn_service, build_web3_client
-from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
 from tidal.transaction_service.kick_shared import _GAS_ESTIMATE_BUFFER, _format_execution_error
-from tidal.transaction_service.kick_tx import KickTxBuilder
-from tidal.transaction_service.planner import KickPlanner
 
 STRATEGY_DEPLOY_CONTEXT_SQL = """
 SELECT
@@ -76,33 +72,7 @@ async def prepare_kick_action(
     require_curve_quote: bool | None = None,
 ) -> tuple[str, list[str], dict[str, object]]:
     txn_service = build_txn_service(settings, session, require_curve_quote=require_curve_quote)
-    planner_preparer = getattr(txn_service, "preparer", None) or getattr(getattr(txn_service, "kicker", None), "preparer", None)
-    planner_tx_builder = getattr(txn_service, "tx_builder", None) or getattr(
-        getattr(txn_service, "kicker", None),
-        "tx_builder",
-        None,
-    )
-    if planner_preparer is None:
-        planner_preparer = txn_service.kicker
-    if planner_tx_builder is None:
-        planner_tx_builder = getattr(txn_service, "kicker", None)
-    if planner_tx_builder is None:
-        planner_tx_builder = KickTxBuilder(
-            web3_client=planner_preparer.web3_client,
-            auction_kicker_address=settings.auction_kicker_address,
-            chain_id=settings.chain_id,
-        )
-    planner = getattr(txn_service, "planner", None) or KickPlanner(
-        session=session,
-        settings=settings,
-        preparer=planner_preparer,
-        tx_builder=planner_tx_builder,
-        web3_client=getattr(planner_preparer, "web3_client", None),
-        kick_tx_repository=KickTxRepository(session),
-        shortlist_builder=build_shortlist,
-        candidate_sorter=sort_candidates,
-        estimate_transaction_fn=_estimate_transaction,
-    )
+    planner = txn_service.planner
     plan = await planner.plan(
         source_type=source_type,  # type: ignore[arg-type]
         source_address=source_address,

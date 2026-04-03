@@ -7,7 +7,6 @@ import fcntl
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 import structlog
@@ -59,9 +58,8 @@ class TxnService:
         self,
         *,
         session,
-        kicker,
-        preparer=None,
-        executor=None,
+        preparer,
+        executor,
         planner=None,
         txn_run_repository: TxnRunRepository,
         kick_tx_repository: KickTxRepository,
@@ -75,9 +73,7 @@ class TxnService:
         execution_report_fn: Callable[[TransactionExecutionReport], None] | None = None,
     ):
         self.session = session
-        self.kicker = kicker
         self.preparer = preparer
-        self.tx_builder = getattr(kicker, "tx_builder", None)
         self.executor = executor
         self.planner = planner
         self.txn_run_repository = txn_run_repository
@@ -92,34 +88,12 @@ class TxnService:
         self.execution_report_fn = execution_report_fn
 
     def _persist_prepare_failure(self, run_id: str, candidate: KickCandidate, result: KickResult) -> KickResult:
-        if self.executor is None or result.status == KickStatus.SKIP:
+        if result.status == KickStatus.SKIP:
             return result
-        fail_fn = getattr(self.executor, "_fail", None)
-        if not callable(fail_fn):
-            return result
-        error_message = result.error_message or "candidate preparation failed"
-        persisted = fail_fn(
-            run_id,
-            candidate,
-            utcnow_iso(),
-            status=result.status,
-            error_message=error_message,
-            sell_amount=result.sell_amount,
-            starting_price=result.starting_price,
-            minimum_price=result.minimum_price,
-            minimum_quote=result.minimum_quote,
-            usd_value=result.usd_value,
-            quote_response_json=result.quote_response_json,
-        )
-        return replace(
-            persisted,
-            live_balance_raw=result.live_balance_raw,
-            tx_hash=result.tx_hash,
-            gas_used=result.gas_used,
-            gas_price_gwei=result.gas_price_gwei,
-            block_number=result.block_number,
-            quote_response_json=result.quote_response_json,
-            execution_report=result.execution_report,
+        return self.executor.record_prepare_failure(
+            run_id=run_id,
+            candidate=candidate,
+            result=result,
         )
 
     def _apply_prepare_result(
@@ -149,7 +123,7 @@ class TxnService:
             logger.warning("txn_execution_report_failed", error=str(exc), tx_hash=report.tx_hash)
 
     def _planner_sender(self) -> str | None:
-        signer = getattr(self.executor, "signer", None) or getattr(self.kicker, "signer", None)
+        signer = getattr(self.executor, "signer", None)
         if signer is None:
             return None
         checksum_address = getattr(signer, "checksum_address", None)
@@ -227,7 +201,7 @@ class TxnService:
         })
 
         if live and self.planner is not None:
-            executor = self.executor or self.kicker
+            executor = self.executor
             plan = await self.planner.plan(
                 source_type=source_type,
                 source_address=source_address,
@@ -401,8 +375,8 @@ class TxnService:
         kicks_failed = 0
 
         # Phase 1: Prepare all candidates.
-        preparer = self.preparer or self.kicker
-        executor = self.executor or self.kicker
+        preparer = self.preparer
+        executor = self.executor
         prepared: list[PreparedKick] = []
         prepared_sweep_and_settle: list[PreparedSweepAndSettle] = []
         failed_messages: list[str] = []

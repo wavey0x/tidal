@@ -40,6 +40,11 @@ from tidal.scanner.reward_token_resolver import RewardTokenResolver
 from tidal.scanner.service import ScannerService
 from tidal.scanner.token_metadata import TokenMetadataService
 from tidal.paths import default_txn_lock_path
+from tidal.transaction_service.kick_execute import KickExecutor
+from tidal.transaction_service.kick_prepare import KickPreparer
+from tidal.transaction_service.kick_tx import KickTxBuilder
+from tidal.transaction_service.planner import KickPlanner
+from tidal.transaction_service.service import TxnService
 from tidal.transaction_service.signer import TransactionSigner
 
 
@@ -212,9 +217,6 @@ def build_txn_service(
     signer: TransactionSigner | None = None,
 ):
     from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
-    from tidal.transaction_service.kicker import AuctionKicker
-    from tidal.transaction_service.planner import KickPlanner
-    from tidal.transaction_service.service import TxnService
     from tidal.transaction_service.signer import TransactionSigner
 
     from tidal.pricing.token_price_agg import TokenPriceAggProvider as _TPA
@@ -267,33 +269,42 @@ def build_txn_service(
         retry_attempts=settings.price_retry_attempts,
     )
 
-    kicker = AuctionKicker(
+    tx_builder = KickTxBuilder(
         web3_client=web3_client,
-        signer=resolved_signer,
-        kick_tx_repository=kick_tx_repository,
-        price_provider=price_provider,
         auction_kicker_address=settings.auction_kicker_address,
-        usd_threshold=settings.txn_usd_threshold,
-        max_base_fee_gwei=settings.txn_max_base_fee_gwei,
-        skip_base_fee_check=skip_base_fee_check,
-        max_priority_fee_gwei=settings.txn_max_priority_fee_gwei,
-        max_gas_limit=settings.txn_max_gas_limit,
-        start_price_buffer_bps=settings.txn_start_price_buffer_bps,
-        min_price_buffer_bps=settings.txn_min_price_buffer_bps,
-        quote_spot_warning_threshold_pct=settings.txn_quote_spot_warning_threshold_pct,
         chain_id=settings.chain_id,
-        confirm_fn=confirm_fn,
+    )
+    preparer = KickPreparer(
+        web3_client=web3_client,
+        price_provider=price_provider,
+        usd_threshold=settings.txn_usd_threshold,
         require_curve_quote=resolved_require_curve_quote,
         erc20_reader=erc20_reader,
         auction_state_reader=auction_state_reader,
         pricing_policy=kick_config.pricing_policy,
         token_sizing_policy=kick_config.token_sizing_policy,
+        start_price_buffer_bps=settings.txn_start_price_buffer_bps,
+        min_price_buffer_bps=settings.txn_min_price_buffer_bps,
+    )
+    executor = KickExecutor(
+        web3_client=web3_client,
+        signer=resolved_signer,
+        kick_tx_repository=kick_tx_repository,
+        tx_builder=tx_builder,
+        preparer=preparer,
+        max_base_fee_gwei=settings.txn_max_base_fee_gwei,
+        max_priority_fee_gwei=settings.txn_max_priority_fee_gwei,
+        skip_base_fee_check=skip_base_fee_check,
+        max_gas_limit=settings.txn_max_gas_limit,
+        chain_id=settings.chain_id,
+        confirm_fn=confirm_fn,
+        quote_spot_warning_threshold_pct=settings.txn_quote_spot_warning_threshold_pct,
     )
     planner = KickPlanner(
         session=session,
         settings=settings,
-        preparer=kicker.preparer,
-        tx_builder=kicker.tx_builder,
+        preparer=preparer,
+        tx_builder=tx_builder,
         kick_tx_repository=kick_tx_repository,
         web3_client=web3_client,
     )
@@ -302,9 +313,8 @@ def build_txn_service(
 
     return TxnService(
         session=session,
-        kicker=kicker,
-        preparer=kicker.preparer,
-        executor=kicker.executor,
+        preparer=preparer,
+        executor=executor,
         planner=planner,
         txn_run_repository=txn_run_repository,
         kick_tx_repository=kick_tx_repository,

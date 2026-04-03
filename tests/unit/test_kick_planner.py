@@ -60,7 +60,7 @@ def _prepared(candidate: KickCandidate) -> PreparedKick:
     )
 
 
-class _FakeKicker:
+class _FakeKickDeps:
     def __init__(
         self,
         *,
@@ -125,7 +125,7 @@ async def test_kick_planner_recovers_single_candidate_after_active_auction_estim
         deferred_same_auction_count=0,
         limited_candidates=[],
     )
-    kicker = _FakeKicker(
+    deps = _FakeKickDeps(
         prepared_by_token={candidate.token_address: prepared},
         recovered_by_token={candidate.token_address: recovered},
     )
@@ -140,7 +140,8 @@ async def test_kick_planner_recovers_single_candidate_after_active_auction_estim
     planner = KickPlanner(
         session=object(),
         settings=_settings(),
-        kicker=kicker,
+        preparer=deps,
+        tx_builder=deps,
         kick_tx_repository=object(),  # type: ignore[arg-type]
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
@@ -165,7 +166,7 @@ async def test_kick_planner_recovers_single_candidate_after_active_auction_estim
     assert [intent.data for intent in plan.tx_intents] == ["0x22"]
     assert plan.tx_intents[0].gas_estimate == 210000
     assert plan.tx_intents[0].gas_limit == 252000
-    assert kicker.plan_recovery.await_count == 1
+    assert deps.plan_recovery.await_count == 1
     assert plan.to_preview_payload()["preparedOperations"][0]["recoveryPlan"] == {
         "settleAfterStart": ["0x5555555555555555555555555555555555555555"],
         "settleAfterMin": [],
@@ -187,7 +188,7 @@ async def test_kick_planner_falls_back_from_batch_to_individual_intents() -> Non
         deferred_same_auction_count=0,
         limited_candidates=[],
     )
-    kicker = _FakeKicker(
+    deps = _FakeKickDeps(
         prepared_by_token={
             candidate_a.token_address: prepared_a,
             candidate_b.token_address: prepared_b,
@@ -208,7 +209,8 @@ async def test_kick_planner_falls_back_from_batch_to_individual_intents() -> Non
     planner = KickPlanner(
         session=object(),
         settings=_settings(),
-        kicker=kicker,
+        preparer=deps,
+        tx_builder=deps,
         kick_tx_repository=object(),  # type: ignore[arg-type]
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: sorted(candidates, key=lambda candidate: candidate.usd_value, reverse=True),

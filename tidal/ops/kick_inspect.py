@@ -83,7 +83,7 @@ def inspect_kick_candidates(
     ready_inspections: dict[tuple[str, str], AuctionInspection] = {}
     if include_live_inspection and settings.rpc_url and ready_candidates:
         txn_service = build_txn_service(settings, session)
-        ready_inspections = asyncio.run(txn_service.kicker.inspect_candidates(ready_candidates))
+        ready_inspections = asyncio.run(txn_service.preparer.inspect_candidates(ready_candidates))
 
     def build_entry(
         candidate: KickCandidate,

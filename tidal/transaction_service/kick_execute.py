@@ -204,6 +204,45 @@ class KickExecutor:
         )
         return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
 
+    def record_prepare_failure(
+        self,
+        *,
+        run_id: str,
+        candidate: KickCandidate,
+        result: KickResult,
+    ) -> KickResult:
+        """Persist a prepare-time failure using the same audit row shape as execution failures."""
+        persisted = self._fail(
+            run_id,
+            candidate,
+            utcnow_iso(),
+            status=result.status,
+            error_message=result.error_message or "candidate preparation failed",
+            sell_amount=result.sell_amount,
+            starting_price=result.starting_price,
+            minimum_price=result.minimum_price,
+            minimum_quote=result.minimum_quote,
+            usd_value=result.usd_value,
+            quote_response_json=result.quote_response_json,
+        )
+        return KickResult(
+            kick_tx_id=persisted.kick_tx_id,
+            status=persisted.status,
+            tx_hash=result.tx_hash,
+            gas_used=result.gas_used,
+            gas_price_gwei=result.gas_price_gwei,
+            block_number=result.block_number,
+            error_message=persisted.error_message,
+            sell_amount=result.sell_amount,
+            starting_price=result.starting_price,
+            minimum_price=result.minimum_price,
+            minimum_quote=result.minimum_quote,
+            live_balance_raw=result.live_balance_raw,
+            usd_value=result.usd_value,
+            quote_response_json=result.quote_response_json,
+            execution_report=result.execution_report,
+        )
+
     @staticmethod
     def _pk_audit_kwargs(prepared_kick: PreparedKick) -> dict[str, object]:
         return {

@@ -156,23 +156,27 @@ def _evm_address(char: str) -> str:
     return f"0x{char * 40}"
 
 
-def _build_txn_service(session, *, kicker=None, lock_path=None):
+def _build_txn_service(session, *, preparer=None, executor=None, planner=None, lock_path=None):
     txn_run_repo = TxnRunRepository(session)
     kick_tx_repo = KickTxRepository(session)
 
-    if kicker is None:
-        kicker = MagicMock()
-    if not isinstance(getattr(kicker, "inspect_candidates", None), AsyncMock):
-        kicker.inspect_candidates = AsyncMock(return_value={})
-    if not isinstance(getattr(kicker, "execute_sweep_and_settle", None), AsyncMock):
-        kicker.execute_sweep_and_settle = AsyncMock()
+    if preparer is None:
+        preparer = MagicMock()
+    if executor is None:
+        executor = MagicMock()
+    if not isinstance(getattr(preparer, "inspect_candidates", None), AsyncMock):
+        preparer.inspect_candidates = AsyncMock(return_value={})
+    if not isinstance(getattr(executor, "execute_sweep_and_settle", None), AsyncMock):
+        executor.execute_sweep_and_settle = AsyncMock()
 
     if lock_path is None:
         lock_path = Path("/tmp/test_txn_daemon.lock")
 
     return TxnService(
         session=session,
-        kicker=kicker,
+        preparer=preparer,
+        executor=executor,
+        planner=planner,
         txn_run_repository=txn_run_repo,
         kick_tx_repository=kick_tx_repo,
         usd_threshold=100.0,
@@ -254,7 +258,7 @@ async def test_live_kick_confirmed(session):
         block_number=12345,
     )])
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     result = await service.run_once(live=True)
 
     assert result.status == "SUCCESS"
@@ -279,7 +283,7 @@ async def test_live_kick_reverted(session):
         tx_hash="0xdef",
     )])
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     result = await service.run_once(live=True)
 
     assert result.status == "FAILED"
@@ -313,7 +317,7 @@ async def test_live_non_batch_emits_execution_report_before_next_candidate(sessi
         ),
     ))
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     service.execution_report_fn = captured_reports.append
     result = await service.run_once(live=True, batch=False)
 
@@ -335,7 +339,7 @@ async def test_live_skip_below_threshold_not_counted(session):
         error_message="below threshold on live balance",
     ))
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     result = await service.run_once(live=True)
 
     assert result.kicks_attempted == 0
@@ -405,11 +409,21 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
         )
         return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
 
-    executor._fail = MagicMock(side_effect=_persist_fail)
+    def _record_prepare_failure(*, run_id, candidate, result):  # noqa: ANN001
+        return _persist_fail(
+            run_id,
+            candidate,
+            datetime.now(timezone.utc).isoformat(),
+            status=result.status,
+            error_message=result.error_message,
+            usd_value=result.usd_value,
+        )
+
+    executor.record_prepare_failure = MagicMock(side_effect=_record_prepare_failure)
 
     service = TxnService(
         session=session,
-        kicker=MagicMock(),
+        preparer=MagicMock(),
         executor=executor,
         planner=planner,
         txn_run_repository=txn_run_repo,
@@ -430,7 +444,7 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
     assert result.status == "FAILED"
     assert result.kicks_attempted == 1
     assert result.kicks_failed == 1
-    executor._fail.assert_called_once()
+    executor.record_prepare_failure.assert_called_once()
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["status"] == "ERROR"
@@ -460,7 +474,7 @@ async def test_live_confirm_declined_continues_to_next_candidate(session):
         ),
     ])
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     result = await service.run_once(live=True, batch=False)
 
     assert result.status == "SUCCESS"
@@ -485,7 +499,7 @@ async def test_submitted_blocks_resend(session):
         tx_hash="0xpending",
     )])
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     result1 = await service.run_once(live=True)
     assert result1.kicks_attempted == 1
 
@@ -505,7 +519,7 @@ async def test_submitted_blocks_resend(session):
     })
 
     # Second run: same pair should be skipped due to SUBMITTED cooldown.
-    service2 = _build_txn_service(session, kicker=kicker)
+    service2 = _build_txn_service(session, preparer=kicker, executor=kicker)
     result2 = await service2.run_once(live=False)
 
     # Candidate found but skipped via cooldown.
@@ -608,7 +622,7 @@ async def test_live_batch_orders_candidates_by_descending_usd_value(session):
     kicker.prepare_kick = AsyncMock(side_effect=prepare_side_effect)
     kicker.execute_batch = AsyncMock(side_effect=execute_batch_side_effect)
 
-    service = _build_txn_service(session, kicker=kicker)
+    service = _build_txn_service(session, preparer=kicker, executor=kicker)
     with patch("tidal.transaction_service.service.logger.info") as log_info:
         result = await service.run_once(live=True)
 

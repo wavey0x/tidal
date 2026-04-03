@@ -12,7 +12,8 @@ from tidal.api.services.action_prepare import (
     prepare_kick_action,
 )
 from tidal.ops.auction_enable import AuctionInspection, SourceResolution, TokenDiscovery, TokenProbe
-from tidal.transaction_service.types import KickCandidate, PreparedKick
+from tidal.transaction_service.planner import KickPlanner
+from tidal.transaction_service.types import KickCandidate, KickRecoveryPlan, PreparedKick, TxIntent
 
 
 class _FailingWeb3Client:
@@ -27,6 +28,77 @@ class _FailingWeb3Client:
             "6e6f7420656e61626c6564000000000000000000000000000000000000000000"
         )
         raise RuntimeError((payload, payload))
+
+
+def _kick_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        txn_usd_threshold=100.0,
+        txn_max_data_age_seconds=600,
+        kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
+        txn_max_gas_limit=500000,
+        auction_kicker_address="0x5555555555555555555555555555555555555555",
+        chain_id=1,
+    )
+
+
+class _FakeKickDeps:
+    def __init__(
+        self,
+        *,
+        candidate: KickCandidate,
+        prepared: PreparedKick,
+        recovered: PreparedKick | None = None,
+        single_data: str = "0xdeadbeef",
+        batch_data: str = "0xdeadbeef",
+        extended_data: str = "0xfeedface",
+    ) -> None:
+        inspection_key = (candidate.auction_address, candidate.token_address)
+        self.inspect_candidates = AsyncMock(return_value={inspection_key: None})
+        self.prepare_kick = AsyncMock(return_value=prepared)
+        self.plan_recovery = AsyncMock(return_value=recovered)
+        self.single_data = single_data
+        self.batch_data = batch_data
+        self.extended_data = extended_data
+
+    def build_single_kick_intent(self, prepared_kick: PreparedKick, *, sender: str | None) -> TxIntent:
+        data = self.extended_data if prepared_kick.recovery_plan is not None else self.single_data
+        return TxIntent(
+            operation="kick",
+            to="0x5555555555555555555555555555555555555555",
+            data=data,
+            value="0x0",
+            chain_id=1,
+            sender=sender,
+        )
+
+    def build_batch_kick_intent(self, prepared_kicks: list[PreparedKick], *, sender: str | None) -> TxIntent:
+        del prepared_kicks
+        return TxIntent(
+            operation="kick",
+            to="0x5555555555555555555555555555555555555555",
+            data=self.batch_data,
+            value="0x0",
+            chain_id=1,
+            sender=sender,
+        )
+
+
+def _build_kick_planner(
+    *,
+    shortlist,
+    deps: _FakeKickDeps,
+    estimate_transaction_fn,
+) -> KickPlanner:
+    return KickPlanner(
+        session=object(),
+        settings=_kick_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=object(),  # type: ignore[arg-type]
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=estimate_transaction_fn,
+    )
 
 
 @pytest.mark.asyncio
@@ -90,55 +162,27 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         deferred_same_auction_count=0,
         limited_candidates=[],
     )
-    monkeypatch.setattr("tidal.api.services.action_prepare.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr("tidal.api.services.action_prepare.sort_candidates", lambda candidates: candidates)
-
-    class _FakeBatchKickFn:
-        def _encode_transaction_data(self) -> str:
-            return "0xdeadbeef"
-
-    class _FakeFunctions:
-        def kick(self, *args):  # noqa: ANN001
-            assert args == ()
-            return _FakeBatchKickFn()
-
-        def batchKick(self, kick_tuples):  # noqa: ANN001
-            assert kick_tuples == [()]
-            return _FakeBatchKickFn()
-
-    fake_web3 = SimpleNamespace(contract=lambda address, abi: SimpleNamespace(functions=_FakeFunctions()))
-    fake_kicker = SimpleNamespace(
-        inspect_candidates=AsyncMock(return_value={(candidate.auction_address, candidate.token_address): None}),
-        prepare_kick=AsyncMock(return_value=prepared),
-        web3_client=fake_web3,
-        _kick_args=lambda prepared_kick: (),
-        plan_recovery=AsyncMock(return_value=None),
-    )
+    deps = _FakeKickDeps(candidate=candidate, prepared=prepared)
 
     captured: dict[str, object] = {}
 
     def fake_build_txn_service(settings, session, **kwargs):  # noqa: ANN001, ANN003
         del settings, session
         captured["require_curve_quote"] = kwargs.get("require_curve_quote")
-        return SimpleNamespace(kicker=fake_kicker)
+        return SimpleNamespace(
+            planner=_build_kick_planner(
+                shortlist=shortlist,
+                deps=deps,
+                estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)),
+            )
+        )
 
     monkeypatch.setattr("tidal.api.services.action_prepare.build_txn_service", fake_build_txn_service)
-    monkeypatch.setattr(
-        "tidal.api.services.action_prepare._estimate_transaction",
-        AsyncMock(return_value=(210000, 252000, None)),
-    )
     monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-1")
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
-        settings=SimpleNamespace(
-            txn_usd_threshold=100.0,
-            txn_max_data_age_seconds=600,
-            kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
-            txn_max_gas_limit=500000,
-            auction_kicker_address="0x5555555555555555555555555555555555555555",
-            chain_id=1,
-        ),
+        settings=_kick_settings(),
         operator_id="tester",
         source_type="strategy",
         source_address=candidate.source_address,
@@ -203,52 +247,27 @@ async def test_prepare_kick_action_skips_unsendable_batch_kick_when_gas_estimate
         deferred_same_auction_count=0,
         limited_candidates=[],
     )
-    monkeypatch.setattr("tidal.api.services.action_prepare.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr("tidal.api.services.action_prepare.sort_candidates", lambda candidates: candidates)
-
-    class _FakeBatchKickFn:
-        def _encode_transaction_data(self) -> str:
-            return "0xdeadbeef"
-
-    class _FakeFunctions:
-        def kick(self, *args):  # noqa: ANN001
-            assert args == ()
-            return _FakeBatchKickFn()
-
-        def batchKick(self, kick_tuples):  # noqa: ANN001
-            assert kick_tuples == [()]
-            return _FakeBatchKickFn()
-
-    fake_web3 = SimpleNamespace(contract=lambda address, abi: SimpleNamespace(functions=_FakeFunctions()))
-    fake_kicker = SimpleNamespace(
-        inspect_candidates=AsyncMock(return_value={(candidate.auction_address, candidate.token_address): None}),
-        prepare_kick=AsyncMock(return_value=prepared),
-        web3_client=fake_web3,
-        _kick_args=lambda prepared_kick: (),
-        plan_recovery=AsyncMock(return_value=None),
+    deps = _FakeKickDeps(candidate=candidate, prepared=prepared)
+    estimate_mock = AsyncMock(
+        return_value=(None, None, "Gas estimate failed: call to 0x3333…3333 failed: active auction")
     )
 
     monkeypatch.setattr(
         "tidal.api.services.action_prepare.build_txn_service",
-        lambda settings, session, **kwargs: SimpleNamespace(kicker=fake_kicker),
-    )
-    monkeypatch.setattr(
-        "tidal.api.services.action_prepare._estimate_transaction",
-        AsyncMock(return_value=(None, None, "Gas estimate failed: call to 0x3333…3333 failed: active auction")),
+        lambda settings, session, **kwargs: SimpleNamespace(
+            planner=_build_kick_planner(
+                shortlist=shortlist,
+                deps=deps,
+                estimate_transaction_fn=estimate_mock,
+            )
+        ),
     )
     create_prepared_action = AsyncMock()
     monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", create_prepared_action)
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
-        settings=SimpleNamespace(
-            txn_usd_threshold=100.0,
-            txn_max_data_age_seconds=600,
-            kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
-            txn_max_gas_limit=500000,
-            auction_kicker_address="0x5555555555555555555555555555555555555555",
-            chain_id=1,
-        ),
+        settings=_kick_settings(),
         operator_id="tester",
         source_type="fee_burner",
         source_address=candidate.source_address,
@@ -456,38 +475,24 @@ async def test_prepare_kick_action_falls_back_to_extended_kick_for_active_auctio
         deferred_same_auction_count=0,
         limited_candidates=[],
     )
-    monkeypatch.setattr("tidal.api.services.action_prepare.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr("tidal.api.services.action_prepare.sort_candidates", lambda candidates: candidates)
-
-    class _FakeKickFn:
-        def __init__(self, data: str) -> None:
-            self.data = data
-
-        def _encode_transaction_data(self) -> str:
-            return self.data
-
-    class _FakeFunctions:
-        def kick(self, *args):  # noqa: ANN001
-            assert args == ()
-            return _FakeKickFn("0xdeadbeef")
-
-        def kickExtended(self, *args):  # noqa: ANN001
-            assert args == ((1,),)
-            return _FakeKickFn("0xfeedface")
-
-    fake_web3 = SimpleNamespace(contract=lambda address, abi: SimpleNamespace(functions=_FakeFunctions()))
-    fake_kicker = SimpleNamespace(
-        inspect_candidates=AsyncMock(return_value={(candidate.auction_address, candidate.token_address): None}),
-        prepare_kick=AsyncMock(return_value=prepared),
-        web3_client=fake_web3,
-        _kick_args=lambda prepared_kick: (),
-        _kick_extended_args=lambda prepared_kick: ((1,),),
-        plan_recovery=AsyncMock(return_value=recovered),
+    deps = _FakeKickDeps(
+        candidate=candidate,
+        prepared=prepared,
+        recovered=recovered,
+        single_data="0xdeadbeef",
+        batch_data="0xdeadbeef",
+        extended_data="0xfeedface",
     )
 
     monkeypatch.setattr(
         "tidal.api.services.action_prepare.build_txn_service",
-        lambda settings, session, **kwargs: SimpleNamespace(kicker=fake_kicker),
+        lambda settings, session, **kwargs: SimpleNamespace(
+            planner=_build_kick_planner(
+                shortlist=shortlist,
+                deps=deps,
+                estimate_transaction_fn=estimate_mock,
+            )
+        ),
     )
     estimate_mock = AsyncMock(
         side_effect=[
@@ -500,14 +505,7 @@ async def test_prepare_kick_action_falls_back_to_extended_kick_for_active_auctio
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
-        settings=SimpleNamespace(
-            txn_usd_threshold=100.0,
-            txn_max_data_age_seconds=600,
-            kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
-            txn_max_gas_limit=500000,
-            auction_kicker_address="0x5555555555555555555555555555555555555555",
-            chain_id=1,
-        ),
+        settings=_kick_settings(),
         operator_id="tester",
         source_type="fee_burner",
         source_address=candidate.source_address,

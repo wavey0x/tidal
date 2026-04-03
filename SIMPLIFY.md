@@ -13,6 +13,8 @@ The specific target is to stop using `AuctionKicker` as a runtime dependency and
 - `TxnService`
 
 This is a cleanup and clarification project, not a redesign.
+Breaking changes are acceptable.
+There is no requirement to preserve the old facade or any backward-compatible entry points.
 
 ## Primary Outcome
 
@@ -22,7 +24,7 @@ After this work:
 - `TxnService` will orchestrate only the split components.
 - `KickPlanner` will require the split components directly.
 - `action_prepare.py` will use the split planner boundary directly.
-- `kicker.py` will be deleted or reduced to a temporary import shim with no runtime behavior.
+- `kicker.py` will be deleted.
 
 ## Why This Is The Highest-Leverage Next Step
 
@@ -44,7 +46,7 @@ That is accidental complexity. Removing it is a simplification, not an expansion
 2. Keep the system runnable after every phase.
 3. Do not change API payloads or DB schema in this project.
 4. Do not refactor unrelated domains in the same branch.
-5. Move from compatibility to clarity in small verified slices.
+5. Prefer direct breakage plus test migration over preserving legacy paths.
 6. Avoid creating new helper classes unless they immediately remove more complexity than they add.
 
 ## Non-Goals
@@ -173,12 +175,13 @@ Must not:
 This should be done in small phases.
 Each phase should leave the repo green.
 Each phase should be committed independently.
+No phase should preserve legacy behavior just to ease migration.
 
 ## Phase 0: Lock In Behavior Before More Deletion
 
 ### Objective
 
-Make sure the current split behavior is explicitly covered before removing more compatibility code.
+Make sure the current split behavior is explicitly covered before deleting the remaining legacy boundary.
 
 ### Work
 
@@ -188,7 +191,7 @@ Add or confirm tests for:
 - planner live path counting prepare-time `SKIP` as not attempted
 - planner live path persisting prepare-time failures through executor behavior
 - non-planner live path parity for prepare-time failures
-- action-prepare fallback using direct planner boundary
+- action-prepare using the direct planner boundary
 
 ### Exit Criteria
 
@@ -217,7 +220,7 @@ Use the same audit fields currently preserved by `_persist_prepare_failure`.
 ### Why First
 
 This reduces risk in later phases.
-It gives `TxnService` a stable public contract before compatibility code is deleted.
+It gives `TxnService` a stable public contract before legacy code is deleted.
 
 ### Verification
 
@@ -239,26 +242,18 @@ Make `TxnService` depend only on the real split boundary.
 In `service.py`:
 
 - require `preparer` and `executor` in the constructor for production usage
-- if `kicker` is temporarily accepted for migration, treat it as constructor-only input used to derive `preparer`, `executor`, and `tx_builder`
-- after `__init__`, internal logic must never branch on `kicker`
 - replace:
-  - `self.preparer or self.kicker`
-  - `self.executor or self.kicker`
-  - signer fallbacks through `kicker`
+  - any `self.preparer or ...` pattern
+  - any `self.executor or ...` pattern
+  - any signer fallback through `kicker`
 - use only:
   - `self.preparer`
   - `self.executor`
   - `self.planner`
 
-If a temporary transition is needed:
-
-- allow `kicker` in constructor only to derive `preparer`, `executor`, and `tx_builder`
-- normalize immediately in `__init__`
-- never branch on `kicker` later
-
 ### Additional Cleanup
 
-Delete dead compatibility state from `TxnService`, including any unused `tx_builder` placeholder if it is not needed.
+Delete dead legacy state from `TxnService`, including any unused `tx_builder` placeholder if it is not needed.
 
 ### Verification
 
@@ -285,9 +280,8 @@ In `planner.py`:
   - `preparer`
   - `tx_builder`
   - either `web3_client` or explicit estimate function
-- delete compatibility checks like:
-  - using a fallback object that merely happens to have kicker-shaped methods
-- delete calldata fallback behavior that exists only for fake kicker-style tests if the direct builder can always be provided
+- delete object-shape compatibility checks entirely
+- delete calldata fallback behavior that exists only for fake kicker-style tests
 
 ### Test Migration
 
@@ -298,7 +292,7 @@ Update planner tests to provide explicit fake:
 - web3 client or estimate function
 
 Direct-contract fakes are acceptable in tests.
-The rule is only that production code must stop supporting kicker-shaped fallback behavior.
+The rule is that production code must not support kicker-shaped fallback behavior at all.
 
 ### Verification
 
@@ -361,7 +355,7 @@ In `action_prepare.py`:
 
 If tests currently monkeypatch `build_txn_service` to return `SimpleNamespace(kicker=...)`:
 
-- update those tests to return `planner`, `preparer`, and `tx_builder`, or a fake `TxnService`-shaped object with the direct dependencies
+- update those tests immediately to return `planner`, `preparer`, and `tx_builder`, or a fake `TxnService`-shaped object with the direct dependencies
 
 ### Verification
 
@@ -376,7 +370,7 @@ One commit for API-prepare migration.
 
 ### Objective
 
-Stop test architecture from preserving production compatibility debt.
+Stop test architecture from preserving production legacy debt.
 
 ### Work
 
@@ -402,11 +396,6 @@ Create or expand:
 
 Move legacy facade-oriented cases into the concrete component suites.
 
-### Keep One Small Compatibility Test Only If Needed
-
-If an import shim remains temporarily, one lightweight test is enough.
-Do not preserve the whole old behavioral surface through the facade.
-
 ### Verification
 
 - full transaction-service unit suite
@@ -423,29 +412,17 @@ This may need two commits:
 
 ### Objective
 
-Remove the compatibility layer from production code.
+Remove the legacy facade from production code.
 
 ### Work
 
-Choose one of these outcomes:
-
-#### Preferred
-
 Delete `kicker.py` completely and update imports.
-
-#### Acceptable Transitional Step
-
-Reduce `kicker.py` to:
-
-- thin re-exports of shared constants if still needed
-- a short deprecation comment
-
-Do not leave any runtime orchestration or behavior in that file.
 
 ### Verification
 
 - no production module imports `AuctionKicker`
 - no runtime path constructs `AuctionKicker`
+- `kicker.py` no longer exists
 - full suite green
 
 ### Commit Boundary
@@ -502,7 +479,7 @@ If `KickExecutor` is understandable after the facade is removed, skip this phase
 
 ### `tidal/transaction_service/kicker.py`
 
-- delete or reduce to import shim
+- delete
 
 ### Tests
 
@@ -529,8 +506,7 @@ Mitigation:
 
 Mitigation:
 
-- migrate production wiring first
-- then migrate tests
+- migrate production wiring and test wiring in the same phase where a legacy dependency is removed
 - run full suite after each major phase
 
 ### Main Risk 4: Over-Refactoring
@@ -561,7 +537,7 @@ Stop and reassess if any of these happen:
 
 - a phase requires new generic abstractions to proceed
 - API payload compatibility becomes unclear
-- test migration starts forcing production compatibility code to remain
+- test migration starts tempting the addition of new legacy shims
 - the branch stops being cleanly incremental
 
 If that happens, cut the phase smaller.
@@ -575,7 +551,7 @@ This work is complete when all of the following are true:
 - `KickPlanner` does not accept or use `kicker`
 - `action_prepare.py` does not look for `txn_service.kicker`
 - tests do not patch `tidal.transaction_service.kicker.ERC20Reader`
-- `kicker.py` has no runtime behavior or is gone
+- `kicker.py` is gone
 - full suite passes
 
 ## Recommended Commit Sequence

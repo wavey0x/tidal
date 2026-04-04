@@ -883,6 +883,19 @@ tbody tr:hover td {
   justify-self: end;
 }
 
+.history-cell .kick-row-inner {
+  display: inline-flex;
+  gap: 4px;
+  width: max-content;
+  max-width: 100%;
+}
+
+.history-cell .kick-history-auctionscan {
+  justify-self: auto;
+  flex: 0 0 auto;
+  margin-left: 1px;
+}
+
 .kick-row-inner .etherscan-link {
   min-width: 0;
   overflow: hidden;

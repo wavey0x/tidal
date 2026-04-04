@@ -179,6 +179,13 @@ class AuctionInspection:
     minimum_price_public_raw: int | None = None
     want_address: str | None = None
     want_decimals: int | None = None
+    enabled_tokens: tuple[str, ...] = ()
+    inactive_tokens_with_balance: tuple[str, ...] = ()
+    inactive_token: str | None = None
+    inactive_token_balance_raw: int | None = None
+    inactive_token_kickable_raw: int | None = None
+    inactive_token_kicked_at: int | None = None
+    auction_length_seconds: int | None = None
 
     @property
     def active_price_raw(self) -> int | None:

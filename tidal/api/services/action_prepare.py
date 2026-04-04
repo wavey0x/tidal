@@ -544,7 +544,12 @@ async def prepare_settle_action(
     normalized_auction = normalize_address(auction_address)
     normalized_token = normalize_address(token_address) if token_address else None
     web3_client = build_web3_client(settings)
-    inspection = await inspect_auction_settlement(web3_client, settings, normalized_auction)
+    inspection = await inspect_auction_settlement(
+        web3_client,
+        settings,
+        normalized_auction,
+        token_address=normalized_token,
+    )
     decision = decide_auction_settlement(
         inspection,
         token_address=normalized_token,

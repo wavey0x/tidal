@@ -142,6 +142,48 @@ class _NoopSettleClient:
         }
 
 
+class _InactiveNoopSettleClient:
+    def __enter__(self) -> "_InactiveNoopSettleClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        del exc_type, exc, tb
+
+    def prepare_settle(self, auction_address: str, payload: dict[str, object]) -> dict[str, object]:
+        del payload
+        return {
+            "status": "noop",
+            "warnings": [],
+            "data": {
+                "preview": {
+                    "decision": {
+                        "status": "noop",
+                        "operation_type": None,
+                        "token_address": "0x1cfa5641c01406ab8ac350ded7d735ec41298372",
+                        "reason": (
+                            "auction has stranded balance for token "
+                            "0x1cFA5641C01406AB8AC350dED7D735EC41298372, but the lot is already inactive below minimumPrice; "
+                            "current sweep-and-settle only works while the lot is active. "
+                            "Use governance forceKick() to relist or governance sweep()+disable() to unwind."
+                        ),
+                    },
+                    "inspection": {
+                        "auction_address": auction_address,
+                        "is_active_auction": False,
+                        "active_token": None,
+                        "active_tokens": [],
+                        "inactive_token": "0x1cfa5641c01406ab8ac350ded7d735ec41298372",
+                        "inactive_token_balance_raw": 117240663299393522411314,
+                        "inactive_token_kickable_raw": 117240663299393522411314,
+                        "inactive_token_kicked_at": 1775330567,
+                        "auction_length_seconds": 86400,
+                    },
+                },
+                "transactions": [],
+            },
+        }
+
+
 def test_operator_auction_enable_tokens_uses_styled_submission_flow(tmp_path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     client = _EnableTokensClient()
@@ -402,6 +444,48 @@ def test_operator_auction_settle_sweep_threads_payload(tmp_path, monkeypatch) ->
             },
         )
     ]
+
+
+def test_operator_auction_settle_noop_renders_inactive_balance_state(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _InactiveNoopSettleClient()
+
+    monkeypatch.setattr(
+        operator_auction_cli_module.CLIContext,
+        "verify_authenticated_api_access",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        operator_auction_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_auction_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(signer=None, sender=None),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        operator_app,
+        [
+            "auction",
+            "settle",
+            "0xa00e6b35c23442fa9d5149cba5dd94623ffe6693",
+            "--config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "No Transaction Prepared" in result.output
+    assert "inactive below minimumPrice" in result.output
+    assert "Settlement state" in result.output
+    assert "Inactive token:" in result.output
+    assert "Auction bal:" in result.output
+    assert "Kickable:" in result.output
+    assert "Auction len:" in result.output
 
 
 def test_operator_auction_deploy_checks_api_auth_before_resolving_execution(tmp_path, monkeypatch) -> None:

@@ -1,3 +1,4 @@
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -63,6 +64,54 @@ def test_decide_auction_settlement_no_active_lot_is_error_for_forced_method() ->
 
     assert decision.status == "error"
     assert decision.reason == "requested settlement method is not applicable: auction has no active lot"
+
+
+def test_decide_auction_settlement_inactive_below_floor_reports_stranded_balance() -> None:
+    now = int(time.time())
+    decision = decide_auction_settlement(
+        _make_inspection(
+            is_active_auction=False,
+            active_tokens=(),
+            active_token=None,
+            active_available_raw=None,
+            active_price_public_raw=None,
+            inactive_token="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            inactive_token_balance_raw=10**18,
+            inactive_token_kickable_raw=10**18,
+            inactive_token_kicked_at=now - 300,
+            auction_length_seconds=86400,
+        ),
+        token_address="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        method="sweep_and_settle",
+    )
+
+    assert decision.status == "error"
+    assert decision.token_address == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert "inactive below minimumPrice" in decision.reason
+    assert "forceKick()" in decision.reason
+    assert "sweep()+disable()" in decision.reason
+
+
+def test_decide_auction_settlement_inactive_expired_balance_is_noop_in_auto_mode() -> None:
+    now = int(time.time())
+    decision = decide_auction_settlement(
+        _make_inspection(
+            is_active_auction=False,
+            active_tokens=(),
+            active_token=None,
+            active_available_raw=None,
+            active_price_public_raw=None,
+            inactive_token="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            inactive_token_balance_raw=10**18,
+            inactive_token_kickable_raw=10**18,
+            inactive_token_kicked_at=now - 90_000,
+            auction_length_seconds=86400,
+        )
+    )
+
+    assert decision.status == "noop"
+    assert decision.token_address == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert "the lot has already expired" in decision.reason
 
 
 def test_decide_auction_settlement_sold_out_selects_settle() -> None:

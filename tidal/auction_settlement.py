@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import time
 from typing import Literal
 
 from eth_utils import to_checksum_address
@@ -44,8 +45,14 @@ def normalize_settlement_method(value: str) -> SettlementMethod:
     raise ValueError("expected 'auto', 'settle', or 'sweep-and-settle'")
 
 
-async def inspect_auction_settlement(web3_client, settings, auction_address: str) -> AuctionInspection:  # noqa: ANN001
+async def inspect_auction_settlement(  # noqa: ANN001
+    web3_client,
+    settings,
+    auction_address: str,
+    token_address: str | None = None,
+) -> AuctionInspection:
     normalized_auction = normalize_address(auction_address)
+    normalized_token = normalize_address(token_address) if token_address else None
     multicall_client = MulticallClient(
         web3_client,
         settings.multicall_address,
@@ -57,19 +64,23 @@ async def inspect_auction_settlement(web3_client, settings, auction_address: str
         multicall_enabled=settings.multicall_enabled,
         multicall_auction_batch_calls=settings.multicall_auction_batch_calls,
     )
+    erc20_reader = ERC20Reader(
+        web3_client,
+        multicall_client=multicall_client,
+        multicall_enabled=settings.multicall_enabled,
+        multicall_balance_batch_calls=settings.multicall_balance_batch_calls,
+    )
 
     active_flags = await reader.read_bool_noargs_many([normalized_auction], "isAnActiveAuction")
     is_active_auction = active_flags.get(normalized_auction)
-    if is_active_auction is not True:
-        return AuctionInspection(
-            auction_address=normalized_auction,
-            is_active_auction=is_active_auction,
-            active_tokens=(),
-        )
 
     enabled_tokens_result = await reader.read_address_array_noargs_many([normalized_auction], "getAllEnabledAuctions")
-    enabled_tokens = enabled_tokens_result.get(normalized_auction) or []
-    probe_pairs = [(normalized_auction, token_address) for token_address in enabled_tokens]
+    enabled_tokens: list[str] = enabled_tokens_result.get(normalized_auction) or []
+
+    probe_tokens: set[str] = set(enabled_tokens)
+    if normalized_token is not None:
+        probe_tokens.add(normalized_token)
+    probe_pairs = [(normalized_auction, token_address) for token_address in sorted(probe_tokens)]
 
     token_active = {}
     if probe_pairs:
@@ -78,7 +89,7 @@ async def inspect_auction_settlement(web3_client, settings, auction_address: str
     active_tokens = tuple(
         sorted(
             token_address
-            for token_address in enabled_tokens
+            for token_address in sorted(probe_tokens)
             if token_active.get((normalized_auction, token_address)) is True
         )
     )
@@ -90,8 +101,14 @@ async def inspect_auction_settlement(web3_client, settings, auction_address: str
     minimum_price_public_raw = None
     want_address = None
     want_decimals = None
+    inactive_tokens_with_balance: tuple[str, ...] = ()
+    inactive_token = None
+    inactive_token_balance_raw = None
+    inactive_token_kickable_raw = None
+    inactive_token_kicked_at = None
+    auction_length_seconds = None
 
-    if active_tokens:
+    if active_tokens or normalized_token is not None:
         minimum_price_by_auction, want_by_auction = await asyncio.gather(
             reader.read_uint_noargs_many([normalized_auction], "minimumPrice"),
             reader.read_address_noargs_many([normalized_auction], "want"),
@@ -99,7 +116,6 @@ async def inspect_auction_settlement(web3_client, settings, auction_address: str
         minimum_price_scaled_1e18 = minimum_price_by_auction.get(normalized_auction)
         want_address = want_by_auction.get(normalized_auction)
         if want_address is not None:
-            erc20_reader = ERC20Reader(web3_client)
             try:
                 want_decimals = await erc20_reader.read_decimals(want_address)
             except Exception:  # noqa: BLE001
@@ -113,6 +129,30 @@ async def inspect_auction_settlement(web3_client, settings, auction_address: str
         )
         active_available_raw = available_by_pair.get((normalized_auction, active_token))
         active_price_public_raw = price_by_pair.get((normalized_auction, active_token))
+    elif probe_pairs:
+        balance_by_pair, _ = await erc20_reader.read_balances_many(probe_pairs)
+        inactive_tokens_with_balance = tuple(
+            sorted(
+                token_address
+                for _, token_address in probe_pairs
+                if (balance_by_pair.get((normalized_auction, token_address)) or 0) > 0
+            )
+        )
+        if normalized_token is not None and (balance_by_pair.get((normalized_auction, normalized_token)) or 0) > 0:
+            inactive_token = normalized_token
+        elif len(inactive_tokens_with_balance) == 1:
+            inactive_token = inactive_tokens_with_balance[0]
+
+        if inactive_token is not None:
+            kickable_by_pair, kicked_by_pair, auction_length_by_auction = await asyncio.gather(
+                reader.read_uint_arg_many([(normalized_auction, inactive_token)], "kickable"),
+                reader.read_uint_arg_many([(normalized_auction, inactive_token)], "kicked"),
+                reader.read_uint_noargs_many([normalized_auction], "auctionLength"),
+            )
+            inactive_token_balance_raw = balance_by_pair.get((normalized_auction, inactive_token))
+            inactive_token_kickable_raw = kickable_by_pair.get((normalized_auction, inactive_token))
+            inactive_token_kicked_at = kicked_by_pair.get((normalized_auction, inactive_token))
+            auction_length_seconds = auction_length_by_auction.get(normalized_auction)
 
     return AuctionInspection(
         auction_address=normalized_auction,
@@ -125,6 +165,52 @@ async def inspect_auction_settlement(web3_client, settings, auction_address: str
         minimum_price_public_raw=minimum_price_public_raw,
         want_address=want_address,
         want_decimals=want_decimals,
+        enabled_tokens=tuple(sorted(enabled_tokens)),
+        inactive_tokens_with_balance=inactive_tokens_with_balance,
+        inactive_token=inactive_token,
+        inactive_token_balance_raw=inactive_token_balance_raw,
+        inactive_token_kickable_raw=inactive_token_kickable_raw,
+        inactive_token_kicked_at=inactive_token_kicked_at,
+        auction_length_seconds=auction_length_seconds,
+    )
+
+
+def _describe_inactive_balance_reason(
+    inspection: AuctionInspection,
+    *,
+    requested_token: str | None,
+) -> str | None:
+    if inspection.inactive_token is None or (inspection.inactive_token_balance_raw or 0) <= 0:
+        return None
+
+    inactive_token = normalize_address(inspection.inactive_token)
+    token_label = to_checksum_address(inactive_token)
+    if requested_token is not None and normalize_address(requested_token) == inactive_token:
+        subject = f"requested token {token_label} has stranded balance"
+    else:
+        subject = f"auction has stranded balance for token {token_label}"
+
+    if (
+        inspection.inactive_token_kicked_at is not None
+        and inspection.auction_length_seconds is not None
+        and inspection.inactive_token_kicked_at > 0
+    ):
+        inactive_until = inspection.inactive_token_kicked_at + inspection.auction_length_seconds
+        state = (
+            "the lot is already inactive below minimumPrice"
+            if inactive_until > int(time.time())
+            else "the lot has already expired"
+        )
+    else:
+        state = "the lot is inactive"
+
+    unwind_options = "Use governance sweep()+disable() to unwind."
+    if (inspection.inactive_token_kickable_raw or 0) > 0:
+        unwind_options = "Use governance forceKick() to relist or governance sweep()+disable() to unwind."
+
+    return (
+        f"{subject}, but {state}; current sweep-and-settle only works while the lot is active. "
+        f"{unwind_options}"
     )
 
 
@@ -150,6 +236,14 @@ def decide_auction_settlement(
         )
 
     if inspection.is_active_auction is not True:
+        inactive_reason = _describe_inactive_balance_reason(inspection, requested_token=normalized_token)
+        if inactive_reason is not None:
+            return AuctionSettlementDecision(
+                status="error" if forced else "noop",
+                operation_type=None,
+                token_address=inspection.inactive_token,
+                reason=inactive_reason,
+            )
         return AuctionSettlementDecision(
             status="error" if forced else "noop",
             operation_type=None,

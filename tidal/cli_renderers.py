@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import re
 import shutil
 import sys
 from dataclasses import asdict, dataclass, is_dataclass
@@ -132,6 +133,20 @@ def format_settlement_reason_lines(reason: str, *, prefix: str = "Reason:       
             f"{prefix}settle not applicable",
             " " * len(prefix) + "auction above minimumPrice",
         ]
+    if "stranded balance" in reason and "current sweep-and-settle only works while the lot is active" in reason:
+        lines = [f"{prefix}stranded balance detected"]
+        token_match = re.search(r"(0x[a-fA-F0-9]{40})", reason)
+        if token_match is not None:
+            lines.append(" " * len(prefix) + f"token {token_match.group(1)}")
+        if "inactive below minimumPrice" in reason:
+            lines.append(" " * len(prefix) + "lot inactive below minimumPrice")
+        elif "has already expired" in reason:
+            lines.append(" " * len(prefix) + "lot has already expired")
+        if "forceKick()" in reason and "sweep()+disable()" in reason:
+            lines.append(" " * len(prefix) + "use governance forceKick() or sweep()+disable()")
+        elif "sweep()+disable()" in reason:
+            lines.append(" " * len(prefix) + "use governance sweep()+disable()")
+        return lines
     return [f"{prefix}{reason}"]
 
 

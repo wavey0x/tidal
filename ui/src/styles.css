@@ -847,6 +847,24 @@ tbody tr:hover td {
   gap: 4px;
 }
 
+.kick-history-auctionscan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 1px;
+  opacity: 0.58;
+  text-decoration: none;
+}
+
+.kick-history-auctionscan:hover {
+  opacity: 1;
+}
+
+.kick-history-auctionscan-icon {
+  width: 9px;
+  height: 9px;
+}
+
 .kick-time {
   color: var(--text-faint);
   font-size: 10px;
@@ -1126,12 +1144,13 @@ tbody tr:hover td {
 }
 
 .strategy-detail-balances .token-cell {
-  width: min(100%, 320px);
+  width: min(100%, 260px);
 }
 
 .strategy-detail-balances .token-item {
-  width: 100%;
-  grid-template-columns: var(--token-icon-size) minmax(0, 1fr) 82px;
+  width: max-content;
+  max-width: 100%;
+  grid-template-columns: var(--token-icon-size) minmax(52px, max-content) 82px;
 }
 
 .kick-detail-tokens {

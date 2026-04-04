@@ -789,6 +789,28 @@ function AuctionScanIconLink({ kick, onOpen }) {
   );
 }
 
+function KickHistoryAuctionScanLink({ kick }) {
+  const href = getAuctionScanHref(kick);
+  if (!href) {
+    return null;
+  }
+
+  const target = getAuctionScanTargetLabel(kick);
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="kick-history-auctionscan"
+      title={`View ${target} on AuctionScan`}
+      aria-label={`View ${target} on AuctionScan`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <AuctionScanFavicon className="kick-history-auctionscan-icon" />
+    </a>
+  );
+}
+
 function MissingAuctionAction({ deployState, onDeploy }) {
   const status = deployState?.status || "idle";
   const txHash = deployState?.txHash || null;
@@ -921,7 +943,7 @@ function AuctionAddressCell({ address, version, wantAddress, wantSymbol, emptyCo
         </span>
       ) : null}
       {!address ? (emptyContent || <span className="row-secondary mono">—</span>) : null}
-      {wantAddress ? (
+      {address && wantAddress ? (
         <span className="auction-secondary-row">
           <WantTokenValue address={wantAddress} symbol={wantSymbol} />
         </span>
@@ -997,6 +1019,7 @@ function KickRow({ kick, nowMs }) {
       <span className="kick-time mono">{formatRelativeTimestamp(kick.createdAt, nowMs)}</span>
       <span className="kick-separator mono">·</span>
       <EtherscanTxLink txHash={kick.txHash} />
+      <KickHistoryAuctionScanLink kick={kick} />
     </span>
   );
 }

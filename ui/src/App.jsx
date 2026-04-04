@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Big from "big.js";
 import { keccak_256 } from "js-sha3";
@@ -648,6 +648,25 @@ function AddressLinkCopy({
   );
 }
 
+function WantTokenValue({ address, symbol }) {
+  const formattedAddress = checksumAddress(address);
+
+  if (!formattedAddress) {
+    return <span className="row-secondary mono">—</span>;
+  }
+
+  return (
+    <span className="address-copy want-token-value" title={formattedAddress}>
+      <span className="mono address-value">{symbol || shortenAddress(formattedAddress)}</span>
+      <CopyIconButton
+        valueToCopy={formattedAddress}
+        title={`Copy address ${formattedAddress}`}
+        ariaLabel={`Copy address ${formattedAddress}`}
+      />
+    </span>
+  );
+}
+
 function EntityIdentity({ primary, secondary, address }) {
   return (
     <div className="entity-cell">
@@ -778,15 +797,25 @@ function MissingAuctionAction({ deployState, onDeploy }) {
   const txStatusLabel = status === "error" ? "failed" : "submitted";
 
   return (
-    <div className="auction-missing-state">
+    <div className="auction-missing-state" onClick={(event) => event.stopPropagation()}>
       {txHash ? (
         <div className="auction-action-status">
           <span className="row-secondary mono">{txStatusLabel}</span>
           <span className="kick-separator mono">·</span>
-          <EtherscanTxLink txHash={txHash} />
+          <span onClick={(event) => event.stopPropagation()}>
+            <EtherscanTxLink txHash={txHash} />
+          </span>
         </div>
       ) : (
-        <button type="button" className="auction-action-link" onClick={onDeploy} disabled={isBusy}>
+        <button
+          type="button"
+          className="auction-action-link"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDeploy();
+          }}
+          disabled={isBusy}
+        >
           {status === "wallet" ? (
             <span className="mono">confirm in wallet…</span>
           ) : status === "preparing" ? (
@@ -882,50 +911,82 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   );
 }
 
-function AuctionAddressCell({ address, version, kicks, nowMs, isExpanded, onToggleExpand, emptyContent = null }) {
-  const hasKicks = kicks && kicks.length > 0;
-  const hasChevron = kicks && kicks.length > 1;
+function AuctionAddressCell({ address, version, wantAddress, wantSymbol, emptyContent = null }) {
+  return (
+    <div className="auction-value-slot">
+      {address ? (
+        <span className="auction-address-row">
+          <AddressCopy address={address} />
+          {version ? <span className="auction-version-badge mono">{version}</span> : null}
+        </span>
+      ) : null}
+      {!address ? (emptyContent || <span className="row-secondary mono">—</span>) : null}
+      {wantAddress ? (
+        <span className="auction-secondary-row">
+          <WantTokenValue address={wantAddress} symbol={wantSymbol} />
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
-  if (!address) {
-    return (
-      <span className="auction-value-slot">
-        {emptyContent || <span className="row-secondary mono">—</span>}
-      </span>
-    );
+function KickHistoryCell({
+  kicks,
+  nowMs,
+  isExpanded,
+  onToggleExpand,
+  isMobile = false,
+  emptyContent = null,
+}) {
+  const hasKicks = kicks && kicks.length > 0;
+  const hasChevron = !isMobile && kicks && kicks.length > 1;
+
+  if (!hasKicks) {
+    return emptyContent || <span className="row-secondary mono">—</span>;
   }
 
   return (
-    <div className="auction-value-slot">
-      <span className="auction-address-row">
-        <AddressCopy address={address} />
-        {version ? <span className="auction-version-badge mono">{version}</span> : null}
-      </span>
-      {hasKicks ? (
-        <div className="kick-history">
-          <div className="kick-summary">
-            {hasChevron ? (
-              <button
-                type="button"
-                className={`chevron-toggle ${isExpanded ? "is-expanded" : ""}`}
-                onClick={onToggleExpand}
-                aria-label={isExpanded ? "Collapse kick history" : "Expand kick history"}
-              >
-                ▶
-              </button>
-            ) : null}
-            <KickRow kick={kicks[0]} nowMs={nowMs} />
-          </div>
-          {isExpanded && kicks.length > 1 ? (
-            <div className="kick-expanded">
-              {kicks.slice(1, 5).map((kick, i) => (
-                <div key={kick.txHash || i} className="kick-row">
-                  <KickRow kick={kick} nowMs={nowMs} />
-                </div>
-              ))}
+    <div className="kick-history" onClick={(event) => event.stopPropagation()}>
+      <div className="kick-summary">
+        {hasChevron ? (
+          <button
+            type="button"
+            className={`chevron-toggle ${isExpanded ? "is-expanded" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleExpand();
+            }}
+            aria-label={isExpanded ? "Collapse kick history" : "Expand kick history"}
+          >
+            ▶
+          </button>
+        ) : null}
+        <KickRow kick={kicks[0]} nowMs={nowMs} />
+      </div>
+      {hasChevron && isExpanded && kicks.length > 1 ? (
+        <div className="kick-expanded">
+          {kicks.slice(1, 5).map((kick, i) => (
+            <div key={kick.txHash || i} className="kick-row">
+              <KickRow kick={kick} nowMs={nowMs} />
             </div>
-          ) : null}
+          ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function AuctionWithHistoryCell({ address, version, kicks, nowMs, isExpanded, onToggleExpand }) {
+  return (
+    <div className="auction-with-history">
+      <AuctionAddressCell address={address} version={version} />
+      <KickHistoryCell
+        kicks={kicks}
+        nowMs={nowMs}
+        isExpanded={isExpanded}
+        onToggleExpand={onToggleExpand}
+        emptyContent={null}
+      />
     </div>
   );
 }
@@ -1294,17 +1355,15 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
   );
 }
 
-function KickDetailPanel({ kick, onOpenAuctionScan }) {
+function DetailPanel({ colSpan, children }) {
   return (
     <tr className="kick-detail">
-      <td colSpan={8}>
-        <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
-      </td>
+      <td colSpan={colSpan}>{children}</td>
     </tr>
   );
 }
 
-function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
+function DetailModal({ onClose, children }) {
   const sheetRef = useRef(null);
   const bodyRef = useRef(null);
   const backdropRef = useRef(null);
@@ -1373,11 +1432,27 @@ function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
       >
         <div className="kick-modal-handle" />
         <div ref={bodyRef} className="kick-modal-body">
-          <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
+          {children}
         </div>
       </div>
     </div>,
     document.body
+  );
+}
+
+function KickDetailPanel({ kick, onOpenAuctionScan }) {
+  return (
+    <DetailPanel colSpan={8}>
+      <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
+    </DetailPanel>
+  );
+}
+
+function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
+  return (
+    <DetailModal onClose={onClose}>
+      <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
+    </DetailModal>
   );
 }
 
@@ -1969,7 +2044,10 @@ function TokenBalances({
               <button
                 type="button"
                 className="mono token-balance token-balance-button"
-                onClick={onToggleMode}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleMode();
+                }}
                 title={title}
               >
                 {displayMode === "usd"
@@ -1981,6 +2059,157 @@ function TokenBalances({
         })}
       </div>
     </div>
+  );
+}
+
+function StrategyDetailContent({
+  row,
+  nowMs,
+  displayMode,
+  onToggleMode,
+  deployState,
+  onDeploy,
+  historyExpanded,
+  onToggleHistory,
+}) {
+  const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
+
+  return (
+    <div className="kick-detail-grid strategy-detail-grid">
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Last Scan</div>
+        <div
+          className="kick-detail-value clickable"
+          title={showRelativeTimestamp ? formatTimestamp(row.scannedAt) : row.scannedAt}
+          onClick={() => setShowRelativeTimestamp((value) => !value)}
+          style={{ cursor: "pointer" }}
+        >
+          {row.scannedAt
+            ? showRelativeTimestamp
+              ? formatRelativeTimestamp(row.scannedAt, nowMs)
+              : formatTimestamp(row.scannedAt)
+            : "—"}
+        </div>
+      </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Want Token</div>
+        <div className="kick-detail-value">
+          <WantTokenValue address={row.wantAddress} symbol={row.wantSymbol} />
+        </div>
+      </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Vault</div>
+        <div className="kick-detail-value strategy-detail-entity">
+          <EntityIdentity
+            primary={row.contextSymbol || row.contextName || "Unknown Vault"}
+            secondary={row.contextName && row.contextSymbol !== row.contextName ? row.contextName : null}
+            address={row.contextAddress}
+          />
+        </div>
+      </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Strategy</div>
+        <div className="kick-detail-value strategy-detail-entity">
+          <EntityIdentity
+            primary={formatStrategyDisplayName(row.sourceName)}
+            address={row.sourceAddress}
+          />
+        </div>
+      </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">Auction</div>
+        <div className="kick-detail-value">
+          <AuctionAddressCell
+            address={row.auctionAddress}
+            version={row.auctionVersion}
+            emptyContent={
+              <MissingAuctionAction
+                deployState={deployState}
+                onDeploy={onDeploy}
+              />
+            }
+          />
+        </div>
+      </div>
+      <div className="kick-detail-item">
+        <div className="kick-detail-label">History</div>
+        <div className="kick-detail-value">
+          <KickHistoryCell
+            kicks={row.kicks}
+            nowMs={nowMs}
+            isExpanded={historyExpanded}
+            onToggleExpand={onToggleHistory}
+          />
+        </div>
+      </div>
+      <div className="kick-detail-item strategy-detail-balances">
+        <div className="kick-detail-label">Token Balances</div>
+        <div className="kick-detail-value">
+          {row.balances.length ? (
+            <TokenBalances
+              balances={row.balances}
+              displayMode={displayMode}
+              onToggleMode={onToggleMode}
+            />
+          ) : (
+            <div className="row-secondary">No balances above the visibility threshold.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StrategyDetailPanel({
+  row,
+  nowMs,
+  displayMode,
+  onToggleMode,
+  deployState,
+  onDeploy,
+  historyExpanded,
+  onToggleHistory,
+}) {
+  return (
+    <DetailPanel colSpan={5}>
+      <StrategyDetailContent
+        row={row}
+        nowMs={nowMs}
+        displayMode={displayMode}
+        onToggleMode={onToggleMode}
+        deployState={deployState}
+        onDeploy={onDeploy}
+        historyExpanded={historyExpanded}
+        onToggleHistory={onToggleHistory}
+      />
+    </DetailPanel>
+  );
+}
+
+function StrategyDetailModal({
+  row,
+  nowMs,
+  displayMode,
+  onToggleMode,
+  deployState,
+  onDeploy,
+  historyExpanded,
+  onToggleHistory,
+  onClose,
+}) {
+  return (
+    <DetailModal onClose={onClose}>
+      <StrategyDetailContent
+        row={row}
+        nowMs={nowMs}
+        displayMode={displayMode}
+        onToggleMode={onToggleMode}
+        deployState={deployState}
+        onDeploy={onDeploy}
+        historyExpanded={historyExpanded}
+        onToggleHistory={onToggleHistory}
+      />
+    </DetailModal>
   );
 }
 
@@ -2055,7 +2284,7 @@ function FeeBurnerPage({
                 </div>
                 <div className="fee-burner-top-item fee-burner-auction">
                   <div className="fee-burner-label">Auction</div>
-                  <AuctionAddressCell
+                  <AuctionWithHistoryCell
                     address={row.auctionAddress}
                     version={row.auctionVersion}
                     kicks={row.kicks}
@@ -2118,6 +2347,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [displayMode, setDisplayMode] = useState("usd");
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const isMobile = useMediaQuery("(max-width: 600px)");
+  const [expandedStrategyRows, setExpandedStrategyRows] = useState(() => new Set());
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
   const [deployStates, setDeployStates] = useState({});
   const [deployConfirm, setDeployConfirm] = useState(null);
@@ -2421,6 +2652,8 @@ export default function App() {
         row.contextName,
         row.contextSymbol,
         row.auctionAddress,
+        row.wantAddress,
+        row.wantSymbol,
         ...row.balances.map((balance) => `${balance.tokenSymbol} ${balance.tokenAddress}`),
       ]
         .filter(Boolean)
@@ -2495,6 +2728,33 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  function toggleStrategyExpand(sourceAddress) {
+    setExpandedStrategyRows((prev) => {
+      if (prev.has(sourceAddress)) {
+        const next = new Set(prev);
+        next.delete(sourceAddress);
+        return next;
+      }
+      if (isMobile) {
+        return new Set([sourceAddress]);
+      }
+      const next = new Set(prev);
+      next.add(sourceAddress);
+      return next;
+    });
+  }
+
+  function handleStrategyRowKeyDown(sourceAddress, event) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    toggleStrategyExpand(sourceAddress);
   }
 
   function updateDeployState(sourceAddress, updates) {
@@ -2740,9 +3000,9 @@ export default function App() {
           <thead>
             <tr>
               <th className="last-scan-col">Last Scan</th>
-              <th>Vault</th>
               <th>Strategy</th>
               <th className="auction-col">Auction</th>
+              <th className="history-col">History</th>
               <th className="token-col">
                 <button
                   type="button"
@@ -2767,47 +3027,79 @@ export default function App() {
             ) : null}
             {!loadingRows
               ? filteredStrategyRows.map((row) => (
-                  <tr key={row.sourceAddress}>
-                    <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)} data-label="Last Scan">
-                      {formatRelativeTimestamp(row.scannedAt, nowMs)}
-                    </td>
-                    <td data-label="Vault">
-                      <EntityIdentity
-                        primary={row.contextSymbol || row.contextName || "Unknown Vault"}
-                        secondary={row.contextName && row.contextSymbol !== row.contextName ? row.contextName : null}
-                        address={row.contextAddress}
-                      />
-                    </td>
-                    <td data-label="Strategy">
-                      <EntityIdentity
-                        primary={formatStrategyDisplayName(row.sourceName)}
-                        address={row.sourceAddress}
-                      />
-                    </td>
-                    <td className={`auction-cell${row.auctionAddress ? "" : " auction-cell-empty"}`} data-label="Auction">
-                      <AuctionAddressCell
-                        address={row.auctionAddress}
-                        version={row.auctionVersion}
-                        kicks={row.kicks}
+                  <Fragment key={row.sourceAddress}>
+                    <tr
+                      className={`strategy-row ${expandedStrategyRows.has(row.sourceAddress) ? "is-expanded" : ""}`}
+                      onClick={() => toggleStrategyExpand(row.sourceAddress)}
+                      onKeyDown={(event) => handleStrategyRowKeyDown(row.sourceAddress, event)}
+                      tabIndex={0}
+                    >
+                      <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)} data-label="Last Scan">
+                        {formatRelativeTimestamp(row.scannedAt, nowMs)}
+                      </td>
+                      <td data-label="Strategy">
+                        <EntityIdentity
+                          primary={formatStrategyDisplayName(row.sourceName)}
+                          address={row.sourceAddress}
+                        />
+                      </td>
+                      <td className={`auction-cell${row.auctionAddress ? "" : " auction-cell-empty"}`} data-label="Auction">
+                        <AuctionAddressCell
+                          address={row.auctionAddress}
+                          version={row.auctionVersion}
+                          wantAddress={row.wantAddress}
+                          wantSymbol={row.wantSymbol}
+                          emptyContent={
+                            <MissingAuctionAction
+                              deployState={deployStates[row.sourceAddress]}
+                              onDeploy={() => handleDeployStrategy(row)}
+                            />
+                          }
+                        />
+                      </td>
+                      <td className="history-cell" data-label="History">
+                        <KickHistoryCell
+                          kicks={row.kicks}
+                          nowMs={nowMs}
+                          isExpanded={expandedKickRows.has(row.sourceAddress)}
+                          onToggleExpand={() => toggleKickExpand(row.sourceAddress)}
+                          isMobile={isMobile}
+                        />
+                      </td>
+                      <td data-label="Balances">
+                        <TokenBalances
+                          balances={row.balances}
+                          displayMode={displayMode}
+                          onToggleMode={toggleDisplayMode}
+                        />
+                      </td>
+                    </tr>
+                    {expandedStrategyRows.has(row.sourceAddress) && !isMobile ? (
+                      <StrategyDetailPanel
+                        row={row}
                         nowMs={nowMs}
-                        isExpanded={expandedKickRows.has(row.sourceAddress)}
-                        onToggleExpand={() => toggleKickExpand(row.sourceAddress)}
-                        emptyContent={
-                          <MissingAuctionAction
-                            deployState={deployStates[row.sourceAddress]}
-                            onDeploy={() => handleDeployStrategy(row)}
-                          />
-                        }
-                      />
-                    </td>
-                    <td data-label="Balances">
-                      <TokenBalances
-                        balances={row.balances}
                         displayMode={displayMode}
                         onToggleMode={toggleDisplayMode}
+                        deployState={deployStates[row.sourceAddress]}
+                        onDeploy={() => handleDeployStrategy(row)}
+                        historyExpanded={expandedKickRows.has(row.sourceAddress)}
+                        onToggleHistory={() => toggleKickExpand(row.sourceAddress)}
                       />
-                    </td>
-                  </tr>
+                    ) : null}
+                    {expandedStrategyRows.has(row.sourceAddress) && isMobile ? (
+                      <StrategyDetailModal
+                        row={row}
+                        nowMs={nowMs}
+                        displayMode={displayMode}
+                        onToggleMode={toggleDisplayMode}
+                        deployState={deployStates[row.sourceAddress]}
+                        onDeploy={() => handleDeployStrategy(row)}
+                        historyExpanded={expandedKickRows.has(row.sourceAddress)}
+                        onToggleHistory={() => toggleKickExpand(row.sourceAddress)}
+                        onClose={() => toggleStrategyExpand(row.sourceAddress)}
+                      />
+                    ) : null}
+                  </Fragment>
                 ))
               : null}
           </tbody>

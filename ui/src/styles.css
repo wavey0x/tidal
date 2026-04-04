@@ -421,11 +421,19 @@ tbody tr:hover td {
   min-width: 0;
 }
 
+.strategy-row {
+  cursor: pointer;
+}
+
+.strategy-row.is-expanded td {
+  border-bottom-color: transparent;
+}
+
 .auction-cell {
   white-space: nowrap;
-  width: 220px;
-  min-width: 220px;
-  max-width: 220px;
+  width: 196px;
+  min-width: 196px;
+  max-width: 196px;
 }
 
 .auction-cell-empty {
@@ -433,22 +441,41 @@ tbody tr:hover td {
 }
 
 .auction-col {
-  width: 220px;
-  min-width: 220px;
-  max-width: 220px;
+  width: 196px;
+  min-width: 196px;
+  max-width: 196px;
+}
+
+.history-cell {
+  white-space: nowrap;
+  width: 212px;
+  min-width: 212px;
+  max-width: 212px;
+}
+
+.history-col {
+  width: 212px;
+  min-width: 212px;
+  max-width: 212px;
 }
 
 .auction-value-slot {
   display: flex;
   flex-direction: column;
-  width: 160px;
-  min-width: 160px;
+  width: 180px;
+  min-width: 180px;
 }
 
 .auction-address-row {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.auction-secondary-row {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 4px;
 }
 
 .auction-missing-state {
@@ -505,6 +532,12 @@ tbody tr:hover td {
   white-space: nowrap;
 }
 
+.auction-with-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .last-scan-col {
   width: 120px;
   min-width: 120px;
@@ -539,6 +572,10 @@ tbody tr:hover td {
   align-items: center;
   gap: 5px;
   color: var(--text-secondary);
+}
+
+.want-token-value {
+  margin-top: 0;
 }
 
 .address-copy:hover .address-value {
@@ -778,6 +815,12 @@ tbody tr:hover td {
 
 .kick-history {
   margin-top: 3px;
+}
+
+.history-cell .kick-history,
+.strategy-detail-grid .kick-history,
+.auction-with-history .kick-history {
+  margin-top: 0;
 }
 
 .kick-summary {
@@ -1061,6 +1104,34 @@ tbody tr:hover td {
 
 .kick-detail-value.error-text {
   color: var(--error);
+}
+
+.strategy-detail-grid .auction-value-slot,
+.strategy-detail-grid .token-cell {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.strategy-detail-grid .auction-address-row {
+  flex-wrap: wrap;
+}
+
+.strategy-detail-entity .entity-cell {
+  margin-top: 2px;
+}
+
+.strategy-detail-balances {
+  grid-column: 1 / -1;
+}
+
+.strategy-detail-balances .token-cell {
+  width: min(100%, 320px);
+}
+
+.strategy-detail-balances .token-item {
+  width: 100%;
+  grid-template-columns: var(--token-icon-size) minmax(0, 1fr) 82px;
 }
 
 .kick-detail-tokens {
@@ -1699,6 +1770,8 @@ tbody tr:hover td {
   .strategies-table .last-scan-cell,
   .strategies-table .auction-col,
   .strategies-table .auction-cell,
+  .strategies-table .history-col,
+  .strategies-table .history-cell,
   .strategies-table .auction-value-slot,
   .strategies-table .token-cell {
     width: auto;

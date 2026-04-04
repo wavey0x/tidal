@@ -3080,6 +3080,7 @@ export default function App() {
                           version={row.auctionVersion}
                           wantAddress={row.wantAddress}
                           wantSymbol={row.wantSymbol}
+                          wantLabel="want:"
                           emptyContent={
                             <MissingAuctionAction
                               deployState={deployStates[row.sourceAddress]}

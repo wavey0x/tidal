@@ -532,12 +532,6 @@ tbody tr:hover td {
   white-space: nowrap;
 }
 
-.auction-with-history {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .last-scan-col {
   width: 120px;
   min-width: 120px;
@@ -819,7 +813,7 @@ tbody tr:hover td {
 
 .history-cell .kick-history,
 .strategy-detail-grid .kick-history,
-.auction-with-history .kick-history {
+.fee-burner-card .kick-history {
   margin-top: 0;
 }
 
@@ -827,57 +821,53 @@ tbody tr:hover td {
   display: flex;
   align-items: center;
   gap: 2px;
+  width: 100%;
+  min-width: 0;
 }
 
 .kick-expanded {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding-left: 16px;
+  width: 100%;
+  min-width: 0;
 }
 
 .kick-row {
   display: flex;
   align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.kick-expanded .kick-row {
+  padding-left: 16px;
+  box-sizing: border-box;
 }
 
 .kick-row-inner {
-  display: inline-flex;
+  display: grid;
   align-items: center;
-  gap: 4px;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  column-gap: 4px;
+  width: 100%;
+  min-width: 0;
 }
 
 .kick-history-auctionscan {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 13px;
-  height: 13px;
-  margin-left: 3px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-  opacity: 0.92;
-  text-decoration: none;
+  justify-self: end;
 }
 
-.kick-history-auctionscan:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
+.kick-row-inner .etherscan-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kick-history-auctionscan-icon {
-  width: 11px;
-  height: 11px;
-}
-
-:root[data-theme="light"] .kick-history-auctionscan {
-  background: rgba(0, 0, 0, 0.03);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
-}
-
-:root[data-theme="light"] .kick-history-auctionscan:hover {
-  background: rgba(0, 0, 0, 0.06);
+  width: 13px;
+  height: 13px;
 }
 
 .kick-time {
@@ -1288,8 +1278,8 @@ tbody tr:hover td {
   grid-template-columns:
     minmax(92px, 0.65fr)
     minmax(170px, 1.35fr)
-    minmax(108px, 0.78fr)
-    minmax(176px, 1.12fr);
+    minmax(170px, 1.1fr)
+    minmax(188px, 1.18fr);
   gap: 12px;
   align-items: start;
 }
@@ -1315,6 +1305,10 @@ tbody tr:hover td {
 
 .fee-burner-card .auction-address-row {
   flex-wrap: wrap;
+}
+
+.fee-burner-history {
+  min-width: 0;
 }
 
 .fee-burner-balance-panel {

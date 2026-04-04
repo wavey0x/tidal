@@ -767,7 +767,13 @@ function AuctionScanTextLink({ kick, onOpen }) {
   );
 }
 
-function AuctionScanIconLink({ kick, onOpen }) {
+function AuctionScanIconLink({
+  kick,
+  onOpen,
+  className = "",
+  iconClassName = "",
+  glyphClassName = "",
+}) {
   const href = getAuctionScanHref(kick);
   if (!href) {
     return null;
@@ -787,36 +793,25 @@ function AuctionScanIconLink({ kick, onOpen }) {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="kick-auctionscan-link"
+      className={`kick-auctionscan-link ${className}`.trim()}
       title={`View ${target} on AuctionScan`}
       aria-label={`View ${target} on AuctionScan`}
       onClick={handleClick}
     >
-      <AuctionScanFavicon className="kick-auctionscan-link-icon" />
-      <OutboundLinkGlyph className="kick-auctionscan-link-glyph" />
+      <AuctionScanFavicon className={`kick-auctionscan-link-icon ${iconClassName}`.trim()} />
+      <OutboundLinkGlyph className={`kick-auctionscan-link-glyph ${glyphClassName}`.trim()} />
     </a>
   );
 }
 
 function KickHistoryAuctionScanLink({ kick }) {
-  const href = getAuctionScanHref(kick);
-  if (!href) {
-    return null;
-  }
-
-  const target = getAuctionScanTargetLabel(kick);
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
+    <AuctionScanIconLink
+      kick={kick}
       className="kick-history-auctionscan"
-      title={`View ${target} on AuctionScan`}
-      aria-label={`View ${target} on AuctionScan`}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <AuctionScanFavicon className="kick-history-auctionscan-icon" />
-    </a>
+      iconClassName="kick-history-auctionscan-icon"
+      glyphClassName="kick-history-auctionscan-glyph"
+    />
   );
 }
 
@@ -1014,22 +1009,6 @@ function KickHistoryCell({
           ))}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function AuctionWithHistoryCell({ address, version, kicks, nowMs, isExpanded, onToggleExpand }) {
-  return (
-    <div className="auction-with-history">
-      <AuctionAddressCell address={address} version={version} />
-      <KickHistoryCell
-        kicks={kicks}
-        nowMs={nowMs}
-        isExpanded={isExpanded}
-        onToggleExpand={onToggleExpand}
-        fallbackAuctionAddress={address}
-        emptyContent={null}
-      />
     </div>
   );
 }
@@ -2306,33 +2285,28 @@ function FeeBurnerPage({
                     address={row.sourceAddress}
                   />
                 </div>
-                <div className="fee-burner-top-item">
-                  <div className="fee-burner-label">Want</div>
-                  <div className="fee-burner-value">
-                    {row.wantAddress ? (
-                      <span className="address-copy" title={checksumAddress(row.wantAddress)}>
-                        <span className="mono address-value">
-                          {row.wantSymbol || shortenAddress(row.wantAddress)}
-                        </span>
-                        <CopyIconButton
-                          valueToCopy={checksumAddress(row.wantAddress)}
-                          title={`Copy address ${checksumAddress(row.wantAddress)}`}
-                          ariaLabel={`Copy address ${checksumAddress(row.wantAddress)}`}
-                        />
-                      </span>
-                    ) : "—"}
-                  </div>
-                </div>
                 <div className="fee-burner-top-item fee-burner-auction">
                   <div className="fee-burner-label">Auction</div>
-                  <AuctionWithHistoryCell
-                    address={row.auctionAddress}
-                    version={row.auctionVersion}
-                    kicks={row.kicks}
-                    nowMs={nowMs}
-                    isExpanded={expandedKickRows.has(row.sourceAddress)}
-                    onToggleExpand={() => onToggleExpand(row.sourceAddress)}
-                  />
+                  <div className="fee-burner-value">
+                    <AuctionAddressCell
+                      address={row.auctionAddress}
+                      version={row.auctionVersion}
+                      wantAddress={row.wantAddress}
+                      wantSymbol={row.wantSymbol}
+                    />
+                  </div>
+                </div>
+                <div className="fee-burner-top-item fee-burner-history">
+                  <div className="fee-burner-label">History</div>
+                  <div className="fee-burner-value">
+                    <KickHistoryCell
+                      kicks={row.kicks}
+                      nowMs={nowMs}
+                      isExpanded={expandedKickRows.has(row.sourceAddress)}
+                      onToggleExpand={() => onToggleExpand(row.sourceAddress)}
+                      fallbackAuctionAddress={row.auctionAddress}
+                    />
+                  </div>
                 </div>
               </div>
               <div className="fee-burner-balance-panel">

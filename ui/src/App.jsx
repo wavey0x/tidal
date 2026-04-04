@@ -2112,10 +2112,10 @@ function StrategyDetailContent({
   onToggleMode,
   deployState,
   onDeploy,
-  historyExpanded,
-  onToggleHistory,
+  initialHistoryExpanded = false,
 }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(() => initialHistoryExpanded);
 
   return (
     <div className="kick-detail-grid strategy-detail-grid">
@@ -2181,7 +2181,7 @@ function StrategyDetailContent({
             kicks={row.kicks}
             nowMs={nowMs}
             isExpanded={historyExpanded}
-            onToggleExpand={onToggleHistory}
+            onToggleExpand={() => setHistoryExpanded((value) => !value)}
             fallbackAuctionAddress={row.auctionAddress}
           />
         </div>
@@ -2211,8 +2211,7 @@ function StrategyDetailPanel({
   onToggleMode,
   deployState,
   onDeploy,
-  historyExpanded,
-  onToggleHistory,
+  initialHistoryExpanded = false,
 }) {
   return (
     <DetailPanel colSpan={5}>
@@ -2223,8 +2222,7 @@ function StrategyDetailPanel({
         onToggleMode={onToggleMode}
         deployState={deployState}
         onDeploy={onDeploy}
-        historyExpanded={historyExpanded}
-        onToggleHistory={onToggleHistory}
+        initialHistoryExpanded={initialHistoryExpanded}
       />
     </DetailPanel>
   );
@@ -2237,8 +2235,7 @@ function StrategyDetailModal({
   onToggleMode,
   deployState,
   onDeploy,
-  historyExpanded,
-  onToggleHistory,
+  initialHistoryExpanded = false,
   onClose,
 }) {
   return (
@@ -2250,8 +2247,7 @@ function StrategyDetailModal({
         onToggleMode={onToggleMode}
         deployState={deployState}
         onDeploy={onDeploy}
-        historyExpanded={historyExpanded}
-        onToggleHistory={onToggleHistory}
+        initialHistoryExpanded={initialHistoryExpanded}
       />
     </DetailModal>
   );
@@ -3127,8 +3123,7 @@ export default function App() {
                         onToggleMode={toggleDisplayMode}
                         deployState={deployStates[row.sourceAddress]}
                         onDeploy={() => handleDeployStrategy(row)}
-                        historyExpanded={expandedKickRows.has(row.sourceAddress)}
-                        onToggleHistory={() => toggleKickExpand(row.sourceAddress)}
+                        initialHistoryExpanded={expandedKickRows.has(row.sourceAddress)}
                       />
                     ) : null}
                     {expandedStrategyRows.has(row.sourceAddress) && isMobile ? (
@@ -3139,8 +3134,7 @@ export default function App() {
                         onToggleMode={toggleDisplayMode}
                         deployState={deployStates[row.sourceAddress]}
                         onDeploy={() => handleDeployStrategy(row)}
-                        historyExpanded={expandedKickRows.has(row.sourceAddress)}
-                        onToggleHistory={() => toggleKickExpand(row.sourceAddress)}
+                        initialHistoryExpanded={expandedKickRows.has(row.sourceAddress)}
                         onClose={() => toggleStrategyExpand(row.sourceAddress)}
                       />
                     ) : null}

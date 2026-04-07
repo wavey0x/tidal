@@ -63,20 +63,22 @@ The resolver should not need:
 
 Avoid function sprawl.
 
-The cleanest option is to keep one public closeout primitive and broaden its behavior:
+The cleanest option is to expose one public closeout primitive with a neutral name:
 
 ```solidity
-function sweepAndSettle(address auction, address sellToken) external onlyKeeperOrOwner;
+function resolveAuction(address auction, address sellToken) external onlyKeeperOrOwner;
 ```
 
-The name is slightly narrow, but reusing it keeps the public surface small. Its behavior should become:
+Despite the name, this function resolves one sell-token lot within the given auction. It does not imply "resolve every token in the auction."
+
+Its behavior should be:
 
 - sweep if tokens exist
 - settle if settlement is valid
 - reset stale inactive lot state if needed
 - no-op if there is nothing to do
 
-If we later decide the name is too misleading, renaming it to `resolveLot(...)` is fine, but the design does not require another public entrypoint.
+This is a better operator-facing name than overloading `sweepAndSettle(...)`, because the function may sweep, settle, reset, or no-op depending on state.
 
 ## Required Interface Additions
 
@@ -272,7 +274,7 @@ The resolver should emit one event that records which path ran.
 Example:
 
 ```solidity
-event LotResolved(
+event AuctionResolved(
     address indexed auction,
     address indexed sellToken,
     uint8 path,
@@ -292,13 +294,13 @@ Suggested paths:
 
 ## Event Compatibility
 
-Replacing `SweepAndSettled(auction, sellToken)` with `LotResolved(...)` is an indexer-facing breaking change.
+Replacing `SweepAndSettled(auction, sellToken)` with `AuctionResolved(...)` is an indexer-facing breaking change.
 
-My preference is still to make `LotResolved(...)` the canonical event and treat the change as intentional.
+My preference is still to make `AuctionResolved(...)` the canonical event and treat the change as intentional.
 
 If backward compatibility turns out to matter, the least messy compromise is:
 
-- emit `LotResolved(...)` for every path
+- emit `AuctionResolved(...)` for every path
 - also emit `SweepAndSettled(...)` only on the `sweep and settle` path
 
 That is optional. It is not needed for the contract design itself.

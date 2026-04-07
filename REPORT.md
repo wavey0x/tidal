@@ -23,7 +23,8 @@ The long-term `AuctionKicker` surface should be only:
 
 - `kick(...)`
 - `batchKick(...)`
-- `resolveAuction(...)`
+- `previewResolveAuction(...)`
+- `resolveAuction(..., bool forceLive)`
 - `enableTokens(...)`
 - owner / keeper admin
 
@@ -48,7 +49,29 @@ Keep `AuctionResolved(...)` as the only closeout event.
 
 ## Contract Rules
 
-`resolveAuction()` remains balance-driven and keeps the current state machine.
+The contract should own per-lot classification, not the CLI.
+
+Add one preview view that mirrors the resolver state machine exactly:
+
+- `previewResolveAuction(address auction, address sellToken)`
+
+Recommended preview shape:
+
+- `path`
+- `active`
+- `kickedAt`
+- `balance`
+- `requiresForce`
+- `receiver`
+
+`resolveAuction(auction, sellToken, forceLive)` should use the same internal classifier as `previewResolveAuction(...)`.
+
+Force semantics should be enforced on-chain:
+
+- if the current lot is `active && balance > 0` and `forceLive == false`, revert
+- otherwise execute the normal resolver path
+
+This keeps the default “do not close healthy live auctions” invariant race-safe even if state changes after off-chain preview.
 
 The contract should continue to enforce:
 
@@ -61,7 +84,7 @@ No contract code should remain that stages `settle()` calls between global sette
 
 ## Closeout Classifier
 
-Use only these reads per token:
+Internally, preview and resolve only need these reads per token:
 
 - `isActive(token)`
 - `kicked(token)`
@@ -71,12 +94,12 @@ This is sufficient to distinguish happy-path live auctions from stuck / closeabl
 
 Discovery should be multicall-first:
 
-- batch `isAnActiveAuction()` across candidate auctions
 - batch `getAllEnabledAuctions()` across all auctions being inspected for settlement
-- batch `(auction, token)` reads for `isActive(token)` and `kicked(token)`
-- batch `ERC20(token).balanceOf(auction)` across the same `(auction, token)` pairs
+- batch `previewResolveAuction(...)` across discovered `(auction, token)` pairs
+- batch `isAnActiveAuction()` across candidate auctions only for reporting / kick scheduling hints
 
 The scanner and operator inspection path should use the shared multicall-capable readers that already exist in the runtime. Do not fall back to one-RPC-call-per-token discovery unless multicall is explicitly unavailable.
+
 `isAnActiveAuction()` is an optimization and reporting hint only. It must not be used to skip token enumeration for settlement discovery, because inactive auctions can still contain stale or stranded lots.
 
 Per token, the classifier is:
@@ -106,11 +129,11 @@ Per token, the classifier is:
    clean lot
    default `settle`: noop
 
-`resolveAuction()` is the executor for all actionable states. The CLI and scanner only decide whether a state is actionable by default or only under `--force`.
+`resolveAuction()` is the executor for all actionable states. The preview view is the canonical source for which path applies and whether force is required.
 
 Ambiguity and failure handling:
 
-- if any required read for a token is missing or inconsistent, that token is not actionable by default
+- if preview data for a token is missing, inconsistent, or fails to decode, that token is not actionable by default
 - auto-settle must fail closed and skip ambiguous tokens or auctions
 - explicit operator settle should return an error for the ambiguous target instead of guessing
 - multiple live funded lots are treated as an anomaly; they are never implicitly force-closed
@@ -131,9 +154,10 @@ Replace the kick flow with a resolver-first precondition:
 
 1. inspect the target auction before preparing a kick
 2. enumerate all blocking / stale lots on that auction
-3. if any such lots exist, prepare `resolveAuction(...)` actions instead of a kick
-4. defer the kick candidate until a later run after cleanup
-5. only prepare `kick(...)` once the auction is clean
+3. use `previewResolveAuction(...)` to classify each lot
+4. if any such lots exist, prepare `resolveAuction(..., false)` actions instead of a kick
+5. defer the kick candidate until a later run after cleanup
+6. only prepare `kick(...)` once the auction is clean
 
 Use this pre-kick policy:
 
@@ -165,8 +189,8 @@ Recommended semantics:
 - with `--token`, inspection should probe the requested token even if it is not returned by enabled-token discovery
 - default `settle` closes only the default-actionable stuck states from the classifier above
 - `--force` additionally allows closing a live funded lot
-- `--force` should require `--token` unless there is exactly one live funded lot
-- without `--token`, prepare may return multiple `resolveAuction(...)` transactions, one per actionable lot
+- `--force` should require `--token`
+- without `--token`, prepare may return multiple `resolveAuction(..., false)` transactions, one per actionable lot
 - live funded lots on the same auction do not prevent default settle from closing separate stale lots
 - if an auction is only progressing on the happy path, default `settle` should return a clean noop, not an error
 
@@ -186,8 +210,9 @@ Use `settle` only as the operator-facing verb:
 - CLI command stays `tidal auction settle`
 - API route stays `POST /api/v1/tidal/auctions/{auction}/settle/prepare`
 - control-plane payloads expose `force`, not settlement-method enums
+- `--force` maps directly to `forceLive = true` on the contract call
 
-Internally, the operator/API layer should only ever prepare `resolveAuction(...)` or return noop / error.
+Internally, the operator/API layer should only ever prepare `resolveAuction(..., forceLive)` or return noop / error.
 
 ## Scanner Changes
 
@@ -198,7 +223,7 @@ That means:
 - `scan run --auto-settle` becomes “auto-close stuck auctions”
 - it should never auto-force a live funded lot
 - it should report live funded lots as in progress, not stuck
-- it should prepare / send `resolveAuction(...)`, not literal `settle(token)`
+- it should prepare / send `resolveAuction(..., false)`, not literal `settle(token)`
 - if discovery is ambiguous or incomplete, it should fail closed and skip that lot / auction instead of guessing
 - if an auction contains both stale lots and separate live funded lots, it should close only the stale lots
 
@@ -228,7 +253,10 @@ Contract tests:
 - remove `kickExtended` coverage
 - remove `sweepAndSettle` coverage
 - remove kick-side `settleToken` coverage
+- add `previewResolveAuction(...)` coverage for each resolver path
 - keep and expand `resolveAuction` path coverage
+- add `resolveAuction(..., false)` revert coverage for live funded lots
+- add `resolveAuction(..., true)` coverage for forced live funded closeout
 - add `resolveAuction` guard tests for `want` token and zero token
 
 Transaction service tests:
@@ -236,6 +264,7 @@ Transaction service tests:
 - assert dirty auctions produce resolver actions, not kick-time recovery plans
 - assert kick preparation skips / defers live funded auctions instead of self-healing during kick
 - assert plain `kick()` payloads no longer include `settleToken`
+- assert multicall preview discovery is used for settlement classification
 
 Operator/API/CLI tests:
 
@@ -244,12 +273,16 @@ Operator/API/CLI tests:
 - remove settlement-method enum coverage
 - assert default `settle` prepares only default-actionable stuck states
 - assert `--force` is required for live funded lot resolution
+- assert `--force` without `--token` is rejected
+- assert default `settle` returns noop on healthy live auctions
+- assert explicit `--force` produces `resolveAuction(..., true)`
 
 Scanner tests:
 
-- assert `--auto-settle` prepares / executes `resolveAuction(...)`
+- assert `--auto-settle` prepares / executes `resolveAuction(..., false)`
 - assert live funded lots are skipped as in-progress
 - assert stale sold-out and stale stranded lots are auto-closeable
+- assert preview read failures are skipped fail-closed
 
 ## Rollout Sequence
 

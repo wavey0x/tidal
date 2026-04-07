@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from itertools import chain
 
 from tidal.auction_settlement import (
     PATH_NOOP,
+    AuctionSettlementInspection,
     default_actionable_previews,
     inspect_auction_settlements,
     live_funded_previews,
@@ -17,10 +19,6 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.runtime import build_web3_client
 from tidal.transaction_service.evaluator import build_shortlist
 from tidal.transaction_service.types import KickCandidate, SourceType
-
-
-def _candidate_key(candidate: KickCandidate) -> tuple[str, str]:
-    return normalize_address(candidate.auction_address), normalize_address(candidate.token_address)
 
 
 @dataclass(slots=True)
@@ -93,15 +91,15 @@ def inspect_kick_candidates(
         kick_tx_repository=KickTxRepository(session),
     )
     ready_candidates = shortlist.selected_candidates
-    inspections_by_auction: dict[str, object] = {}
+    inspections_by_auction: dict[str, AuctionSettlementInspection] = {}
     if include_live_inspection and settings.rpc_url and ready_candidates:
         auctions_to_inspect = sorted(
             {
                 candidate.auction_address
-                for candidate in (
-                    list(shortlist.selected_candidates)
-                    + list(shortlist.deferred_same_auction_candidates)
-                    + list(shortlist.limited_candidates)
+                for candidate in chain(
+                    shortlist.selected_candidates,
+                    shortlist.deferred_same_auction_candidates,
+                    shortlist.limited_candidates,
                 )
             }
         )
@@ -115,35 +113,46 @@ def inspect_kick_candidates(
                 )
             )
 
-    def classify_selected_candidate(candidate: KickCandidate) -> tuple[str, str | None]:
-        inspection = inspections_by_auction.get(normalize_address(candidate.auction_address))
-        if inspection is None:
-            return "ready", None
-
+    # Avoid repeated lot_previews passes per candidate.
+    auction_classification: dict[str, tuple[str, str | None]] = {}
+    auction_active_info: dict[str, tuple[bool | None, tuple[str, ...], str | None]] = {}
+    for auction_addr, inspection in inspections_by_auction.items():
         preview_failures = inspection.preview_failures
         if preview_failures:
             messages = [preview.error_message or "resolve preview failed" for preview in preview_failures]
-            return "preview_failed", "; ".join(dict.fromkeys(messages))
-
-        actionable = default_actionable_previews(inspection)
-        if actionable:
-            reasons = [path_reason(int(preview.path or PATH_NOOP)) for preview in actionable]
-            unique_reasons = list(dict.fromkeys(reasons))
-            if len(unique_reasons) == 1:
-                detail = unique_reasons[0]
+            auction_classification[auction_addr] = ("preview_failed", "; ".join(dict.fromkeys(messages)))
+        else:
+            actionable = default_actionable_previews(inspection)
+            if actionable:
+                reasons = [path_reason(int(preview.path or PATH_NOOP)) for preview in actionable]
+                unique_reasons = list(dict.fromkeys(reasons))
+                if len(unique_reasons) == 1:
+                    detail = unique_reasons[0]
+                else:
+                    detail = ", ".join(unique_reasons[:3])
+                    if len(unique_reasons) > 3:
+                        detail += f", +{len(unique_reasons) - 3} more"
+                auction_classification[auction_addr] = ("resolve_first", detail)
             else:
-                detail = ", ".join(unique_reasons[:3])
-                if len(unique_reasons) > 3:
-                    detail += f", +{len(unique_reasons) - 3} more"
-            return "resolve_first", detail
+                live = live_funded_previews(inspection)
+                if live:
+                    if len(live) == 1:
+                        auction_classification[auction_addr] = ("blocked_live", path_reason(int(live[0].path or PATH_NOOP)))
+                    else:
+                        auction_classification[auction_addr] = ("blocked_live", f"{len(live)} live funded lots")
+                else:
+                    auction_classification[auction_addr] = ("ready", None)
 
-        live = live_funded_previews(inspection)
-        if live:
-            if len(live) == 1:
-                return "blocked_live", path_reason(int(live[0].path or PATH_NOOP))
-            return "blocked_live", f"{len(live)} live funded lots"
+        active_tokens = tuple(
+            preview.token_address
+            for preview in inspection.lot_previews
+            if preview.read_ok and preview.active is True
+        )
+        active_token = active_tokens[0] if len(active_tokens) == 1 else None
+        auction_active_info[auction_addr] = (inspection.is_active_auction, active_tokens, active_token)
 
-        return "ready", None
+    def classify_selected_candidate(candidate: KickCandidate) -> tuple[str, str | None]:
+        return auction_classification.get(normalize_address(candidate.auction_address), ("ready", None))
 
     def build_entry(
         candidate: KickCandidate,
@@ -151,18 +160,8 @@ def inspect_kick_candidates(
         state: str,
         detail: str | None = None,
     ) -> KickInspectEntry:
-        inspection = inspections_by_auction.get(normalize_address(candidate.auction_address))
-        active_tokens = ()
-        active_token = None
-        auction_active = None
-        if inspection is not None:
-            active_tokens = tuple(
-                preview.token_address
-                for preview in inspection.lot_previews
-                if preview.read_ok and preview.active is True
-            )
-            active_token = active_tokens[0] if len(active_tokens) == 1 else None
-            auction_active = inspection.is_active_auction
+        auction_key = normalize_address(candidate.auction_address)
+        auction_active, active_tokens, active_token = auction_active_info.get(auction_key, (None, (), None))
         return KickInspectEntry(
             state=state,
             source_type=candidate.source_type,

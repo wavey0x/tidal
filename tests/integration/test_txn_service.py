@@ -232,16 +232,6 @@ def _build_stub_planner(session, kick_tx_repo, preparer):
                     )
                     for _ in kick_operations
                 ]
-            elif len(kick_operations) == 1:
-                tx_intents = [
-                    TxIntent(
-                        operation="kick",
-                        to="0x9999999999999999999999999999999999999999",
-                        data="0xfeedface",
-                        chain_id=1,
-                        sender=sender,
-                    )
-                ]
             else:
                 tx_intents = [
                     TxIntent(

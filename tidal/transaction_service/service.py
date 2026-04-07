@@ -99,6 +99,21 @@ class TxnService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("txn_execution_report_failed", error=str(exc), tx_hash=report.tx_hash)
 
+    def _tally_exec_result(
+        self, exec_result: KickResult, failed_messages: list[str]
+    ) -> tuple[int, int, int]:
+        """Returns (succeeded_delta, failed_delta, attempted_delta)."""
+        self._emit_execution_report(exec_result)
+        if exec_result.status == KickStatus.CONFIRMED:
+            return 1, 0, 0
+        if exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
+            if exec_result.error_message:
+                failed_messages.append(exec_result.error_message)
+            return 0, 1, 0
+        if exec_result.status == KickStatus.USER_SKIPPED:
+            return 0, 0, -1
+        return 0, 0, 0
+
     def _planner_sender(self) -> str | None:
         signer = getattr(self.executor, "signer", None)
         if signer is None:
@@ -290,42 +305,27 @@ class TxnService:
         if live:
             for prepared_operation in plan.resolve_operations:
                 exec_result = await executor.execute_resolve_auction(prepared_operation, run_id)
-                self._emit_execution_report(exec_result)
-                if exec_result.status == KickStatus.CONFIRMED:
-                    kicks_succeeded += 1
-                elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                    kicks_failed += 1
-                    if exec_result.error_message:
-                        failed_messages.append(exec_result.error_message)
-                elif exec_result.status == KickStatus.USER_SKIPPED:
-                    kicks_attempted -= 1
+                s, f, a = self._tally_exec_result(exec_result, failed_messages)
+                kicks_succeeded += s
+                kicks_failed += f
+                kicks_attempted += a
 
-            kick_intents = [intent for intent in plan.tx_intents if intent.operation == "kick"]
+            kick_intent_count = sum(1 for intent in plan.tx_intents if intent.operation == "kick")
             if plan.kick_operations:
-                if not batch or len(plan.kick_operations) == 1 or len(kick_intents) != 1:
+                if not batch or len(plan.kick_operations) == 1 or kick_intent_count != 1:
                     for prepared_kick in plan.kick_operations:
                         exec_result = await executor.execute_single(prepared_kick, run_id)
-                        self._emit_execution_report(exec_result)
-                        if exec_result.status == KickStatus.CONFIRMED:
-                            kicks_succeeded += 1
-                        elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                            kicks_failed += 1
-                            if exec_result.error_message:
-                                failed_messages.append(exec_result.error_message)
-                        elif exec_result.status == KickStatus.USER_SKIPPED:
-                            kicks_attempted -= 1
+                        s, f, a = self._tally_exec_result(exec_result, failed_messages)
+                        kicks_succeeded += s
+                        kicks_failed += f
+                        kicks_attempted += a
                 else:
                     exec_results = await executor.execute_batch(plan.kick_operations, run_id)
                     for exec_result in exec_results:
-                        self._emit_execution_report(exec_result)
-                        if exec_result.status == KickStatus.CONFIRMED:
-                            kicks_succeeded += 1
-                        elif exec_result.status in (KickStatus.REVERTED, KickStatus.ERROR, KickStatus.ESTIMATE_FAILED):
-                            kicks_failed += 1
-                            if exec_result.error_message:
-                                failed_messages.append(exec_result.error_message)
-                        elif exec_result.status == KickStatus.USER_SKIPPED:
-                            kicks_attempted -= 1
+                        s, f, a = self._tally_exec_result(exec_result, failed_messages)
+                        kicks_succeeded += s
+                        kicks_failed += f
+                        kicks_attempted += a
         else:
             now_iso = utcnow_iso()
             for prepared_operation in plan.resolve_operations:

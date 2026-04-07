@@ -2,19 +2,22 @@
 
 ## Decision
 
-Adopt a **resolver-first** model:
+Adopt a resolver-first model:
 
-- `resolveAuction()` is the only cleanup primitive.
+- `resolveAuction()` is the only on-chain cleanup primitive.
 - `kick()` and `batchKick()` only run against auctions that are already clean.
-- remove backward compatibility and delete legacy recovery surfaces.
+- the operator and scanner surface keeps the verb `settle`.
+- default `settle` only closes stuck / stale lots.
+- `settle --force` is the explicit override for force-closing a live funded lot.
+- backward compatibility is not required; legacy recovery surfaces should be deleted.
 
-This means your understanding is the intended invariant:
+This preserves the intended invariant:
 
-- once a lot has been properly resolved, later auction-global param changes should not revive it
-- cleanup should happen before a new kick, not during the kick
-- regular `kick()` should be the only kick primitive that remains
+- once a lot has been resolved, later auction-global param changes should not revive that old lot
+- cleanup happens before a new kick, not during the kick
+- regular `kick()` is the only kick primitive that remains
 
-## Target End State
+## Contract End State
 
 The long-term `AuctionKicker` surface should be only:
 
@@ -33,28 +36,67 @@ Delete these contract surfaces entirely:
 - `sweepAndSettle(...)`
 - `SweepAndSettled`
 
+Remove the remaining legacy cleanup path from regular kick:
+
+- remove `settleToken` from `KickParams`
+- remove `settleToken` from `kick(...)`
+- remove `settleToken` from `batchKick(...)`
+- remove `settleToken` from `Kicked(...)`
+- remove any kick-side `settle()` call
+
 Keep `AuctionResolved(...)` as the only closeout event.
 
-## Contract Changes
+## Contract Rules
 
-Update `contracts/src/AuctionKicker.sol` to reflect the simplified model:
-
-- remove all `kickExtended` code paths and recovery-planner support
-- remove the `sweepAndSettle` wrapper entirely
-- keep `resolveAuction()` as the single lot-resolution entrypoint
-- keep the existing balance-driven resolver state machine
-
-Add explicit resolver scope guards:
-
-- reject `sellToken == IAuction(auction).want()`
-- reject `sellToken == address(0)`
+`resolveAuction()` remains balance-driven and keeps the current state machine.
 
 The contract should continue to enforce:
 
 - `IAuction(auction).governance() == tradeHandler`
 - keeper-or-owner authorization
+- `sellToken != address(0)`
+- `sellToken != IAuction(auction).want()`
 
 No contract code should remain that stages `settle()` calls between global setter changes.
+
+## Closeout Classifier
+
+Use only these reads per token:
+
+- `isActive(token)`
+- `kicked(token)`
+- `ERC20(token).balanceOf(auction)`
+
+This is sufficient to distinguish happy-path live auctions from stuck / closeable ones. No closeout decision should depend on `available()`, `price()`, `minimumPrice()`, or `auctionLength()`.
+
+Per token, the classifier is:
+
+1. `active && balance > 0`
+   live in-progress lot
+   default `settle`: noop / skip
+   `settle --force`: actionable
+
+2. `active && balance == 0`
+   stale sold-out lot
+   default `settle`: actionable
+
+3. `!active && kicked != 0 && balance > 0`
+   stale kicked lot with stranded inventory
+   default `settle`: actionable
+
+4. `!active && kicked != 0 && balance == 0`
+   stale kicked empty lot
+   default `settle`: actionable
+
+5. `!active && kicked == 0 && balance > 0`
+   inactive clean lot with residual inventory
+   default `settle`: actionable
+
+6. `!active && kicked == 0 && balance == 0`
+   clean lot
+   default `settle`: noop
+
+`resolveAuction()` is the executor for all actionable states. The CLI and scanner only decide whether a state is actionable by default or only under `--force`.
 
 ## Runtime And Planner Changes
 
@@ -71,34 +113,39 @@ Delete these runtime concepts:
 Replace the kick flow with a resolver-first precondition:
 
 1. inspect the target auction before preparing a kick
-2. if the auction has resolvable stale lots, prepare `resolveAuction(...)` actions instead of a kick
-3. defer the kick candidate until a later run after cleanup
-4. only prepare `kick(...)` once the auction is clean
+2. enumerate all blocking / stale lots on that auction
+3. if any such lots exist, prepare `resolveAuction(...)` actions instead of a kick
+4. defer the kick candidate until a later run after cleanup
+5. only prepare `kick(...)` once the auction is clean
 
-Use this policy for pre-kick inspection:
+Use this pre-kick policy:
 
 - active lot with sell balance:
-  do not auto-force resolve from the transaction service; treat as a live auction blocker and skip/defer the kick
-- active lot with zero balance:
+  do not auto-force resolve from the transaction service; treat as a live auction blocker and skip / defer the kick
+- any other non-clean lot:
   prepare `resolveAuction(...)`
-- inactive kicked lot, funded or empty:
-  prepare `resolveAuction(...)`
-- inactive clean lot with residual sell balance:
-  prepare `resolveAuction(...)`
-- clean auction:
+- fully clean auction:
   allow regular `kick(...)`
 
-This intentionally keeps force-unwinding a live funded lot as an explicit operator action, not an automatic kick-side behavior.
+This keeps force-unwinding a live funded lot as an explicit operator action, not an automatic kick-side behavior.
 
 ## Operator / API / CLI Changes
 
-Remove legacy settlement naming and modes from the operator surface.
+Keep the operator verb `settle`, but map it to `resolveAuction(...)` internally.
 
-Rename the cleanup action from **settle** to **resolve**:
+The operator model should be:
 
-- CLI command becomes `tidal auction resolve`
-- API route becomes `POST /api/v1/tidal/auctions/{auction}/resolve/prepare`
-- control-plane client and prepare service use `resolve`, not `settle`
+- `tidal auction settle AUCTION`
+- optional `--token`
+- optional `--force`
+
+Recommended semantics:
+
+- without `--token`, settle all default-actionable lots on the auction
+- with `--token`, settle only that lot
+- default `settle` closes only the default-actionable stuck states from the classifier above
+- `--force` additionally allows closing a live funded lot
+- `--force` should require `--token` unless there is exactly one live funded lot
 
 Delete these legacy concepts from the operator path:
 
@@ -107,13 +154,30 @@ Delete these legacy concepts from the operator path:
 - `requestedSweep`
 - any `sweep-and-settle` wording in renderer copy
 
-Replace them with one clean operator model:
+Keep the internal operation name:
 
-- `tidal auction resolve AUCTION`
-- optional `--token`
-- optional `--force-live` to explicitly allow resolving a live funded lot
+- `resolve_auction`
+
+Use `settle` only as the operator-facing verb:
+
+- CLI command stays `tidal auction settle`
+- API route stays `POST /api/v1/tidal/auctions/{auction}/settle/prepare`
+- control-plane payloads expose `force`, not settlement-method enums
 
 Internally, the operator/API layer should only ever prepare `resolveAuction(...)` or return noop / error.
+
+## Scanner Changes
+
+The scanner should use the same classifier as the operator path, with `force = false`.
+
+That means:
+
+- `scan run --auto-settle` becomes “auto-close stuck auctions”
+- it should never auto-force a live funded lot
+- it should report live funded lots as in progress, not stuck
+- it should prepare / send `resolveAuction(...)`, not literal `settle(token)`
+
+The scanner should inspect enabled lot tokens for each auction. An operator can still pass `--token` explicitly for manual closeout of a specific lot.
 
 ## Persistence And Types
 
@@ -121,8 +185,9 @@ Simplify runtime types and operation enums:
 
 - remove `sweep_and_settle` from active write paths
 - remove `PreparedSweepAndSettle`
-- remove recovery-plan serialization fields from kick preview payloads
-- remove `resolve`-unrelated legacy fields from settlement decision helpers
+- remove `KickRecoveryPlan`
+- remove kick preview / payload fields related to kick-time cleanup
+- remove `settleToken` from kick prepare types and payloads
 
 For persistence:
 
@@ -137,21 +202,29 @@ Contract tests:
 
 - remove `kickExtended` coverage
 - remove `sweepAndSettle` coverage
+- remove kick-side `settleToken` coverage
 - keep and expand `resolveAuction` path coverage
 - add `resolveAuction` guard tests for `want` token and zero token
 
 Transaction service tests:
 
 - assert dirty auctions produce resolver actions, not kick-time recovery plans
-- assert kick preparation skips/defer live funded auctions instead of self-healing during kick
-- remove recovery-plan and `PreparedSweepAndSettle` fixtures
+- assert kick preparation skips / defers live funded auctions instead of self-healing during kick
+- assert plain `kick()` payloads no longer include `settleToken`
 
 Operator/API/CLI tests:
 
-- replace `settle` prepare route and command coverage with `resolve`
+- keep `settle` as the command / route name
 - remove `--sweep` expectations
-- assert active legacy wording no longer appears in previews or payloads
-- assert `force-live` is the only explicit override for live funded lot resolution
+- remove settlement-method enum coverage
+- assert default `settle` prepares only default-actionable stuck states
+- assert `--force` is required for live funded lot resolution
+
+Scanner tests:
+
+- assert `--auto-settle` prepares / executes `resolveAuction(...)`
+- assert live funded lots are skipped as in-progress
+- assert stale sold-out and stale stranded lots are auto-closeable
 
 ## Rollout Sequence
 
@@ -159,28 +232,22 @@ Implement in this order:
 
 1. contract cleanup
 2. runtime planner / executor cleanup
-3. operator/API/CLI rename to `resolve`
-4. type / audit / payload cleanup
-5. docs cleanup
-6. deploy new `AuctionKicker` and point config to it
+3. scanner migration from direct `settle()` to `resolveAuction()`
+4. operator/API/CLI simplification around `settle` and `--force`
+5. type / audit / payload cleanup
+6. docs cleanup
+7. deploy new `AuctionKicker` and point config to it
 
-Do not try to preserve mixed-mode behavior during the refactor. This change set should intentionally be breaking and internally consistent.
+Do not preserve mixed-mode behavior during the refactor. This should be a breaking, internally consistent change set.
 
 ## Bottom Line
 
-There is a real opportunity to simplify further.
+The clean design is:
 
-The correct simplification is:
+- one on-chain cleanup primitive: `resolveAuction()`
+- one operator verb: `settle`
+- one explicit override: `--force`
+- one kick primitive: plain `kick()`
+- one default scanner policy: close stuck lots, never force-close live funded lots
 
-- make `resolveAuction()` the required first step for dirty auctions
-- stop doing recovery during `kick`
-- delete `kickExtended`
-- delete `sweepAndSettle`
-- delete legacy CLI/API settlement modes
-
-That produces a much cleaner system:
-
-- cleanup is one primitive
-- kicking is one primitive
-- the contract owns lot resolution
-- the CLI stops carrying legacy recovery semantics
+That removes the old split-brain design where cleanup logic lived partly in the CLI and partly in the contract, while preserving a simple operator mental model.

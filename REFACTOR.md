@@ -2,187 +2,256 @@
 
 ## Thesis
 
-The right design is to move auction closeout logic into `contracts/src/AuctionKicker.sol` and make the CLI a thin shell around a single contract entrypoint.
+The closeout primitive in `contracts/src/AuctionKicker.sol` should do one thing well:
 
-Today, too much lifecycle knowledge lives off-chain:
+- get sell tokens out of the auction immediately
+- settle when settlement is actually valid
+- locally reset stale inactive lot state when needed
 
-- the CLI has to reason about whether to settle, sweep, force sweep, or do nothing
-- the API has to inspect auction edge cases and predict whether a lot is recoverable
-- recovery behavior is partially modeled off-chain in `tidal/transaction_service/auction_recovery.py`
-- `AuctionKicker` exposes recovery complexity through narrow functions instead of owning the full lot-resolution state machine
+The CLI should stop trying to infer recovery plans from `available()` and auction-global parameter math. That logic belongs in the mech, and most of it should disappear.
 
-From first principles, this is backwards. The mech has the permissions and atomic execution environment. The keeper CLI should not need to understand auction edge cases deeply. It should only need to say: resolve this lot.
+## Problem We Are Actually Solving
 
-## Core Contract Facts
+The operational problem is not "make every lot perfectly settleable under every pricing configuration."
 
-The verified auction contract behaves like this:
+The real problem is simpler:
+
+- sometimes the auction still holds sell tokens
+- the keeper needs a way to retrieve them immediately
+- the current `sweepAndSettle(...)` path fails because it relies on `available(sellToken)`
+
+That is the wrong primitive. `available()` is intentionally price-gated. When a lot is inactive, `available()` returns `0` even if the auction still holds real token balance.
+
+So the resolver should be balance-driven, not `available()`-driven.
+
+## Verified Contract Facts
+
+From the verified auction source:
 
 - `isActive(_from)` is price-driven, not balance-driven.
 - `available(_from)` returns `0` whenever `isActive(_from) == false`.
 - `settle(_from)` requires both:
   - `isActive(_from) == true`
   - `ERC20(_from).balanceOf(address(this)) == 0`
-- `price(_from)` returns `0` when any of the following are true:
-  - the lot has zero effective available amount
-  - the lot is expired by time
-  - the computed price is below `minimumPrice`
+- `sweep(_token)` transfers the full token balance to `msg.sender`, not to `receiver`.
+- `disable(_from)` and `enable(_from)` are both per-token operations with `onlyGovernance`, and neither is blocked by `isAnActiveAuction()`.
+- `disable(_from)` deletes the lot struct and removes the token from `enabledAuctions`.
+- `enable(_from)` recreates the lot struct, recomputes scaler, restores relayer approval, and re-adds the token.
 
-This creates the awkward lifecycle states we have been fighting:
+Those facts imply two important design conclusions:
 
-- a lot can be inactive even though the auction still holds sell tokens
-- a lot can be active even though the auction balance is already zero
-
-That is exactly why the contract, not the CLI, should own the resolution logic.
+- retrieval should be based on `ERC20(sellToken).balanceOf(auction)`, not on `available()`
+- stale inactive state can be reset locally with `disable -> enable`, without touching auction-global pricing params
 
 ## Design Goal
 
-We want one keeper-controlled function in `AuctionKicker` that can clear tokens out of both live and non-live auctions and leave the lot in a clean terminal state.
+We want one keeper-facing closeout function in `AuctionKicker` that is:
 
-That function should:
+- simple
+- idempotent
+- safe under weird auction state
+- able to clear tokens from both live and non-live auctions
 
-1. inspect the lot on-chain
-2. classify its state
-3. choose one deterministic resolution path
-4. execute that path atomically through `TradeHandler.execute(...)`
+The resolver should not need:
 
-The CLI should prepare and send a single action, not encode lifecycle policy.
+- global setter mutation
+- restore logic
+- off-chain recovery planning
+- CLI flags for pricing rescue behavior
 
-## Resolver Invariants
+## Preferred API Shape
 
-The single function should be designed around a few hard guarantees:
+Avoid function sprawl.
 
-- if the auction holds sell tokens, the function must either clear them out or revert
-- if the lot is settleable, the function should end by settling it
-- if the lot is not settleable because it is expired or never kicked, the function should end by disabling it
-- the function should never require the CLI to choose between sweep, settle, rescue, or disable
-- recovered sell tokens should always return to the auction receiver
-
-Those invariants are what let the CLI collapse to one operator action without losing safety.
-
-## Proposed Contract API
-
-Add one new external function to `AuctionKicker`:
+The cleanest option is to keep one public closeout primitive and broaden its behavior:
 
 ```solidity
-function resolveLot(address auction, address sellToken) external onlyKeeperOrOwner;
+function sweepAndSettle(address auction, address sellToken) external onlyKeeperOrOwner;
 ```
 
-This function supersedes the current narrow recovery behavior of `sweepAndSettle(...)`.
+The name is slightly narrow, but reusing it keeps the public surface small. Its behavior should become:
 
-If backward compatibility matters, `sweepAndSettle(...)` can remain temporarily as a thin wrapper that delegates to `resolveLot(...)` for the active-lot cases, but the long-term design should expose only one operator-facing closeout primitive.
+- sweep if tokens exist
+- settle if settlement is valid
+- reset stale inactive lot state if needed
+- no-op if there is nothing to do
 
-## Required Auction Interface Additions
+If we later decide the name is too misleading, renaming it to `resolveLot(...)` is fine, but the design does not require another public entrypoint.
 
-To make `resolveLot(...)` self-sufficient, `contracts/src/interfaces/IAuction.sol` should expose everything needed to classify and rescue a lot:
+## Required Interface Additions
 
-- `function auctionLength() external view returns (uint256);`
-- `function stepDuration() external view returns (uint256);`
-- `function setStepDuration(uint256) external;`
+This revised design needs far less interface expansion than the previous draft.
+
+`contracts/src/interfaces/IAuction.sol` only needs:
+
 - `function kicked(address _from) external view returns (uint256);`
 - `function disable(address _from) external;`
-- `function auctions(address _from) external view returns (uint64 kicked, uint64 scaler, uint128 initialAvailable);`
 
-The public mapping getter for `auctions(address)` matters because the resolver should be able to derive rescue parameters from the actual lot metadata instead of relying on CLI guesses.
+Everything else the resolver needs already exists:
 
-## Single-Function State Machine
+- `receiver()`
+- `isActive(address)`
+- `settle(address)`
+- `sweep(address)`
+- `enable(address)`
 
-`resolveLot(...)` should classify the lot using these inputs:
+## Resolver Algorithm
 
-- `isActive(sellToken)`
-- `ERC20(sellToken).balanceOf(auction)`
-- `kicked(sellToken)`
-- `auctionLength()`
-- current timestamp
-- lot metadata from `auctions(sellToken)`
+The resolver should inspect:
 
-The resolver only needs to know:
+- `auctionBalance = IERC20(sellToken).balanceOf(auction)`
+- `active = IAuction(auction).isActive(sellToken)`
+- `kickedAt = IAuction(auction).kicked(sellToken)`
+- `receiver = IAuction(auction).receiver()`
 
-- is the lot active?
-- is the lot expired by time?
-- is there still sell-token balance in the auction?
-- has the lot ever been kicked?
+Then branch as follows.
 
-### State Table
+### Branch 1: Active Lot With Balance
 
-| State | Conditions | Resolution Path |
+Conditions:
+
+- `active == true`
+- `auctionBalance > 0`
+
+Resolution:
+
+1. `sweep(sellToken)` from auction to `TradeHandler`
+2. `sellToken.transfer(receiver, auctionBalance)` from `TradeHandler`
+3. `settle(sellToken)`
+
+This handles the normal live-lot recovery path.
+
+### Branch 2: Active Lot With Zero Balance
+
+Conditions:
+
+- `active == true`
+- `auctionBalance == 0`
+
+Resolution:
+
+1. `settle(sellToken)`
+
+This handles the "active but empty" state directly. No special recovery logic is needed.
+
+### Branch 3: Inactive Lot With Stale Kick State
+
+Conditions:
+
+- `active == false`
+- `kickedAt != 0`
+
+Resolution:
+
+1. If `auctionBalance > 0`:
+   - `sweep(sellToken)`
+   - `sellToken.transfer(receiver, auctionBalance)`
+2. `disable(sellToken)`
+3. `enable(sellToken)`
+
+This is the local reset path. It solves the genuinely hard inactive-empty case without touching auction-global params.
+
+It also works for inactive lots that still hold inventory: recover the tokens first, then reset the stale lot state.
+
+### Branch 4: Inactive Lot Already In Clean State
+
+Conditions:
+
+- `active == false`
+- `kickedAt == 0`
+
+Resolution:
+
+1. If `auctionBalance > 0`:
+   - `sweep(sellToken)`
+   - `sellToken.transfer(receiver, auctionBalance)`
+2. Otherwise no-op
+
+If `kickedAt == 0`, there is no stale kick state to clean up. Once any balance is removed, the lot is already clean enough for future kicks.
+
+## State Table
+
+The full state space collapses cleanly under this model.
+
+| State | Conditions | Resolution |
 |---|---|---|
-| 1. Active, balance > 0 | `isActive == true`, auction token balance `> 0` | Sweep from auction, transfer swept tokens to receiver, settle |
-| 2. Active, balance == 0 | `isActive == true`, auction token balance `== 0` | Settle only |
-| 3. Inactive, unexpired, balance > 0 | `isActive == false`, `kicked != 0`, `now <= kicked + auctionLength`, balance `> 0` | Apply rescue profile, sweep to receiver, settle, restore original params |
-| 4. Inactive, unexpired, balance == 0 | `isActive == false`, `kicked != 0`, `now <= kicked + auctionLength`, balance `== 0` | Apply rescue profile, settle, restore original params |
-| 5. Inactive, expired, balance > 0 | `isActive == false`, `kicked != 0`, `now > kicked + auctionLength`, balance `> 0` | Sweep to receiver, disable |
-| 6. Inactive, expired, balance == 0 | `isActive == false`, `kicked != 0`, `now > kicked + auctionLength`, balance `== 0` | Disable |
-| 7. Never kicked, balance > 0 | `kicked == 0`, balance `> 0` | Sweep to receiver, disable |
-| 8. Never kicked, balance == 0 | `kicked == 0`, balance `== 0` | Disable or no-op, depending on whether the token is still enabled |
+| 1. Active, balance > 0 | `isActive == true`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver, settle |
+| 2. Active, balance == 0 | `isActive == true`, balance `== 0` | Settle |
+| 3. Inactive, unexpired, balance > 0 | `isActive == false`, `kicked != 0`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver, disable, enable |
+| 4. Inactive, unexpired, balance == 0 | `isActive == false`, `kicked != 0`, balance `== 0` | Disable, enable |
+| 5. Inactive, expired, balance > 0 | `isActive == false`, `kicked != 0`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver, disable, enable |
+| 6. Inactive, expired, balance == 0 | `isActive == false`, `kicked != 0`, balance `== 0` | Disable, enable |
+| 7. Never kicked or already clean, balance > 0 | `kicked == 0`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver |
+| 8. Never kicked or already clean, balance == 0 | `kicked == 0`, balance `== 0` | No-op |
 
-This is the complete lifecycle surface the contract should own.
+The important simplification is that the resolver does not need to care why an inactive kicked lot is inactive. Below-floor and expired lots share the same local reset path.
 
-The important point is that every state with non-zero auction balance has a token-clearing path, regardless of whether the lot is currently live, inactive, expired, or never kicked.
+## Why State 4 Is Solved This Way
 
-## Rescue Profile For Unexpired Inactive Lots
+State 4 is:
 
-The hardest case is the below-floor but not-yet-expired lot.
+- inactive
+- still within auction duration or otherwise not formally settled
+- empty
+- stuck with `kicked != 0`
 
-For those states, the resolver should temporarily move the auction into a deterministic rescue configuration that makes `settle(...)` possible again, then restore the original globals afterward.
+This state cannot be settled under the current auction rules, and there are no tokens left to re-kick.
 
-The rescue profile should be computed and executed on-chain.
+`disable -> enable` is the right answer because:
 
-### Rescue Steps
+- it is local to the token
+- it has no `isAnActiveAuction()` guard
+- it resets `kicked` to `0`
+- it restores the token to a fresh enabled state
+- it does not require any pricing assumptions
 
-1. Snapshot the original globals:
-   - `startingPrice`
-   - `minimumPrice`
-   - `stepDecayRate`
-   - `stepDuration`
-2. Set rescue globals:
-   - `minimumPrice = 0`
-   - `stepDecayRate = 1`
-   - `stepDuration = auctionLength - 1`
-   - `startingPrice = rescueStartingPrice`
-3. If the auction still holds balance, sweep and transfer it back to the receiver
-4. Call `settle(sellToken)`
-5. Restore the original globals
+This is materially better than pretending State 4 should be a no-op if we care about leaving the lot in a clean reusable state inside the same transaction.
 
-### Why This Rescue Profile
+## Why We Should Not Use Global Setter Rescue
 
-`minimumPrice = 0` alone is good but not fully general. It revives the common below-floor case, but it does not guarantee `isActive()` becomes true in every unexpired state if the computed price itself has decayed to zero under extreme parameters.
+The earlier rescue-profile idea should be dropped from the refactor.
 
-So the rescue profile should not rely on only one knob.
+Reasons:
 
-The deterministic rescue profile above is better because:
+- every setter is blocked by `require(!isAnActiveAuction(), "active auction")`
+- interleaving setter changes with settles is exactly the complexity we are trying to remove
+- restore logic is as hard as activation logic
+- the current `kickExtended(...)` and `auction_recovery.py` already demonstrate how awkward this becomes
 
-- lowering `minimumPrice` removes the floor gate
-- lowering `stepDecayRate` flattens the decay curve
-- increasing `stepDuration` minimizes the number of elapsed decay steps
-- increasing `startingPrice` guarantees the recomputed price is positive
+That is the wrong tool for lot closeout.
 
-### Rescue Starting Price
+## Why I Am Not Making `forceKick` The Default Inactive-Lot Path
 
-`startingPrice` should not be guessed off-chain.
+`forceKick` is attractive, but it is not the best default for this resolver.
 
-The contract should compute a `rescueStartingPrice` from lot metadata so that the recomputed price is guaranteed to be positive for the current lot while still unexpired. The necessary inputs are available from the lot's stored `initialAvailable` and `scaler`.
+Reasons:
 
-The important design point is not the exact formula here, but that the formula belongs in Solidity, alongside the lot state machine, not in the CLI.
+- `forceKick` still inherits the auction's current pricing globals
+- a freshly kicked lot is not guaranteed to be active if the fresh price is still below `minimumPrice`
+- it fails entirely on empty lots, so you still need another State 4 solution
+- once `disable -> enable` exists, it is the more general stale-state reset primitive
 
-## Safety Assumption
+`forceKick` may still be useful later for a separate relist-oriented helper, but it is not needed for the closeout primitive we are designing here.
 
-This design relies on an important system assumption:
+## Why This Design Is Better
 
-- only one lot can ever be active at once
+This design is better because it uses the actual problem boundary:
 
-That assumption materially changes the tradeoff. Because only one lot can be active at a time, temporarily mutating auction-global parameters during `resolveLot(...)` is acceptable. We are not risking accidental reactivation of multiple live lots during the same rescue flow.
+- if there are tokens, recover them
+- if the lot is settleable, settle it
+- if the lot is stale and inactive, reset it locally
+- if the lot is already clean, do nothing
 
-If that invariant is not actually guaranteed in production, this design becomes unsafe and should be reconsidered.
+It avoids:
 
-## Receiver Handling
+- auction-global mutation
+- restore sequencing
+- pricing math in the CLI
+- brittle recovery-plan generation for closeout
 
-Recovered sell tokens should always be sent back to `IAuction(auction).receiver()`.
+## Event Shape
 
-The resolver should not accept an arbitrary recipient argument. The keeper's job is to resolve lot state, not redirect assets.
-
-## Events
-
-The single function should emit one event that records the chosen path.
+The resolver should emit one event that records which path ran.
 
 Example:
 
@@ -196,75 +265,45 @@ event LotResolved(
 );
 ```
 
-Where `path` identifies which state branch executed.
+Suggested paths:
 
-This is better than proliferating one event per narrow helper because it mirrors the single-entrypoint design.
-
-## Impact On `AuctionKicker`
-
-This refactor should simplify the contract's surface area even if the internal logic gets more thoughtful.
-
-### External Surface
-
-The desired long-term public surface is:
-
-- `kick(...)`
-- `batchKick(...)`
-- `kickExtended(...)` only if still needed for true kick-time behavior
-- `enableTokens(...)`
-- `resolveLot(...)`
-
-### What Should Shrink Or Disappear
-
-- the current recovery-specific meaning of `sweepAndSettle(...)`
-- CLI-side lifecycle policy for auction closeout
-- off-chain staged recovery planning for empty lots
-- special operator flags whose only purpose is to compensate for settlement edge cases
-
-In particular, `tidal/transaction_service/auction_recovery.py` is a sign that the recovery brain is in the wrong place. That logic should move on-chain or disappear.
+- `0`: no-op
+- `1`: settle only
+- `2`: sweep only
+- `3`: sweep and settle
+- `4`: reset only
+- `5`: sweep and reset
 
 ## CLI And API Direction
 
-The operator experience should collapse to one command:
+The CLI should become a thin wrapper around this resolver.
 
-```bash
-tidal auction resolve 0xAuction --token 0xSellToken
-```
+It should prepare and preview only these operator outcomes:
 
-The API prepare route should do only enough inspection to present a preview of the predicted branch.
+- sweep and settle
+- settle only
+- sweep and reset
+- reset only
+- sweep only
+- no-op
 
-The CLI should not need to decide among:
+The CLI should not:
 
-- normal settle
-- forced sweep
-- below-floor rescue
-- sweep and disable
+- inspect `available()` to decide recoverability
+- model pricing rescue behavior
+- generate `settleAfterStart` / `settleAfterMin` / `settleAfterDecay` style closeout plans
 
-Those are contract concerns.
-
-### CLI Responsibilities After Refactor
-
-The CLI should only:
-
-1. collect auction and token input
-2. call the prepare endpoint
-3. show the predicted branch in the preview
-4. sign and send the prepared transaction
-
-That is the correct boundary.
+`auction_recovery.py` may still exist for kick-time behavior if needed, but it should not be part of the lot-closeout path.
 
 ## Recommendation
 
-Implement one on-chain lot resolver in `AuctionKicker`.
+Implement the minimal balance-driven resolver first.
 
-Do not keep growing CLI-side heuristics to work around auction state inconsistencies. Those inconsistencies are exactly why the closeout policy belongs in the mech.
+The right closeout primitive is:
 
-The contract should own the full state machine for:
+- balance-driven
+- settlement-aware
+- locally resettable via `disable -> enable`
+- free of global param mutation
 
-- live non-empty lots
-- live empty lots
-- inactive but unexpired lots
-- expired lots
-- never-kicked cleanup states
-
-Once that exists, the CLI becomes simpler, the keeper workflow becomes more reliable, and the system stops depending on off-chain reasoning to recover from auction edge cases.
+That directly solves the current stuck-auction problem, cleanly resolves State 4, and meaningfully reduces CLI complexity without adding new function sprawl.

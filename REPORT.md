@@ -72,11 +72,12 @@ This is sufficient to distinguish happy-path live auctions from stuck / closeabl
 Discovery should be multicall-first:
 
 - batch `isAnActiveAuction()` across candidate auctions
-- batch `getAllEnabledAuctions()` across auctions that need token enumeration
+- batch `getAllEnabledAuctions()` across all auctions being inspected for settlement
 - batch `(auction, token)` reads for `isActive(token)` and `kicked(token)`
 - batch `ERC20(token).balanceOf(auction)` across the same `(auction, token)` pairs
 
 The scanner and operator inspection path should use the shared multicall-capable readers that already exist in the runtime. Do not fall back to one-RPC-call-per-token discovery unless multicall is explicitly unavailable.
+`isAnActiveAuction()` is an optimization and reporting hint only. It must not be used to skip token enumeration for settlement discovery, because inactive auctions can still contain stale or stranded lots.
 
 Per token, the classifier is:
 
@@ -107,6 +108,13 @@ Per token, the classifier is:
 
 `resolveAuction()` is the executor for all actionable states. The CLI and scanner only decide whether a state is actionable by default or only under `--force`.
 
+Ambiguity and failure handling:
+
+- if any required read for a token is missing or inconsistent, that token is not actionable by default
+- auto-settle must fail closed and skip ambiguous tokens or auctions
+- explicit operator settle should return an error for the ambiguous target instead of guessing
+- multiple live funded lots are treated as an anomaly; they are never implicitly force-closed
+
 ## Runtime And Planner Changes
 
 Remove legacy kick-time recovery from the transaction service.
@@ -136,6 +144,8 @@ Use this pre-kick policy:
 - fully clean auction:
   allow regular `kick(...)`
 
+Live funded lots do not block cleanup of separate stale lots on the same auction. They only block a new kick and any implicit force-close behavior.
+
 This keeps force-unwinding a live funded lot as an explicit operator action, not an automatic kick-side behavior.
 
 ## Operator / API / CLI Changes
@@ -152,9 +162,13 @@ Recommended semantics:
 
 - without `--token`, settle all default-actionable lots on the auction
 - with `--token`, settle only that lot
+- with `--token`, inspection should probe the requested token even if it is not returned by enabled-token discovery
 - default `settle` closes only the default-actionable stuck states from the classifier above
 - `--force` additionally allows closing a live funded lot
 - `--force` should require `--token` unless there is exactly one live funded lot
+- without `--token`, prepare may return multiple `resolveAuction(...)` transactions, one per actionable lot
+- live funded lots on the same auction do not prevent default settle from closing separate stale lots
+- if an auction is only progressing on the happy path, default `settle` should return a clean noop, not an error
 
 Delete these legacy concepts from the operator path:
 
@@ -186,6 +200,7 @@ That means:
 - it should report live funded lots as in progress, not stuck
 - it should prepare / send `resolveAuction(...)`, not literal `settle(token)`
 - if discovery is ambiguous or incomplete, it should fail closed and skip that lot / auction instead of guessing
+- if an auction contains both stale lots and separate live funded lots, it should close only the stale lots
 
 The scanner should inspect enabled lot tokens for each auction. An operator can still pass `--token` explicitly for manual closeout of a specific lot.
 

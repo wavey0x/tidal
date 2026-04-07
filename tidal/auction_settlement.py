@@ -203,6 +203,26 @@ def decide_auction_settlement(
             )
 
         if preview.path in {None, PATH_NOOP}:
+            other_resolvable = tuple(
+                candidate
+                for candidate in inspection.lot_previews
+                if candidate.read_ok and candidate.token_address != requested_token and candidate.path not in {None, PATH_NOOP}
+            )
+            if other_resolvable:
+                if len(other_resolvable) == 1:
+                    return AuctionSettlementDecision(
+                        status="error",
+                        operations=(),
+                        reason=(
+                            f"requested token {to_checksum_address(requested_token)} does not match "
+                            f"resolved token {to_checksum_address(other_resolvable[0].token_address)}"
+                        ),
+                    )
+                return AuctionSettlementDecision(
+                    status="error",
+                    operations=(),
+                    reason="requested token does not match any resolvable lot on this auction",
+                )
             return AuctionSettlementDecision(
                 status="noop",
                 operations=(),

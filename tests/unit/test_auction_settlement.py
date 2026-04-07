@@ -86,6 +86,25 @@ def test_decide_auction_settlement_prepares_all_default_actionable_lots() -> Non
     assert decision.reason == "prepared 2 resolvable lot(s)"
 
 
+def test_decide_auction_settlement_errors_on_requested_token_mismatch() -> None:
+    requested = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    resolved = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    decision = decide_auction_settlement(
+        _inspection(
+            _preview(token=requested, path=0, active=False, balance_raw=0),
+            _preview(token=resolved, path=5, active=False, kicked_at=123, balance_raw=99),
+        ),
+        token_address=requested,
+    )
+
+    assert decision.status == "error"
+    assert decision.operations == ()
+    assert decision.reason == (
+        "requested token 0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa does not match "
+        "resolved token 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+    )
+
+
 def test_decide_auction_settlement_errors_on_failed_auction_wide_preview() -> None:
     decision = decide_auction_settlement(
         _inspection(

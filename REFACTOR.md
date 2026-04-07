@@ -1,277 +1,196 @@
-# Auction Lot Resolver Refactor
+# Auction Resolver Refactor
 
-## Thesis
+## Goal
 
-The closeout primitive in `contracts/src/AuctionKicker.sol` should do one thing well:
-
-- get sell tokens out of the auction immediately
-- settle when settlement is actually valid
-- locally reset stale inactive lot state when needed
-
-The CLI should stop trying to infer recovery plans from `available()` and auction-global parameter math. That logic belongs in the mech, and most of it should disappear.
-
-## Problem We Are Actually Solving
-
-The operational problem is not "make every lot perfectly settleable under every pricing configuration."
-
-The real problem is simpler:
-
-- sometimes the auction still holds sell tokens
-- the keeper needs a way to retrieve them immediately
-- the current `sweepAndSettle(...)` path fails because it relies on `available(sellToken)`
-
-That is the wrong primitive. `available()` is intentionally price-gated. When a lot is inactive, `available()` returns `0` even if the auction still holds real token balance.
-
-So the resolver should be balance-driven, not `available()`-driven.
-
-## Verified Contract Facts
-
-From the verified auction source:
-
-- `isActive(_from)` is price-driven, not balance-driven.
-- `available(_from)` returns `0` whenever `isActive(_from) == false`.
-- `settle(_from)` requires both:
-  - `isActive(_from) == true`
-  - `ERC20(_from).balanceOf(address(this)) == 0`
-- `sweep(_token)` transfers the full token balance to `msg.sender`, not to `receiver`.
-- `disable(_from)` and `enable(_from)` are both per-token operations with `onlyGovernance`, and neither is blocked by `isAnActiveAuction()`.
-- `disable(_from)` deletes the lot struct and removes the token from `enabledAuctions`.
-- `enable(_from)` recreates the lot struct, recomputes scaler, restores relayer approval, and re-adds the token.
-
-Those facts imply two important design conclusions:
-
-- retrieval should be based on `ERC20(sellToken).balanceOf(auction)`, not on `available()`
-- stale inactive state can be reset locally with `disable -> enable`, without touching auction-global pricing params
-
-## Design Goal
-
-We want one keeper-facing closeout function in `AuctionKicker` that is:
-
-- simple
-- idempotent
-- safe under weird auction state
-- able to clear tokens from both live and non-live auctions
-
-The resolver should not need:
-
-- global setter mutation
-- restore logic
-- off-chain recovery planning
-- CLI flags for pricing rescue behavior
-
-## Preferred API Shape
-
-Avoid function sprawl.
-
-The cleanest option is to expose one public closeout primitive with a neutral name:
+Move auction closeout policy into `contracts/src/AuctionKicker.sol` and make the CLI a thin wrapper around one keeper-facing function:
 
 ```solidity
 function resolveAuction(address auction, address sellToken) external onlyKeeperOrOwner;
 ```
 
-Despite the name, this function resolves one sell-token lot within the given auction. It does not imply "resolve every token in the auction."
+Despite the name, this resolves one `sellToken` lot within an auction.
 
-Its behavior should be:
+## Problem
 
-- sweep if tokens exist
-- settle if settlement is valid
-- reset stale inactive lot state if needed
-- no-op if there is nothing to do
+The current closeout path is built around `available(sellToken)`. That is the wrong primitive.
 
-This is a better operator-facing name than overloading `sweepAndSettle(...)`, because the function may sweep, settle, reset, or no-op depending on state.
+In the verified auction contract:
 
-## Required Interface Additions
+- `isActive(_from)` is price-driven, not balance-driven
+- `available(_from)` returns `0` whenever `isActive(_from) == false`
+- `settle(_from)` requires:
+  - `isActive(_from) == true`
+  - `ERC20(_from).balanceOf(address(this)) == 0`
+- `sweep(_token)` sends the full balance to `msg.sender`, not to `receiver`
+- `disable(_from)` and `enable(_from)` are per-token governance actions with no `isAnActiveAuction()` guard
 
-This revised design needs far less interface expansion than the previous draft.
+That means a lot can be inactive while the auction still holds tokens, and `available()` will hide that inventory. The resolver should be balance-driven instead.
 
-`contracts/src/interfaces/IAuction.sol` only needs:
+## Contract Shape
+
+`resolveAuction(...)` should:
+
+- read `auctionBalance = IERC20(sellToken).balanceOf(auction)`
+- read `active = IAuction(auction).isActive(sellToken)`
+- read `kickedAt = IAuction(auction).kicked(sellToken)`
+- read `receiver = IAuction(auction).receiver()`
+- require `IAuction(auction).governance() == tradeHandler`
+- choose one deterministic path
+
+Required `IAuction` additions:
 
 - `function kicked(address _from) external view returns (uint256);`
 - `function disable(address _from) external;`
 
-Everything else the resolver needs already exists:
-
-- `receiver()`
-- `isActive(address)`
-- `settle(address)`
-- `sweep(address)`
-- `enable(address)`
-
-## Required Contract-Level Checks And Selectors
-
-The resolver should validate:
-
-- `IAuction(auction).governance() == tradeHandler`
-
-That check is worth doing explicitly before building the WeiRoll batch. Without it, the first governance-only call fails deeper inside execution and produces a worse operator experience.
-
-Implementation will also need:
+Required `AuctionKicker` addition:
 
 ```solidity
 bytes4 internal constant DISABLE_SELECTOR = bytes4(keccak256("disable(address)"));
 ```
 
-`ENABLE_SELECTOR`, `SWEEP_SELECTOR`, and `SETTLE_SELECTOR` already exist. `DISABLE_SELECTOR` is the new piece needed for the local reset path.
+No global price setter support is needed for this design.
 
-## Resolver Algorithm
+## Resolver Paths
 
-The resolver should inspect:
-
-- `auctionBalance = IERC20(sellToken).balanceOf(auction)`
-- `active = IAuction(auction).isActive(sellToken)`
-- `kickedAt = IAuction(auction).kicked(sellToken)`
-- `receiver = IAuction(auction).receiver()`
-
-Then branch as follows.
-
-### Branch 1: Active Lot With Balance
+### Path 1: Sweep And Settle
 
 Conditions:
 
 - `active == true`
 - `auctionBalance > 0`
 
-Resolution:
+Batch:
 
 1. `sweep(sellToken)` from auction to `TradeHandler`
 2. `sellToken.transfer(receiver, auctionBalance)` from `TradeHandler`
 3. `settle(sellToken)`
 
-This handles the normal live-lot recovery path.
+This works because settlement is price-driven, not balance-driven. Sweeping to zero balance does not make an active lot inactive inside the same transaction.
 
-### Branch 2: Active Lot With Zero Balance
+### Path 2: Settle Only
 
 Conditions:
 
 - `active == true`
 - `auctionBalance == 0`
 
-Resolution:
+Batch:
 
 1. `settle(sellToken)`
 
-This handles the "active but empty" state directly. No special recovery logic is needed.
+This handles the "active but empty" case directly.
 
-### Branch 3: Inactive Lot With Stale Kick State
+### Path 3: Sweep And Reset
 
 Conditions:
 
 - `active == false`
 - `kickedAt != 0`
+- `auctionBalance > 0`
 
-Resolution:
+Batch:
 
-1. If `auctionBalance > 0`:
-   - `sweep(sellToken)`
-   - `sellToken.transfer(receiver, auctionBalance)`
-2. `disable(sellToken)`
-3. `enable(sellToken)`
+1. `sweep(sellToken)` from auction to `TradeHandler`
+2. `sellToken.transfer(receiver, auctionBalance)` from `TradeHandler`
+3. `disable(sellToken)`
+4. `enable(sellToken)`
 
-This is the local reset path. It solves the genuinely hard inactive-empty case without touching auction-global params.
+This is the correct recovery path for inactive kicked lots that still hold inventory. It clears tokens first, then resets the stale lot state locally.
 
-It also works for inactive lots that still hold inventory: recover the tokens first, then reset the stale lot state.
+### Path 4: Reset Only
 
-### Branch 4: Inactive Lot Already In Clean State
+Conditions:
+
+- `active == false`
+- `kickedAt != 0`
+- `auctionBalance == 0`
+
+Batch:
+
+1. `disable(sellToken)`
+2. `enable(sellToken)`
+
+This solves the hard state: inactive, empty, and stuck with `kicked != 0`. No global mutation, no pricing assumptions, no relist step required.
+
+### Path 5: Sweep Only
 
 Conditions:
 
 - `active == false`
 - `kickedAt == 0`
+- `auctionBalance > 0`
 
-Resolution:
+Batch:
 
-1. If `auctionBalance > 0`:
-   - `sweep(sellToken)`
-   - `sellToken.transfer(receiver, auctionBalance)`
-2. Otherwise no-op
+1. `sweep(sellToken)` from auction to `TradeHandler`
+2. `sellToken.transfer(receiver, auctionBalance)` from `TradeHandler`
 
-If `kickedAt == 0`, there is no stale kick state to clean up. Once any balance is removed, the lot is already clean enough for future kicks.
+There is no stale kick state to clean up. Once the balance is removed, the lot is already clean enough for future use.
+
+### Path 6: No-Op
+
+Conditions:
+
+- `active == false`
+- `kickedAt == 0`
+- `auctionBalance == 0`
+
+Batch:
+
+1. none
 
 ## State Table
 
-The full state space collapses cleanly under this model.
-
 | State | Conditions | Resolution |
 |---|---|---|
-| 1. Active, balance > 0 | `isActive == true`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver, settle |
-| 2. Active, balance == 0 | `isActive == true`, balance `== 0` | Settle |
-| 3. Inactive, unexpired, balance > 0 | `isActive == false`, `kicked != 0`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver, disable, enable |
-| 4. Inactive, unexpired, balance == 0 | `isActive == false`, `kicked != 0`, balance `== 0` | Disable, enable |
-| 5. Inactive, expired, balance > 0 | `isActive == false`, `kicked != 0`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver, disable, enable |
-| 6. Inactive, expired, balance == 0 | `isActive == false`, `kicked != 0`, balance `== 0` | Disable, enable |
-| 7. Never kicked or already clean, balance > 0 | `kicked == 0`, balance `> 0` | Sweep to `TradeHandler`, transfer to receiver |
-| 8. Never kicked or already clean, balance == 0 | `kicked == 0`, balance `== 0` | No-op |
+| 1. Active, balance > 0 | `isActive == true`, balance `> 0` | Sweep and settle |
+| 2. Active, balance == 0 | `isActive == true`, balance `== 0` | Settle only |
+| 3. Inactive, unexpired, balance > 0 | `isActive == false`, `kicked != 0`, balance `> 0` | Sweep and reset |
+| 4. Inactive, unexpired, balance == 0 | `isActive == false`, `kicked != 0`, balance `== 0` | Reset only |
+| 5. Inactive, expired, balance > 0 | `isActive == false`, `kicked != 0`, balance `> 0` | Sweep and reset |
+| 6. Inactive, expired, balance == 0 | `isActive == false`, `kicked != 0`, balance `== 0` | Reset only |
+| 7. Clean, balance > 0 | `kicked == 0`, balance `> 0` | Sweep only |
+| 8. Clean, balance == 0 | `kicked == 0`, balance `== 0` | No-op |
 
-The important simplification is that the resolver does not need to care why an inactive kicked lot is inactive. Below-floor and expired lots share the same local reset path.
+The resolver does not need to care why an inactive kicked lot is inactive. Below-floor and expired lots use the same local reset path.
 
-## Why State 4 Is Solved This Way
+## Why State 4 Uses `disable -> enable`
 
-State 4 is:
+State 4 is the genuinely hard case:
 
 - inactive
-- still within auction duration or otherwise not formally settled
 - empty
-- stuck with `kicked != 0`
+- `kicked != 0`
 
-This state cannot be settled under the current auction rules, and there are no tokens left to re-kick.
+It cannot be settled, and there are no tokens left to re-kick.
 
-`disable -> enable` is the right answer because:
+`disable -> enable` is the right solution because it:
 
-- it is local to the token
-- it has no `isAnActiveAuction()` guard
-- it resets `kicked` to `0`
-- it restores the token to a fresh enabled state
-- it does not require any pricing assumptions
+- is local to the token
+- has no `isAnActiveAuction()` guard
+- resets `kicked` to `0`
+- restores scaler and relayer approval
+- leaves the token ready for future kicks
 
-This is materially better than pretending State 4 should be a no-op if we care about leaving the lot in a clean reusable state inside the same transaction.
+This is cleaner than a no-op if the goal is to leave the lot reusable immediately.
 
-## Why We Should Not Use Global Setter Rescue
+## Non-Goals
 
-The earlier rescue-profile idea should be dropped from the refactor.
+This resolver should not:
 
-Reasons:
-
-- every setter is blocked by `require(!isAnActiveAuction(), "active auction")`
-- interleaving setter changes with settles is exactly the complexity we are trying to remove
-- restore logic is as hard as activation logic
-- the current `kickExtended(...)` and `auction_recovery.py` already demonstrate how awkward this becomes
-
-That is the wrong tool for lot closeout.
-
-## Why I Am Not Making `forceKick` The Default Inactive-Lot Path
-
-`forceKick` is attractive, but it is not the best default for this resolver.
+- mutate `startingPrice`, `minimumPrice`, `stepDecayRate`, or `stepDuration`
+- reproduce the `kickExtended(...)` recovery planner on-chain
+- depend on `forceKick(...)` for inactive-lot closeout
 
 Reasons:
 
-- `forceKick` still inherits the auction's current pricing globals
-- a freshly kicked lot is not guaranteed to be active if the fresh price is still below `minimumPrice`
-- it fails entirely on empty lots, so you still need another State 4 solution
-- once `disable -> enable` exists, it is the more general stale-state reset primitive
+- setter-based rescue is blocked by `isAnActiveAuction()` and reintroduces sequencing complexity
+- `forceKick(...)` still depends on pricing globals and does not solve the empty stale-lot case
+- `disable -> enable` is the simpler general reset primitive
 
-`forceKick` may still be useful later for a separate relist-oriented helper, but it is not needed for the closeout primitive we are designing here.
+## Event
 
-## Why This Design Is Better
-
-This design is better because it uses the actual problem boundary:
-
-- if there are tokens, recover them
-- if the lot is settleable, settle it
-- if the lot is stale and inactive, reset it locally
-- if the lot is already clean, do nothing
-
-It avoids:
-
-- auction-global mutation
-- restore sequencing
-- pricing math in the CLI
-- brittle recovery-plan generation for closeout
-
-## Event Shape
-
-The resolver should emit one event that records which path ran.
-
-Example:
+Use a single event:
 
 ```solidity
 event AuctionResolved(
@@ -283,7 +202,7 @@ event AuctionResolved(
 );
 ```
 
-Suggested paths:
+Suggested path values:
 
 - `0`: no-op
 - `1`: settle only
@@ -292,24 +211,11 @@ Suggested paths:
 - `4`: reset only
 - `5`: sweep and reset
 
-## Event Compatibility
+Replacing `SweepAndSettled(auction, sellToken)` with `AuctionResolved(...)` is an indexer-facing breaking change. Dual-emitting on the sweep-and-settle path is optional if compatibility matters.
 
-Replacing `SweepAndSettled(auction, sellToken)` with `AuctionResolved(...)` is an indexer-facing breaking change.
+## CLI Direction
 
-My preference is still to make `AuctionResolved(...)` the canonical event and treat the change as intentional.
-
-If backward compatibility turns out to matter, the least messy compromise is:
-
-- emit `AuctionResolved(...)` for every path
-- also emit `SweepAndSettled(...)` only on the `sweep and settle` path
-
-That is optional. It is not needed for the contract design itself.
-
-## CLI And API Direction
-
-The CLI should become a thin wrapper around this resolver.
-
-It should prepare and preview only these operator outcomes:
+The CLI should only prepare and preview one of these outcomes:
 
 - sweep and settle
 - settle only
@@ -322,19 +228,10 @@ The CLI should not:
 
 - inspect `available()` to decide recoverability
 - model pricing rescue behavior
-- generate `settleAfterStart` / `settleAfterMin` / `settleAfterDecay` style closeout plans
-
-`auction_recovery.py` may still exist for kick-time behavior if needed, but it should not be part of the lot-closeout path.
+- generate `settleAfterStart` / `settleAfterMin` / `settleAfterDecay` closeout plans
 
 ## Recommendation
 
-Implement the minimal balance-driven resolver first.
+Implement `resolveAuction(...)` as a minimal balance-driven resolver.
 
-The right closeout primitive is:
-
-- balance-driven
-- settlement-aware
-- locally resettable via `disable -> enable`
-- free of global param mutation
-
-That directly solves the current stuck-auction problem, cleanly resolves State 4, and meaningfully reduces CLI complexity without adding new function sprawl.
+That directly solves the stuck-auction problem, handles State 4 cleanly, avoids global mutation, and removes closeout complexity from the CLI.

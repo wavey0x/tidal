@@ -675,8 +675,9 @@ def render_kick_run_summary(
 def _format_inspect_entry(entry: KickInspectEntry) -> str:
     symbol = entry.token_symbol or "UNKNOWN"
     source_name = entry.source_name or entry.source_address
+    state_label = entry.state.replace("_", "-")
     line = (
-        f"  - {entry.state:<21} {symbol:<10} ${entry.usd_value:,.2f} "
+        f"  - {state_label:<21} {symbol:<10} ${entry.usd_value:,.2f} "
         f"{short_address(entry.source_address)} -> {short_address(entry.auction_address)}"
     )
     if entry.detail:
@@ -705,6 +706,9 @@ def render_kick_inspect(result: KickInspectResult, *, show_all: bool) -> None:
     typer.echo(f"  eligible     {result.eligible_count}")
     typer.echo(f"  selected     {result.selected_count}")
     typer.echo(f"  ready        {result.ready_count}")
+    typer.echo(f"  resolve      {result.resolve_first_count}")
+    typer.echo(f"  blocked      {result.blocked_live_count}")
+    typer.echo(f"  failed       {result.preview_failed_count}")
     typer.echo(f"  ignored      {result.ignored_count}")
     typer.echo(f"  cooldown     {result.cooldown_count}")
     typer.echo(f"  deferred     {result.deferred_same_auction_count}")
@@ -712,6 +716,9 @@ def render_kick_inspect(result: KickInspectResult, *, show_all: bool) -> None:
 
     sections: list[tuple[str, list[KickInspectEntry]]] = [
         ("Ready", result.ready),
+        ("Resolve First", result.resolve_first),
+        ("Blocked Live", result.blocked_live),
+        ("Preview Failed", result.preview_failed),
         ("Ignored", result.ignored_skips),
         ("Cooldown", result.cooldown_skips),
         ("Deferred", result.deferred_same_auction),
@@ -720,7 +727,7 @@ def render_kick_inspect(result: KickInspectResult, *, show_all: bool) -> None:
     for heading, entries in sections:
         if not entries:
             continue
-        if not show_all and heading not in {"Ready", "Ignored", "Cooldown"}:
+        if not show_all and heading not in {"Ready", "Resolve First", "Blocked Live", "Preview Failed", "Ignored", "Cooldown"}:
             continue
         typer.echo()
         typer.echo(f"{heading}:")

@@ -5,14 +5,22 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+from tidal.auction_settlement import (
+    PATH_NOOP,
+    default_actionable_previews,
+    inspect_auction_settlements,
+    live_funded_previews,
+    path_reason,
+)
+from tidal.normalizers import normalize_address
 from tidal.persistence.repositories import KickTxRepository
-from tidal.runtime import build_txn_service
+from tidal.runtime import build_web3_client
 from tidal.transaction_service.evaluator import build_shortlist
-from tidal.transaction_service.types import AuctionInspection, KickCandidate, SourceType
+from tidal.transaction_service.types import KickCandidate, SourceType
 
 
 def _candidate_key(candidate: KickCandidate) -> tuple[str, str]:
-    return candidate.auction_address, candidate.token_address
+    return normalize_address(candidate.auction_address), normalize_address(candidate.token_address)
 
 
 @dataclass(slots=True)
@@ -31,7 +39,6 @@ class KickInspectEntry:
     auction_active: bool | None = None
     active_token: str | None = None
     active_tokens: tuple[str, ...] = ()
-    minimum_price_raw: int | None = None
 
 
 @dataclass(slots=True)
@@ -43,11 +50,17 @@ class KickInspectResult:
     eligible_count: int
     selected_count: int
     ready_count: int
+    resolve_first_count: int
+    blocked_live_count: int
+    preview_failed_count: int
     ignored_count: int
     cooldown_count: int
     deferred_same_auction_count: int
     limited_count: int
     ready: list[KickInspectEntry]
+    resolve_first: list[KickInspectEntry]
+    blocked_live: list[KickInspectEntry]
+    preview_failed: list[KickInspectEntry]
     ignored_skips: list[KickInspectEntry]
     cooldown_skips: list[KickInspectEntry]
     deferred_same_auction: list[KickInspectEntry]
@@ -80,10 +93,57 @@ def inspect_kick_candidates(
         kick_tx_repository=KickTxRepository(session),
     )
     ready_candidates = shortlist.selected_candidates
-    ready_inspections: dict[tuple[str, str], AuctionInspection] = {}
+    inspections_by_auction: dict[str, object] = {}
     if include_live_inspection and settings.rpc_url and ready_candidates:
-        txn_service = build_txn_service(settings, session)
-        ready_inspections = asyncio.run(txn_service.preparer.inspect_candidates(ready_candidates))
+        auctions_to_inspect = sorted(
+            {
+                candidate.auction_address
+                for candidate in (
+                    list(shortlist.selected_candidates)
+                    + list(shortlist.deferred_same_auction_candidates)
+                    + list(shortlist.limited_candidates)
+                )
+            }
+        )
+        if auctions_to_inspect:
+            web3_client = build_web3_client(settings)
+            inspections_by_auction = asyncio.run(
+                inspect_auction_settlements(
+                    web3_client,
+                    settings,
+                    auctions_to_inspect,
+                )
+            )
+
+    def classify_selected_candidate(candidate: KickCandidate) -> tuple[str, str | None]:
+        inspection = inspections_by_auction.get(normalize_address(candidate.auction_address))
+        if inspection is None:
+            return "ready", None
+
+        preview_failures = inspection.preview_failures
+        if preview_failures:
+            messages = [preview.error_message or "resolve preview failed" for preview in preview_failures]
+            return "preview_failed", "; ".join(dict.fromkeys(messages))
+
+        actionable = default_actionable_previews(inspection)
+        if actionable:
+            reasons = [path_reason(int(preview.path or PATH_NOOP)) for preview in actionable]
+            unique_reasons = list(dict.fromkeys(reasons))
+            if len(unique_reasons) == 1:
+                detail = unique_reasons[0]
+            else:
+                detail = ", ".join(unique_reasons[:3])
+                if len(unique_reasons) > 3:
+                    detail += f", +{len(unique_reasons) - 3} more"
+            return "resolve_first", detail
+
+        live = live_funded_previews(inspection)
+        if live:
+            if len(live) == 1:
+                return "blocked_live", path_reason(int(live[0].path or PATH_NOOP))
+            return "blocked_live", f"{len(live)} live funded lots"
+
+        return "ready", None
 
     def build_entry(
         candidate: KickCandidate,
@@ -91,7 +151,18 @@ def inspect_kick_candidates(
         state: str,
         detail: str | None = None,
     ) -> KickInspectEntry:
-        inspection = ready_inspections.get(_candidate_key(candidate))
+        inspection = inspections_by_auction.get(normalize_address(candidate.auction_address))
+        active_tokens = ()
+        active_token = None
+        auction_active = None
+        if inspection is not None:
+            active_tokens = tuple(
+                preview.token_address
+                for preview in inspection.lot_previews
+                if preview.read_ok and preview.active is True
+            )
+            active_token = active_tokens[0] if len(active_tokens) == 1 else None
+            auction_active = inspection.is_active_auction
         return KickInspectEntry(
             state=state,
             source_type=candidate.source_type,
@@ -104,13 +175,26 @@ def inspect_kick_candidates(
             normalized_balance=candidate.normalized_balance,
             usd_value=candidate.usd_value,
             detail=detail,
-            auction_active=inspection.is_active_auction if inspection is not None else None,
-            active_token=inspection.active_token if inspection is not None else None,
-            active_tokens=inspection.active_tokens if inspection is not None else (),
-            minimum_price_raw=inspection.minimum_price_raw if inspection is not None else None,
+            auction_active=auction_active,
+            active_token=active_token,
+            active_tokens=active_tokens,
         )
 
-    ready_entries = [build_entry(candidate, state="ready") for candidate in ready_candidates]
+    ready_entries: list[KickInspectEntry] = []
+    resolve_first_entries: list[KickInspectEntry] = []
+    blocked_live_entries: list[KickInspectEntry] = []
+    preview_failed_entries: list[KickInspectEntry] = []
+    for candidate in ready_candidates:
+        state, detail = classify_selected_candidate(candidate)
+        entry = build_entry(candidate, state=state, detail=detail)
+        if state == "resolve_first":
+            resolve_first_entries.append(entry)
+        elif state == "blocked_live":
+            blocked_live_entries.append(entry)
+        elif state == "preview_failed":
+            preview_failed_entries.append(entry)
+        else:
+            ready_entries.append(entry)
     ignored_entries = [
         build_entry(decision.candidate, state="ignored", detail=decision.detail)
         for decision in shortlist.ignored_skips
@@ -132,11 +216,17 @@ def inspect_kick_candidates(
         eligible_count=len(shortlist.eligible_candidates),
         selected_count=len(shortlist.selected_candidates) + len(shortlist.limited_candidates),
         ready_count=len(ready_entries),
+        resolve_first_count=len(resolve_first_entries),
+        blocked_live_count=len(blocked_live_entries),
+        preview_failed_count=len(preview_failed_entries),
         ignored_count=len(ignored_entries),
         cooldown_count=len(cooldown_entries),
         deferred_same_auction_count=len(deferred_entries),
         limited_count=len(limited_entries),
         ready=ready_entries,
+        resolve_first=resolve_first_entries,
+        blocked_live=blocked_live_entries,
+        preview_failed=preview_failed_entries,
         ignored_skips=ignored_entries,
         cooldown_skips=cooldown_entries,
         deferred_same_auction=deferred_entries,

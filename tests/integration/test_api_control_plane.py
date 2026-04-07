@@ -326,6 +326,48 @@ def test_auction_settle_prepare_route_threads_force_override(tmp_path: Path, mon
     assert captured["force"] is True
 
 
+def test_kick_inspect_route_returns_ok_for_resolve_first_only_results(tmp_path: Path, monkeypatch) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+
+    monkeypatch.setattr(
+        "tidal.api.routes.kick.inspect_kicks",
+        lambda *args, **kwargs: {  # noqa: ANN001, ANN003
+            "source_type": None,
+            "source_address": None,
+            "auction_address": None,
+            "limit": None,
+            "eligible_count": 1,
+            "selected_count": 1,
+            "ready_count": 0,
+            "resolve_first_count": 1,
+            "blocked_live_count": 0,
+            "preview_failed_count": 0,
+            "ignored_count": 0,
+            "cooldown_count": 0,
+            "deferred_same_auction_count": 0,
+            "limited_count": 0,
+            "ready": [],
+            "resolve_first": [],
+            "blocked_live": [],
+            "preview_failed": [],
+            "ignored_skips": [],
+            "cooldown_skips": [],
+            "deferred_same_auction": [],
+            "limited": [],
+        },
+    )
+
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/v1/tidal/kick/inspect",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
 def test_public_browser_deploy_prepare_route_is_unauthenticated(tmp_path: Path, monkeypatch) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)

@@ -32,7 +32,19 @@ def post_kick_inspect(
         limit=payload.limit,
         include_live_inspection=payload.include_live_inspection,
     )
-    status = "ok" if data.get("ready_count") or data.get("cooldown_count") or data.get("deferred_same_auction_count") else "noop"
+    status = "ok" if any(
+        int(data.get(key) or 0) > 0
+        for key in (
+            "ready_count",
+            "resolve_first_count",
+            "blocked_live_count",
+            "preview_failed_count",
+            "ignored_count",
+            "cooldown_count",
+            "deferred_same_auction_count",
+            "limited_count",
+        )
+    ) else "noop"
     return {"status": status, "warnings": [], "data": redact_sensitive_data(data)}
 
 

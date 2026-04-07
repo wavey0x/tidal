@@ -39,7 +39,6 @@ def _entry(
         "auction_active": None,
         "active_token": None,
         "active_tokens": [],
-        "minimum_price_raw": None,
     }
 
 
@@ -62,25 +61,63 @@ def _deferred_entry(*, token_address: str, source_address: str, auction_address:
     )
 
 
+def _resolve_first_entry(*, token_address: str, source_address: str, auction_address: str, detail: str) -> dict[str, object]:
+    entry = _entry(
+        token_address=token_address,
+        source_address=source_address,
+        auction_address=auction_address,
+        state="resolve_first",
+    )
+    entry["detail"] = detail
+    entry["auction_active"] = False
+    return entry
+
+
+def _blocked_live_entry(*, token_address: str, source_address: str, auction_address: str, detail: str) -> dict[str, object]:
+    entry = _entry(
+        token_address=token_address,
+        source_address=source_address,
+        auction_address=auction_address,
+        state="blocked_live",
+    )
+    entry["detail"] = detail
+    entry["auction_active"] = True
+    entry["active_token"] = token_address
+    entry["active_tokens"] = [token_address]
+    return entry
+
+
 def _inspect_payload(
     ready: list[dict[str, object]],
     *,
+    resolve_first: list[dict[str, object]] | None = None,
+    blocked_live: list[dict[str, object]] | None = None,
+    preview_failed: list[dict[str, object]] | None = None,
     deferred_same_auction: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    resolve_first_entries = resolve_first or []
+    blocked_live_entries = blocked_live or []
+    preview_failed_entries = preview_failed or []
     deferred = deferred_same_auction or []
     return {
         "source_type": None,
         "source_address": None,
         "auction_address": None,
         "limit": None,
-        "eligible_count": len(ready) + len(deferred),
-        "selected_count": len(ready),
+        "eligible_count": len(ready) + len(resolve_first_entries) + len(blocked_live_entries) + len(preview_failed_entries) + len(deferred),
+        "selected_count": len(ready) + len(resolve_first_entries) + len(blocked_live_entries) + len(preview_failed_entries),
         "ready_count": len(ready),
+        "resolve_first_count": len(resolve_first_entries),
+        "blocked_live_count": len(blocked_live_entries),
+        "preview_failed_count": len(preview_failed_entries),
         "ignored_count": 0,
         "cooldown_count": 0,
         "deferred_same_auction_count": len(deferred),
         "limited_count": 0,
         "ready": ready,
+        "resolve_first": resolve_first_entries,
+        "blocked_live": blocked_live_entries,
+        "preview_failed": preview_failed_entries,
         "ignored_skips": [],
         "cooldown_skips": [],
         "deferred_same_auction": deferred,
@@ -342,6 +379,53 @@ def test_operator_kick_inspect_uses_inspect_only(tmp_path, monkeypatch) -> None:
     assert len(client.inspect_calls) == 1
     assert "includeLiveInspection" not in client.inspect_calls[0]
     assert "Kick inspect:" in result.output
+
+
+def test_operator_kick_inspect_renders_resolve_first_and_blocked_live_sections(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+
+    class _ResolverInspectClient(_InspectOnlyClient):
+        def inspect_kicks(self, body: dict[str, object]) -> dict[str, object]:
+            self.inspect_calls.append(body)
+            return {
+                "status": "ok",
+                "warnings": [],
+                "data": _inspect_payload(
+                    [],
+                    resolve_first=[
+                        _resolve_first_entry(
+                            token_address="0x3333333333333333333333333333333333333333",
+                            source_address="0x1111111111111111111111111111111111111111",
+                            auction_address="0x2222222222222222222222222222222222222222",
+                            detail="inactive kicked lot with stranded inventory",
+                        )
+                    ],
+                    blocked_live=[
+                        _blocked_live_entry(
+                            token_address="0x4444444444444444444444444444444444444444",
+                            source_address="0x5555555555555555555555555555555555555555",
+                            auction_address="0x6666666666666666666666666666666666666666",
+                            detail="live funded lot",
+                        )
+                    ],
+                ),
+            }
+
+    client = _ResolverInspectClient()
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "inspect", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "Resolve First:" in result.output
+    assert "Blocked Live:" in result.output
+    assert "inactive kicked lot with stranded inventory" in result.output
+    assert "live funded lot" in result.output
 
 
 @pytest.mark.parametrize(

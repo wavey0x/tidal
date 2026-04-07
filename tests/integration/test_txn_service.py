@@ -664,6 +664,8 @@ async def test_dry_run_planner_persists_resolve_and_kick_rows(session):
     assert rows[1]["status"] == "DRY_RUN"
     assert rows[1]["stuck_abort_reason"] == "inactive kicked lot with stranded inventory"
     assert rows[1]["sell_amount"] == "123"
+    assert rows[1]["price_usd"] is None
+    assert rows[1]["usd_value"] is None
 
 
 @pytest.mark.asyncio

@@ -188,10 +188,6 @@ class TxnService:
         }
         if prepared_operation.balance_raw:
             row["sell_amount"] = str(prepared_operation.balance_raw)
-        if prepared_operation.sell_token.lower() == candidate.token_address.lower():
-            row["price_usd"] = candidate.price_usd
-            if prepared_operation.normalized_balance is not None:
-                row["usd_value"] = str(candidate.usd_value)
         if candidate.source_type == "strategy":
             row["strategy_address"] = candidate.source_address
         self.kick_tx_repository.insert(row)

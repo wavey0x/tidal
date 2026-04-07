@@ -5,7 +5,7 @@
 # code defaults unless you intentionally override it via environment variables.
 
 chain_id: 1
-auction_kicker_address: "0xd7065DA1259b99e0f79Ca7488894E38B158A4d58"
+auction_kicker_address: "0x354eD194390C431250b639Ab5cbA178D587612Fd"
 txn_usd_threshold: 100
 txn_max_base_fee_gwei: 0.5
 txn_max_priority_fee_gwei: 2

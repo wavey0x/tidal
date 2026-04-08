@@ -36,7 +36,7 @@ tidal kick run --no-confirmation
 Allow prepares to continue when Curve quoting is unavailable:
 
 ```bash
-tidal kick run --allow-missing-curve-quote
+tidal kick run --no-require-curve
 ```
 
 ## Important Flags
@@ -48,7 +48,7 @@ tidal kick run --allow-missing-curve-quote
 - `--show-all`: include non-ready entries on `inspect`
 - `--no-confirmation`: skip the interactive confirmation prompt
 - `--verbose`: show more prepare and skip detail on `run`
-- `--require-curve-quote` and `--allow-missing-curve-quote`: tighten or relax fresh quote requirements for that run
+- `--require-curve` and `--no-require-curve`: tighten or relax fresh quote requirements for that run
 - `--json`: emit machine-readable output; requires `--no-confirmation` on `run`
 
 Signing defaults to `TXN_KEYSTORE_PATH` and `TXN_KEYSTORE_PASSPHRASE`. Use `--keystore` and `--password-file` only when you need a one-off override. The sender address is inferred from the resolved keystore.

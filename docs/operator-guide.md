@@ -126,7 +126,7 @@ Useful flags:
 - `--auction`: target one auction
 - `--no-confirmation`: skip interactive confirmation
 - `--verbose`: show more diagnostic detail
-- `--allow-missing-curve-quote`: relax Curve quote strictness for this run
+- `--no-require-curve`: relax Curve quote strictness for this run
 
 ## Auction Workflows
 

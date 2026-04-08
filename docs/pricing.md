@@ -66,7 +66,7 @@ By default, kick preparation requires Curve to provide a positive route amount.
 That behavior is controlled by:
 
 - config: `txn_require_curve_quote`
-- per-run override: `--require-curve-quote` / `--allow-missing-curve-quote`
+- per-run override: `--require-curve` / `--no-require-curve`
 
 If strict mode is on and Curve has no usable quote, prepare fails with:
 

@@ -540,8 +540,8 @@ def test_operator_kick_run_renders_manual_sweep_hint_for_blocking_stale_lot(tmp_
     ("flag_args", "expected"),
     [
         ([], None),
-        (["--require-curve-quote"], True),
-        (["--allow-missing-curve-quote"], False),
+        (["--require-curve"], True),
+        (["--no-require-curve"], False),
     ],
 )
 def test_operator_kick_run_threads_curve_quote_override(tmp_path, monkeypatch, flag_args, expected) -> None:

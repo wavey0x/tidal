@@ -433,7 +433,7 @@ def kick_run(
     verbose: VerboseOption = False,
     require_curve_quote: bool | None = typer.Option(
         None,
-        "--require-curve-quote/--allow-missing-curve-quote",
+        "--require-curve/--no-require-curve",
         help="Override Curve quote strictness for prepare/send.",
     ),
 ) -> None:

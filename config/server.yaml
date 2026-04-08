@@ -31,17 +31,17 @@ kick:
     volatile:
       start_price_buffer_bps: 1000
       min_price_buffer_bps: 500
-      step_decay_rate_bps: 25
+      step_decay_rate_bps: 15
 
     semi-volatile:
       start_price_buffer_bps: 1000
       min_price_buffer_bps: 500
-      step_decay_rate_bps: 10
+      step_decay_rate_bps: 8
 
     stable:
       start_price_buffer_bps: 100
       min_price_buffer_bps: 50
-      step_decay_rate_bps: 2
+      step_decay_rate_bps: 1
 
   profile_overrides:
     - auction: "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693" # Fee burner v1.0.4 auction

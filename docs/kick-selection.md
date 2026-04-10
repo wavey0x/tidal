@@ -40,7 +40,7 @@ Candidates only enter the shortlist when:
 
 Freshness is controlled by:
 
-- `txn_max_data_age_seconds`
+- `txn_data_freshness_limit_seconds`
 
 ## Exclusions Before Ranking
 

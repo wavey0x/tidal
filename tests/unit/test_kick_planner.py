@@ -14,7 +14,7 @@ from tidal.transaction_service.types import KickCandidate, KickStatus, PreparedK
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         txn_usd_threshold=100.0,
-        txn_max_data_age_seconds=600,
+        txn_data_freshness_limit_seconds=1200,
         txn_max_gas_limit=500000,
         auction_kicker_address="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         chain_id=1,

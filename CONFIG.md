@@ -104,7 +104,7 @@ Some settings may still belong in tracked config, but should be nested under `ki
 - `txn_start_price_buffer_bps`
 - `txn_min_price_buffer_bps`
 - `txn_quote_spot_warning_threshold_pct`
-- `txn_max_data_age_seconds`
+- `txn_data_freshness_limit_seconds`
 - `txn_require_curve_quote`
 - `max_batch_kick_size`
 - `batch_kick_delay_seconds`

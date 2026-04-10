@@ -34,7 +34,7 @@ class _FailingWeb3Client:
 def _kick_settings() -> SimpleNamespace:
     return SimpleNamespace(
         txn_usd_threshold=100.0,
-        txn_max_data_age_seconds=600,
+        txn_data_freshness_limit_seconds=1200,
         kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
         txn_max_gas_limit=500000,
         auction_kicker_address="0x5555555555555555555555555555555555555555",

@@ -59,7 +59,7 @@ def _inspection(*previews: AuctionLotPreview) -> AuctionSettlementInspection:
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         txn_usd_threshold=100.0,
-        txn_max_data_age_seconds=600,
+        txn_data_freshness_limit_seconds=1200,
         rpc_url="http://rpc.example",
         kick_config=SimpleNamespace(
             ignore_policy=SimpleNamespace(),

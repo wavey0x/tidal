@@ -121,7 +121,16 @@ class Settings(BaseSettings):
         default=2.0,
         alias="TXN_QUOTE_SPOT_WARNING_THRESHOLD_PCT",
     )
-    txn_max_data_age_seconds: int = Field(default=600, alias="TXN_MAX_DATA_AGE_SECONDS")
+    txn_data_freshness_limit_seconds: int = Field(
+        default=1200,
+        alias="TXN_DATA_FRESHNESS_LIMIT_SECONDS",
+        validation_alias=AliasChoices(
+            "txn_data_freshness_limit_seconds",
+            "TXN_DATA_FRESHNESS_LIMIT_SECONDS",
+            "txn_max_data_age_seconds",
+            "TXN_MAX_DATA_AGE_SECONDS",
+        ),
+    )
     prepared_action_max_age_seconds: int = Field(default=300, alias="PREPARED_ACTION_MAX_AGE_SECONDS")
     txn_keystore_path: str | None = Field(default=None, alias="TXN_KEYSTORE_PATH")
     txn_keystore_passphrase: str | None = Field(default=None, alias="TXN_KEYSTORE_PASSPHRASE")

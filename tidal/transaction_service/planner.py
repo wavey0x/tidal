@@ -158,7 +158,7 @@ class KickPlanner:
         shortlist = self.shortlist_builder(
             self.session,
             usd_threshold=self.settings.txn_usd_threshold,
-            max_data_age_seconds=self.settings.txn_max_data_age_seconds,
+            max_data_age_seconds=self.settings.txn_data_freshness_limit_seconds,
             source_type=source_type,
             source_address=source_address,
             auction_address=auction_address,

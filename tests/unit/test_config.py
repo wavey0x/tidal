@@ -18,6 +18,8 @@ def _clear_runtime_env(monkeypatch) -> None:
         "TIDAL_CONFIG",
         "TIDAL_ENV_FILE",
         "PREPARED_ACTION_MAX_AGE_SECONDS",
+        "TXN_DATA_FRESHNESS_LIMIT_SECONDS",
+        "TXN_MAX_DATA_AGE_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -115,6 +117,37 @@ def test_load_client_settings_reads_prepared_action_max_age_seconds_from_config(
     settings = load_client_settings()
 
     assert settings.prepared_action_max_age_seconds == 45
+
+
+def test_load_server_settings_reads_data_freshness_limit_seconds_from_config(tmp_path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    config_dir = project_root / "config"
+    config_dir.mkdir(parents=True)
+    home_root = tmp_path / "home"
+    (project_root / "pyproject.toml").write_text("[project]\nname='tidal'\nversion='0'\n", encoding="utf-8")
+    (config_dir / "server.yaml").write_text(
+        """
+chain_id: 1
+txn_data_freshness_limit_seconds: 1234
+kick:
+  default_profile: volatile
+  profiles:
+    volatile:
+      start_price_buffer_bps: 1000
+      min_price_buffer_bps: 500
+      step_decay_rate_bps: 25
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(home_root))
+    monkeypatch.chdir(project_root)
+
+    settings = load_server_settings()
+
+    assert settings.txn_data_freshness_limit_seconds == 1234
 
 
 def test_load_server_settings_uses_project_config_and_embedded_kick(tmp_path, monkeypatch) -> None:

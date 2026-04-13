@@ -13,6 +13,15 @@ def _looks_like_tidal_response(payload: object) -> bool:
     return isinstance(payload, dict) and _EXPECTED_RESPONSE_KEYS.issubset(payload)
 
 
+def _extract_error_detail(payload: object) -> object | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("detail", "message", "error"):
+        if key in payload:
+            return payload.get(key)
+    return None
+
+
 class ControlPlaneError(RuntimeError):
     """Raised when the control-plane API returns an error."""
 
@@ -88,19 +97,19 @@ class ControlPlaneClient:
         except ValueError as exc:
             raise self._unexpected_response_error(path=path, status_code=response.status_code) from exc
 
-        if not _looks_like_tidal_response(payload):
-            raise self._unexpected_response_error(path=path, status_code=response.status_code)
-
         if not response.is_success:
-            message = payload.get("detail") or payload.get("message") or payload.get("error")
+            message = _extract_error_detail(payload)
             raise ControlPlaneError(
                 self._api_error_message(status_code=response.status_code, detail=message),
                 status_code=response.status_code,
             )
 
+        if not _looks_like_tidal_response(payload):
+            raise self._unexpected_response_error(path=path, status_code=response.status_code)
+
         status = payload.get("status")
         if status == "error":
-            message = payload.get("detail") or payload.get("message") or payload.get("error") or "API returned an error"
+            message = _extract_error_detail(payload) or "API returned an error"
             raise ControlPlaneError(
                 self._api_error_message(status_code=response.status_code, detail=message),
                 status_code=response.status_code,

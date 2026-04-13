@@ -27,6 +27,19 @@ def _extract_error_body_text(response: httpx.Response) -> str | None:
     return text or None
 
 
+def _extract_warning_detail(payload: object) -> object | None:
+    if not isinstance(payload, dict):
+        return None
+    warnings = payload.get("warnings")
+    if not isinstance(warnings, list):
+        return None
+    for warning in warnings:
+        text = str(warning).strip()
+        if text:
+            return text
+    return None
+
+
 class ControlPlaneError(RuntimeError):
     """Raised when the control-plane API returns an error."""
 
@@ -92,6 +105,7 @@ class ControlPlaneClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        allow_error_status: bool = False,
     ) -> dict[str, Any]:
         try:
             response = self._client.request(method, path, params=params, json=json)
@@ -104,7 +118,11 @@ class ControlPlaneClient:
             except ValueError:
                 message = _extract_error_body_text(response)
             else:
-                message = _extract_error_detail(payload) or _extract_error_body_text(response)
+                message = (
+                    _extract_error_detail(payload)
+                    or _extract_warning_detail(payload)
+                    or _extract_error_body_text(response)
+                )
             raise ControlPlaneError(
                 self._api_error_message(status_code=response.status_code, detail=message),
                 status_code=response.status_code,
@@ -119,8 +137,8 @@ class ControlPlaneClient:
             raise self._unexpected_response_error(path=path, status_code=response.status_code)
 
         status = payload.get("status")
-        if status == "error":
-            message = _extract_error_detail(payload) or "API returned an error"
+        if status == "error" and not allow_error_status:
+            message = _extract_error_detail(payload) or _extract_warning_detail(payload) or "API returned an error"
             raise ControlPlaneError(
                 self._api_error_message(status_code=response.status_code, detail=message),
                 status_code=response.status_code,
@@ -159,19 +177,34 @@ class ControlPlaneClient:
         return self.request("POST", "/api/v1/tidal/kick/inspect", json=body)
 
     def prepare_kicks(self, body: dict[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/api/v1/tidal/kick/prepare", json=body)
+        return self.request("POST", "/api/v1/tidal/kick/prepare", json=body, allow_error_status=True)
 
     def prepare_deploy(self, body: dict[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/api/v1/tidal/auctions/deploy/prepare", json=body)
+        return self.request("POST", "/api/v1/tidal/auctions/deploy/prepare", json=body, allow_error_status=True)
 
     def prepare_enable_tokens(self, auction: str, body: dict[str, Any]) -> dict[str, Any]:
-        return self.request("POST", f"/api/v1/tidal/auctions/{auction}/enable-tokens/prepare", json=body)
+        return self.request(
+            "POST",
+            f"/api/v1/tidal/auctions/{auction}/enable-tokens/prepare",
+            json=body,
+            allow_error_status=True,
+        )
 
     def prepare_settle(self, auction: str, body: dict[str, Any]) -> dict[str, Any]:
-        return self.request("POST", f"/api/v1/tidal/auctions/{auction}/settle/prepare", json=body)
+        return self.request(
+            "POST",
+            f"/api/v1/tidal/auctions/{auction}/settle/prepare",
+            json=body,
+            allow_error_status=True,
+        )
 
     def prepare_sweep(self, auction: str, body: dict[str, Any]) -> dict[str, Any]:
-        return self.request("POST", f"/api/v1/tidal/auctions/{auction}/sweep/prepare", json=body)
+        return self.request(
+            "POST",
+            f"/api/v1/tidal/auctions/{auction}/sweep/prepare",
+            json=body,
+            allow_error_status=True,
+        )
 
     def list_actions(
         self,

@@ -137,3 +137,26 @@ def test_request_surfaces_plain_json_detail_for_prepare_errors() -> None:
         assert exc.status_code == 409
     else:
         raise AssertionError("expected ControlPlaneError")
+
+
+def test_prepare_enable_tokens_returns_error_payload_without_raising() -> None:
+    client = ControlPlaneClient(base_url="https://api.example.com", token="secret")
+    payload = {
+        "status": "error",
+        "warnings": ["failed to load auction metadata for 0xabc: execution reverted"],
+        "data": {"preview": {}, "transactions": []},
+    }
+
+    def fake_request(method: str, path: str, *, params=None, json=None) -> httpx.Response:  # noqa: ANN001
+        del method, params, json
+        request = httpx.Request("POST", f"https://api.example.com{path}")
+        return httpx.Response(200, json=payload, request=request)
+
+    client._client.request = fake_request  # type: ignore[method-assign]  # noqa: SLF001
+
+    response = client.prepare_enable_tokens(
+        "0x3000000000000000000000000000000000000003",
+        {"sender": "0x6000000000000000000000000000000000000006", "extraTokens": []},
+    )
+
+    assert response == payload

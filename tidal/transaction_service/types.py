@@ -344,6 +344,36 @@ def _prepared_kick_preview_item(item: PreparedKick) -> dict[str, object]:
     }
 
 
+def _canonical_operation_name(value: object) -> str:
+    return str(value or "").strip().replace("-", "_")
+
+
+def _with_prepared_operation_tx_indexes(
+    prepared_operations: list[dict[str, object]],
+    tx_intents: list[TxIntent],
+) -> list[dict[str, object]]:
+    intent_indexes_by_operation: dict[str, list[int]] = {}
+    for tx_index, intent in enumerate(tx_intents):
+        operation = _canonical_operation_name(intent.operation)
+        intent_indexes_by_operation.setdefault(operation, []).append(tx_index)
+
+    prepared_counts: dict[str, int] = {}
+    output: list[dict[str, object]] = []
+    for operation in prepared_operations:
+        operation_with_index = dict(operation)
+        operation_name = _canonical_operation_name(operation.get("operation"))
+        tx_indexes = intent_indexes_by_operation.get(operation_name, [])
+        if tx_indexes:
+            if len(tx_indexes) == 1:
+                operation_with_index["txIndex"] = tx_indexes[0]
+            else:
+                prepared_index = prepared_counts.get(operation_name, 0)
+                operation_with_index["txIndex"] = tx_indexes[min(prepared_index, len(tx_indexes) - 1)]
+                prepared_counts[operation_name] = prepared_index + 1
+        output.append(operation_with_index)
+    return output
+
+
 @dataclass(slots=True)
 class KickPlan:
     """Single internal representation of a prepared kick action."""
@@ -371,10 +401,11 @@ class KickPlan:
         return "ok" if self.tx_intents else "noop"
 
     def prepared_operations_preview(self) -> list[dict[str, object]]:
-        return [
+        operations = [
             *[_prepared_resolve_preview_item(item) for item in self.resolve_operations],
             *[_prepared_kick_preview_item(item) for item in self.kick_operations],
         ]
+        return _with_prepared_operation_tx_indexes(operations, self.tx_intents)
 
     def skipped_during_prepare_payload(self) -> list[dict[str, object]]:
         return [item.to_payload() for item in self.skipped_during_prepare]

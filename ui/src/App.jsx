@@ -329,7 +329,7 @@ function normalizeKick(kick) {
   return {
     ...kick,
     chainId,
-    operationType: kick.operationType || "kick",
+    operationType: canonicalOperationType(kick.operationType || "kick"),
     sourceType: kick.sourceType || (kick.strategyAddress ? "strategy" : null),
     sourceAddress: kick.sourceAddress || kick.strategyAddress || null,
     sourceName: kick.sourceName || kick.strategyName || null,
@@ -374,14 +374,78 @@ function buildAuctionScanRoundUrl(chainId, auctionAddress, roundId) {
   return `${AUCTIONSCAN_BASE_URL}/round/${chainId}/${auctionAddress}/${roundId}`;
 }
 
+function canonicalOperationType(value) {
+  const normalized = String(value || "kick").trim().replaceAll("-", "_");
+  if (!normalized) return "kick";
+  if (normalized === "settle") return "resolve_auction";
+  if (normalized === "sweep" || normalized === "sweep_and_settle") return "sweep_auction";
+  return normalized;
+}
+
+const OPERATION_METADATA = {
+  kick: {
+    operationType: "kick",
+    rowVerb: "KICK",
+    detailLabel: "Kick",
+    confirmedLabel: "KICKED",
+    primaryTokenLabel: "Sell",
+    secondaryTokenLabel: "Buy",
+    showUsd: true,
+    showKickPricing: true,
+  },
+  enable_tokens: {
+    operationType: "enable_tokens",
+    rowVerb: "ENABLE",
+    detailLabel: "Enable Tokens",
+    confirmedLabel: "ENABLED",
+    primaryTokenLabel: "Token",
+    secondaryTokenLabel: "Auction want",
+    showUsd: false,
+    showKickPricing: false,
+  },
+  resolve_auction: {
+    operationType: "resolve_auction",
+    rowVerb: "SETTLE",
+    detailLabel: "Settle",
+    confirmedLabel: "SETTLED",
+    primaryTokenLabel: "Token",
+    secondaryTokenLabel: "Auction want",
+    showUsd: false,
+    showKickPricing: false,
+  },
+  sweep_auction: {
+    operationType: "sweep_auction",
+    rowVerb: "SWEEP",
+    detailLabel: "Sweep",
+    confirmedLabel: "SWEPT",
+    primaryTokenLabel: "Token",
+    secondaryTokenLabel: "Auction want",
+    showUsd: false,
+    showKickPricing: false,
+  },
+};
+
+function getOperationMeta(operationType) {
+  const canonical = canonicalOperationType(operationType);
+  return OPERATION_METADATA[canonical] || {
+    operationType: canonical,
+    rowVerb: canonical.replaceAll("_", " ").toUpperCase(),
+    detailLabel: canonical.replaceAll("_", " "),
+    confirmedLabel: "CONFIRMED",
+    primaryTokenLabel: "Token",
+    secondaryTokenLabel: "Auction want",
+    showUsd: false,
+    showKickPricing: false,
+  };
+}
+
 function formatKickPairLabel(kick) {
-  if (kick.operationType === "settle") {
-    return `SETTLE ${kick.tokenSymbol || "?"}`;
+  const meta = getOperationMeta(kick.operationType);
+  const tokenLabel = kick.tokenSymbol || "?";
+  if (meta.operationType === "kick") {
+    return `${meta.rowVerb} ${tokenLabel} -> ${kick.wantSymbol || "?"}`;
   }
-  if (kick.operationType === "sweep_and_settle") {
-    return `ABORT ${kick.tokenSymbol || "?"}`;
-  }
-  return `${kick.tokenSymbol || "?"} → ${kick.wantSymbol || "?"}`;
+  return `${meta.rowVerb} ${tokenLabel}`;
 }
 
 function normalizeDashboardRow(row) {
@@ -1072,14 +1136,7 @@ function formatKickStatusLabel(status, operationType) {
     return status;
   }
 
-  if (operationType === "settle") {
-    return "SETTLED";
-  }
-  if (operationType === "sweep_and_settle") {
-    return "ABORTED";
-  }
-
-  return "KICKED";
+  return getOperationMeta(operationType).confirmedLabel;
 }
 
 function StatusBadge({ status, operationType }) {
@@ -1107,6 +1164,7 @@ function formatProviderAmount(amountOut, decimals, status) {
 
 function KickDetailContent({ kick, onOpenAuctionScan }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
+  const operationMeta = getOperationMeta(kick.operationType);
   const formattedSellTokenAddress = checksumAddress(kick.tokenAddress);
   const formattedWantAddress = checksumAddress(kick.wantAddress);
   let quoteProviders = null;
@@ -1155,13 +1213,7 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
     <div className="kick-detail-grid">
       <div className="kick-detail-item">
         <div className="kick-detail-label">Action</div>
-        <div className="kick-detail-value">
-          {kick.operationType === "settle"
-            ? "Settle"
-            : kick.operationType === "sweep_and_settle"
-              ? "Sweep + Settle"
-              : "Kick"}
-        </div>
+        <div className="kick-detail-value">{operationMeta.detailLabel}</div>
       </div>
       <div className="kick-detail-item">
         <div className="kick-detail-label">Timestamp</div>
@@ -1189,7 +1241,7 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
         <div className="kick-detail-label">Tokens</div>
         <div className="kick-detail-value kick-detail-tokens">
           <span>
-            <span className="kick-detail-token-direction">Sell</span>
+            <span className="kick-detail-token-direction">{operationMeta.primaryTokenLabel}</span>
             <span className="address-copy" title={formattedSellTokenAddress}>
               <span className="mono address-value">{kick.tokenSymbol || shortenAddress(formattedSellTokenAddress)}</span>
               <CopyIconButton
@@ -1200,9 +1252,7 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
             </span>
           </span>
           <span>
-            <span className="kick-detail-token-direction">
-              {kick.operationType === "kick" ? "Buy" : "Auction want"}
-            </span>
+            <span className="kick-detail-token-direction">{operationMeta.secondaryTokenLabel}</span>
             {formattedWantAddress ? (
               <span className="address-copy" title={formattedWantAddress}>
                 <span className="mono address-value">{kick.wantSymbol || shortenAddress(formattedWantAddress)}</span>
@@ -1222,51 +1272,55 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
           {kick.normalizedBalance ? `${formatBalance(kick.normalizedBalance)} ${kick.tokenSymbol || ""}` : "—"}
         </div>
       </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Start Quote</div>
-        <div className="kick-detail-value">
-          {kick.startingPrice || "—"}
-          {kick.startPriceBufferBps != null ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)` : ""}
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Min Quote</div>
-        <div className="kick-detail-value">
-          {kick.minimumQuote || "—"}
-          {kick.minPriceBufferBps != null ? ` (-${bpsToPercent(kick.minPriceBufferBps)} buffer)` : ""}
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Min Price (scaled)</div>
-        <div className="kick-detail-value">{kick.minimumPrice || "—"}</div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Quote Amount</div>
-        <div className="kick-detail-value">{kick.quoteAmount || "—"}</div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Step Decay</div>
-        <div className="kick-detail-value">
-          {kick.stepDecayRateBps != null ? `${(Number(kick.stepDecayRateBps) / 100).toFixed(2)}%` : "—"}
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Pre-Kick Settle</div>
-        <div className="kick-detail-value">
-          {kick.settleToken
-            ? (kick.settleToken === kick.tokenAddress
-              ? (kick.tokenSymbol || shortenAddress(kick.settleToken))
-              : shortenAddress(kick.settleToken))
-            : "—"}
-        </div>
-      </div>
+      {operationMeta.showKickPricing ? (
+        <>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Start Quote</div>
+            <div className="kick-detail-value">
+              {kick.startingPrice || "—"}
+              {kick.startPriceBufferBps != null ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)` : ""}
+            </div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Min Quote</div>
+            <div className="kick-detail-value">
+              {kick.minimumQuote || "—"}
+              {kick.minPriceBufferBps != null ? ` (-${bpsToPercent(kick.minPriceBufferBps)} buffer)` : ""}
+            </div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Min Price (scaled)</div>
+            <div className="kick-detail-value">{kick.minimumPrice || "—"}</div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Quote Amount</div>
+            <div className="kick-detail-value">{kick.quoteAmount || "—"}</div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Step Decay</div>
+            <div className="kick-detail-value">
+              {kick.stepDecayRateBps != null ? `${(Number(kick.stepDecayRateBps) / 100).toFixed(2)}%` : "—"}
+            </div>
+          </div>
+          <div className="kick-detail-item">
+            <div className="kick-detail-label">Pre-Kick Settle</div>
+            <div className="kick-detail-value">
+              {kick.settleToken
+                ? (kick.settleToken === kick.tokenAddress
+                  ? (kick.tokenSymbol || shortenAddress(kick.settleToken))
+                  : shortenAddress(kick.settleToken))
+                : "—"}
+            </div>
+          </div>
+        </>
+      ) : null}
       {kick.stuckAbortReason ? (
         <div className="kick-detail-item">
-          <div className="kick-detail-label">Abort Reason</div>
+          <div className="kick-detail-label">{operationMeta.showKickPricing ? "Abort Reason" : "Reason"}</div>
           <div className="kick-detail-value">{kick.stuckAbortReason}</div>
         </div>
       ) : null}
-      {quoteProviders ? (
+      {operationMeta.showKickPricing && quoteProviders ? (
         <div className="kick-detail-item">
           <div className="kick-detail-label">Quote Providers</div>
           <div className="kick-detail-value">
@@ -1278,7 +1332,7 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
           </div>
         </div>
       ) : null}
-      {quoteSummary ? (
+      {operationMeta.showKickPricing && quoteSummary ? (
         <div className="kick-detail-item">
           <div className="kick-detail-label">Quote Summary</div>
           <div className="kick-detail-value">
@@ -1307,6 +1361,32 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
         <div className="kick-detail-item">
           <div className="kick-detail-label">{identifierLabel}</div>
           <div className="kick-detail-value">{identifierValue}</div>
+        </div>
+      ) : null}
+      {kick.txHash ? (
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Tx Hash</div>
+          <div className="kick-detail-value">
+            <EtherscanTxLink txHash={kick.txHash} />
+          </div>
+        </div>
+      ) : null}
+      {kick.blockNumber != null ? (
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Block</div>
+          <div className="kick-detail-value mono">{kick.blockNumber}</div>
+        </div>
+      ) : null}
+      {kick.gasUsed != null ? (
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Gas Used</div>
+          <div className="kick-detail-value mono">{Number(kick.gasUsed).toLocaleString()}</div>
+        </div>
+      ) : null}
+      {kick.gasPriceGwei ? (
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Gas Price</div>
+          <div className="kick-detail-value mono">{kick.gasPriceGwei} gwei</div>
         </div>
       ) : null}
       {(getAuctionScanHref(kick) || kick.auctionAddress || quoteRequestUrl) ? (
@@ -1451,6 +1531,7 @@ function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
 
 function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile, onOpenAuctionScan }) {
   const sourceLabel = truncateMiddle(kick.sourceName || kick.sourceAddress, 18);
+  const operationMeta = getOperationMeta(kick.operationType);
 
   return (
     <>
@@ -1461,11 +1542,11 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile, onOpe
         <td data-label="Status">
           <StatusBadge status={kick.status} operationType={kick.operationType} />
         </td>
-        <td className="mono" data-label="Pair">
+        <td className="mono" data-label="Action">
           {formatKickPairLabel(kick)}
         </td>
         <td className="mono align-right" data-label="USD Value">
-          {kick.operationType === "settle" ? "N/A" : kick.usdValue ? `$${formatBalance(kick.usdValue)}` : "—"}
+          {operationMeta.showUsd ? (kick.usdValue ? `$${formatBalance(kick.usdValue)}` : "—") : "N/A"}
         </td>
         <td data-label="Auction">
           {kick.auctionAddress ? (
@@ -1682,7 +1763,7 @@ function KickLogPage({
         const response = await apiFetch(`/logs/kicks?${params.toString()}`, {
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error("Unable to load kicks");
+        if (!response.ok) throw new Error("Unable to load logs");
         const payload = await response.json();
         const data = payload?.data || {};
         if (!isMounted) return;
@@ -1691,7 +1772,7 @@ function KickLogPage({
         prefetchNextPage(data);
       } catch (err) {
         if (isMounted && err.name !== "AbortError") {
-          setError(err.message || "Unable to load kicks");
+          setError(err.message || "Unable to load logs");
         }
       } finally {
         if (isMounted) setLoading(false);
@@ -1780,7 +1861,7 @@ function KickLogPage({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             disabled={focusedView}
-            placeholder="token symbol, auction address, tx hash"
+            placeholder="token symbol, operation, auction address, tx hash"
           />
         </label>
         <label className="control control-status">
@@ -1796,7 +1877,7 @@ function KickLogPage({
       {focusedView ? (
         <div className="kick-log-focusbar">
           <div className="toolbar-meta">
-            {focusedKickId ? `Showing selected kick ${focusedKickId}` : `Showing run ${focusedRunId}`}
+            {focusedKickId ? `Showing selected log ${focusedKickId}` : `Showing run ${focusedRunId}`}
           </div>
           <button type="button" className="kick-log-page-btn" onClick={clearFocusedView}>
             Show all logs
@@ -1822,7 +1903,7 @@ function KickLogPage({
             <tr>
               <th className="kick-time-col">Time</th>
               <th>Status</th>
-              <th>Pair</th>
+              <th>Action</th>
               <th className="align-right">USD Value</th>
               <th>Auction</th>
               <th>Source</th>

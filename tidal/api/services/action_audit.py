@@ -281,7 +281,7 @@ def _sync_kick_log_rows(
     error_message: str | None = None,
 ) -> None:
     operation_type = _normalize_operation_type(tx_row.get("operation"))
-    if operation_type not in {"kick", "settle", "resolve_auction", "sweep_auction"}:
+    if operation_type not in {"kick", "resolve_auction", "sweep_auction", "enable_tokens"}:
         return
 
     tx_hash = tx_row.get("tx_hash")
@@ -290,7 +290,12 @@ def _sync_kick_log_rows(
 
     repo = KickTxRepository(session)
     run_id = f"api-action:{action_row['action_id']}"
-    for operation in _prepared_log_operations(session, action_row, operation_type=operation_type):
+    for operation in _prepared_log_operations(
+        session,
+        action_row,
+        operation_type=operation_type,
+        tx_index=int(tx_row["tx_index"]),
+    ):
         existing = repo.find_by_run_and_identity(
             run_id=run_id,
             operation_type=operation_type,
@@ -343,7 +348,7 @@ def _sync_kick_log_rows(
             gas_price_gwei=gas_price_gwei,
             block_number=block_number,
             error_message=error_message,
-            )
+        )
 
 
 def _prepared_log_operations(
@@ -351,9 +356,15 @@ def _prepared_log_operations(
     action_row: dict[str, object],
     *,
     operation_type: str,
+    tx_index: int,
 ) -> list[dict[str, object]]:
-    if str(action_row.get("action_type") or "") in {"kick", "settle", "sweep"}:
-        return _prepared_preview_operations(session, action_row, operation_type=operation_type)
+    if str(action_row.get("action_type") or "") in {"kick", "settle", "sweep", "enable_tokens"}:
+        return _prepared_preview_operations(
+            session,
+            action_row,
+            operation_type=operation_type,
+            tx_index=tx_index,
+        )
     return []
 
 
@@ -362,16 +373,27 @@ def _prepared_preview_operations(
     action_row: dict[str, object],
     *,
     operation_type: str,
+    tx_index: int,
 ) -> list[dict[str, object]]:
     preview = _decode_json(action_row.get("preview_json"))
     prepared = preview.get("preparedOperations")
     if not isinstance(prepared, list):
         return []
 
+    matching_items = [
+        item
+        for item in prepared
+        if isinstance(item, dict) and _normalize_operation_type(item.get("operation")) == operation_type
+    ]
+    if any(_valid_tx_index(item.get("txIndex")) is not None for item in matching_items):
+        matching_items = [
+            item
+            for item in matching_items
+            if _valid_tx_index(item.get("txIndex")) == tx_index
+        ]
+
     items: list[dict[str, object]] = []
-    for item in prepared:
-        if not isinstance(item, dict) or _normalize_operation_type(item.get("operation")) != operation_type:
-            continue
+    for item in matching_items:
         auction_address = _optional_normalize_address(item.get("auctionAddress"))
         token_address = _optional_normalize_address(item.get("tokenAddress"))
         if auction_address is None or token_address is None:
@@ -456,7 +478,21 @@ def _normalize_operation_type(value: object) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip().replace("-", "_")
+    if normalized == "settle":
+        return "resolve_auction"
+    if normalized in {"sweep", "sweep_and_settle"}:
+        return "sweep_auction"
     return normalized or None
+
+
+def _valid_tx_index(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        tx_index = int(value)
+    except (TypeError, ValueError):
+        return None
+    return tx_index if tx_index >= 0 else None
 
 
 def _require_action_transaction(

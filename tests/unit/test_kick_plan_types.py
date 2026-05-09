@@ -139,6 +139,7 @@ def test_kick_plan_serializes_resolve_and_kick_operations() -> None:
     assert plan.to_transaction_payloads() == [resolve_intent.to_payload(), kick_intent.to_payload()]
     assert preview["preparedOperations"][0] == {
         "operation": "resolve-auction",
+        "txIndex": 0,
         "auctionAddress": "0x3333333333333333333333333333333333333333",
         "sourceAddress": "0x1111111111111111111111111111111111111111",
         "sourceName": "Test Strategy",
@@ -155,6 +156,7 @@ def test_kick_plan_serializes_resolve_and_kick_operations() -> None:
         "receiver": "0x5555555555555555555555555555555555555555",
     }
     assert preview["preparedOperations"][1]["operation"] == "kick"
+    assert preview["preparedOperations"][1]["txIndex"] == 1
     assert preview["skippedDuringPrepare"][0]["reason"] == "auction still active with live sell balance"
 
 

@@ -598,6 +598,37 @@ def _enable_tokens_transaction(
     }
 
 
+def _enable_token_prepared_operations(
+    *,
+    normalized_auction: str,
+    source: Any,
+    inspection: Any,
+    probes_by_token: dict[str, Any],
+    batches: list[_EnableTokenBatch],
+) -> list[dict[str, object]]:
+    prepared_operations: list[dict[str, object]] = []
+    for tx_index, batch in enumerate(batches):
+        for token_address in batch.tokens:
+            probe = probes_by_token[token_address]
+            prepared_operations.append(
+                {
+                    "operation": "enable-tokens",
+                    "txIndex": tx_index,
+                    "auctionAddress": normalized_auction,
+                    "sourceType": source.source_type,
+                    "sourceAddress": source.source_address,
+                    "sourceName": source.source_name,
+                    "tokenAddress": token_address,
+                    "tokenSymbol": probe.symbol,
+                    "wantAddress": inspection.want,
+                    "balanceRaw": str(probe.raw_balance) if probe.raw_balance is not None else None,
+                    "normalizedBalance": probe.normalized_balance,
+                    "reason": probe.reason,
+                }
+            )
+    return prepared_operations
+
+
 def _build_enable_token_batches(
     enabler: AuctionTokenEnabler,
     *,
@@ -749,6 +780,14 @@ async def prepare_enable_tokens_action(
         else None
     )
     execution_error_message = next((plan.error_message for plan in execution_plans if plan.error_message), None)
+    probes_by_token = {probe.token_address: probe for probe in eligible}
+    prepared_operations = _enable_token_prepared_operations(
+        normalized_auction=normalized_auction,
+        source=source,
+        inspection=inspection,
+        probes_by_token=probes_by_token,
+        batches=batches,
+    )
 
     preview_payload.update(
         {
@@ -770,6 +809,7 @@ async def prepare_enable_tokens_action(
                 }
                 for batch in batches
             ],
+            "preparedOperations": prepared_operations,
             "txnMaxGasLimit": gas_cap,
         }
     )
@@ -828,8 +868,8 @@ async def prepare_settle_action(
         token_address=normalized_token,
         force=force,
     )
-    def _prepared_operation_payload(operation) -> dict[str, object]:  # noqa: ANN001
-        return {
+    def _prepared_operation_payload(operation, tx_index: int | None = None) -> dict[str, object]:  # noqa: ANN001
+        payload = {
             "operation": "resolve-auction",
             "auctionAddress": normalized_auction,
             "tokenAddress": operation.token_address,
@@ -839,6 +879,9 @@ async def prepare_settle_action(
             "balanceRaw": str(operation.balance_raw),
             "receiver": operation.receiver,
         }
+        if tx_index is not None:
+            payload["txIndex"] = tx_index
+        return payload
 
     preview_payload = {
         "inspection": _serialize(inspection),
@@ -895,6 +938,7 @@ async def prepare_settle_action(
                 warnings.append(next_step)
             manual_sweep_required = True
             continue
+        tx_index = len(transactions)
         transactions.append(
             {
                 "operation": settlement_call.operation_type.replace("_", "-"),
@@ -908,7 +952,7 @@ async def prepare_settle_action(
             }
         )
         if matching_operation is not None:
-            prepared_operations.append(_prepared_operation_payload(matching_operation))
+            prepared_operations.append(_prepared_operation_payload(matching_operation, tx_index=tx_index))
 
     preview_decision = _serialize(decision)
     if manual_sweep_required and not transactions:
@@ -996,6 +1040,7 @@ async def prepare_sweep_action(
     prepared_operations = [
         {
             "operation": "sweep-auction",
+            "txIndex": 0,
             "auctionAddress": normalized_auction,
             "tokenAddress": normalized_token,
             "tokenSymbol": token_metadata.symbol if token_metadata is not None else None,

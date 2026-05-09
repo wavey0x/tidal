@@ -239,6 +239,7 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
     assert warnings == []
     assert data["actionId"] == "action-1"
     preview_item = data["preview"]["preparedOperations"][0]
+    assert preview_item["txIndex"] == 0
     assert preview_item["startingPriceDisplay"] == "2,750 USDC (+10.00% buffer)"
     assert preview_item["minimumQuoteDisplay"] == "2,375 USDC (-0.50% buffer)"
 
@@ -459,6 +460,22 @@ async def test_prepare_enable_tokens_action_targets_auction_kicker(monkeypatch) 
     assert data["transactions"][0]["data"] == execution_plan.data
     assert data["preview"]["executionTarget"] == execution_plan.to_address
     assert data["preview"]["previewSenderAuthorized"] is True
+    assert data["preview"]["preparedOperations"] == [
+        {
+            "operation": "enable-tokens",
+            "txIndex": 0,
+            "auctionAddress": inspection.auction_address,
+            "sourceType": "strategy",
+            "sourceAddress": source.source_address,
+            "sourceName": "Test Strategy",
+            "tokenAddress": eligible_probe.token_address,
+            "tokenSymbol": "CRV",
+            "wantAddress": inspection.want,
+            "balanceRaw": "1",
+            "normalizedBalance": "1",
+            "reason": "eligible",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -552,6 +569,8 @@ async def test_prepare_enable_tokens_action_splits_batches_over_gas_cap(monkeypa
     assert data["preview"]["executionPreview"]["gas_estimate"] == 900000
     assert data["preview"]["txnMaxGasLimit"] == 500000
     assert [batch["tokens"] for batch in data["preview"]["executionBatches"]] == [[token] for token in tokens]
+    assert [operation["txIndex"] for operation in data["preview"]["preparedOperations"]] == [0, 1, 2]
+    assert [operation["tokenAddress"] for operation in data["preview"]["preparedOperations"]] == tokens
 
 
 @pytest.mark.asyncio
@@ -636,6 +655,7 @@ async def test_prepare_enable_tokens_action_uses_client_gas_cap_override(monkeyp
     assert data["transactions"][0]["gasLimit"] == 1_000_000
     assert data["preview"]["txnMaxGasLimit"] == 1_000_000
     assert data["preview"]["executionBatches"][0]["tokens"] == tokens
+    assert [operation["txIndex"] for operation in data["preview"]["preparedOperations"]] == [0, 0, 0]
 
 
 @pytest.mark.asyncio
@@ -936,6 +956,7 @@ async def test_prepare_kick_action_threads_resolve_operations_from_planner(monke
     assert warnings == []
     assert data["transactions"][0]["data"] == "0xfeedface"
     assert data["preview"]["preparedOperations"][0]["operation"] == "resolve-auction"
+    assert data["preview"]["preparedOperations"][0]["txIndex"] == 0
     assert data["preview"]["preparedOperations"][0]["reason"] == "inactive kicked lot with stranded inventory"
 
 

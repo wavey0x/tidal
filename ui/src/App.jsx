@@ -387,7 +387,6 @@ const OPERATION_METADATA = {
     operationType: "kick",
     rowVerb: "KICK",
     detailLabel: "Kick",
-    confirmedLabel: "KICKED",
     primaryTokenLabel: "Sell",
     secondaryTokenLabel: "Buy",
     showUsd: true,
@@ -397,7 +396,6 @@ const OPERATION_METADATA = {
     operationType: "enable_tokens",
     rowVerb: "ENABLE",
     detailLabel: "Enable Tokens",
-    confirmedLabel: "ENABLED",
     primaryTokenLabel: "Token",
     secondaryTokenLabel: "Auction want",
     showUsd: false,
@@ -407,7 +405,6 @@ const OPERATION_METADATA = {
     operationType: "resolve_auction",
     rowVerb: "SETTLE",
     detailLabel: "Settle",
-    confirmedLabel: "SETTLED",
     primaryTokenLabel: "Token",
     secondaryTokenLabel: "Auction want",
     showUsd: false,
@@ -417,7 +414,6 @@ const OPERATION_METADATA = {
     operationType: "sweep_auction",
     rowVerb: "SWEEP",
     detailLabel: "Sweep",
-    confirmedLabel: "SWEPT",
     primaryTokenLabel: "Token",
     secondaryTokenLabel: "Auction want",
     showUsd: false,
@@ -431,7 +427,6 @@ function getOperationMeta(operationType) {
     operationType: canonical,
     rowVerb: canonical.replaceAll("_", " ").toUpperCase(),
     detailLabel: canonical.replaceAll("_", " "),
-    confirmedLabel: "CONFIRMED",
     primaryTokenLabel: "Token",
     secondaryTokenLabel: "Auction want",
     showUsd: false,
@@ -1131,15 +1126,11 @@ function TabBar({ activePage, onChangePage }) {
   );
 }
 
-function formatKickStatusLabel(status, operationType) {
-  if (status !== "CONFIRMED") {
-    return status;
-  }
-
-  return getOperationMeta(operationType).confirmedLabel;
+function formatKickStatusLabel(status) {
+  return String(status || "UNKNOWN").replaceAll("_", " ");
 }
 
-function StatusBadge({ status, operationType }) {
+function StatusBadge({ status }) {
   let className = "status-badge";
   if (status === "CONFIRMED") {
     className += " status-confirmed";
@@ -1149,7 +1140,7 @@ function StatusBadge({ status, operationType }) {
     className += " status-faint";
   }
 
-  return <span className={className}>{formatKickStatusLabel(status, operationType)}</span>;
+  return <span className={className}>{formatKickStatusLabel(status)}</span>;
 }
 
 function formatProviderAmount(amountOut, decimals, status) {
@@ -1539,8 +1530,8 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile, onOpe
         <td className="mono muted kick-time-cell" title={kick.createdAt} data-label="Time">
           {formatRelativeTimestamp(kick.createdAt, nowMs)}
         </td>
-        <td data-label="Status">
-          <StatusBadge status={kick.status} operationType={kick.operationType} />
+        <td data-label="Result">
+          <StatusBadge status={kick.status} />
         </td>
         <td className="mono" data-label="Action">
           {formatKickPairLabel(kick)}
@@ -1865,7 +1856,7 @@ function KickLogPage({
           />
         </label>
         <label className="control control-status">
-          <span>Status</span>
+          <span>Result</span>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} disabled={focusedView}>
             <option value="all">All</option>
             <option value="confirmed">Confirmed</option>
@@ -1902,7 +1893,7 @@ function KickLogPage({
           <thead>
             <tr>
               <th className="kick-time-col">Time</th>
-              <th>Status</th>
+              <th>Result</th>
               <th>Action</th>
               <th className="align-right">USD Value</th>
               <th>Auction</th>

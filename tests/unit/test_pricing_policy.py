@@ -237,6 +237,14 @@ def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
     )
     assert (
         config.ignore_policy.match(
+            source_address="0xe1E426113DC75480bB6838520dEFA7dF92627b9A",
+            auction_address="0x0000000000000000000000000000000000000001",
+            token_address="0x0000000000000000000000000000000000000002",
+        )
+        == "source"
+    )
+    assert (
+        config.ignore_policy.match(
             source_address="0x0000000000000000000000000000000000000001",
             auction_address="0xcCE8031B58b42e900Aa2c1F23CD00B0939D1d675",
             token_address="0x0000000000000000000000000000000000000002",

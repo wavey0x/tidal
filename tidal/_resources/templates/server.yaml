@@ -77,6 +77,7 @@ kick:
   ignore:
     - auction: "0xcCE8031B58b42e900Aa2c1F23CD00B0939D1d675"
     - source: "0xC69aA6Cd632A88424ceAf3688F295B856eB82287"
+    - source: "0xe1E426113DC75480bB6838520dEFA7dF92627b9A"
 
   cooldown_minutes: 15
 

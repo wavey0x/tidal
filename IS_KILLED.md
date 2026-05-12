@@ -1,196 +1,192 @@
-# Curve Gauge `is_killed()` Kick Guard Plan
+# Curve Gauge `is_killed()` Kick Guard
 
 ## Goal
 
-Add a live safety check before automated strategy kick transactions are prepared.
+Add one extra live safety check before a strategy kick is prepared.
 
-If a strategy's Curve gauge can be read and `is_killed()` returns `true`, Tidal should skip kicking that strategy by default. Manual CLI runs can override this with an explicit flag.
+Today automated kicks can be blocked with manual `kick.ignore` rules in
+`config/server.yaml`. This plan adds an automated guard: if a strategy farms a
+Curve gauge and that gauge's `is_killed()` call returns `true`, Tidal should not
+prepare or trigger a kick for that strategy by default.
 
-This complements the existing manual `kick.ignore` rules in `config/server.yaml`; it does not replace them.
+Manual CLI runs can bypass the guard with an explicit flag.
 
-## Default Behavior
+## Rules
 
-- Strategy candidates get a best-effort live gauge check before transaction preparation.
-- If the gauge check returns `true`, the candidate is skipped and no kick transaction is prepared.
-- If the gauge returns `false`, preparation continues normally.
-- Fee-burner candidates are not checked because they are not strategy gauge farms.
-- If the strategy gauge cannot be resolved, or the gauge does not support `is_killed()`, do not block the candidate.
-- If the check is skipped or unsupported, keep the reason visible enough for debugging but do not turn it into a hard failure.
+- Apply the guard only to `strategy` candidates.
+- Do not apply it to fee burners.
+- Check the gauge during prepare/planning, before kick calldata is built.
+- Block only when the gauge read succeeds and returns `true`.
+- Continue normally when the gauge read returns `false`.
+- Continue normally when the strategy has no readable gauge, the gauge lacks
+  `is_killed()`, or the read fails.
+- Keep the existing `kick.ignore` list. This is an extra guard, not a replacement.
 
-Keep the hard rule simple:
+The core policy is:
 
 ```text
-only a successful is_killed() == true blocks a kick
+is_killed() == true blocks; everything else does not block
 ```
 
-## Manual Override
+## CLI Override
 
-Add one CLI flag to `tidal kick run`:
+Add one `tidal kick run` flag:
 
 ```bash
 tidal kick run --allow-killed-gauge
 ```
 
-Behavior:
+Default behavior is no override.
 
-- Default is `false`.
-- Headless automation should not pass this flag.
-- When the flag is present, killed-gauge skips are bypassed for that run.
-- Include the override in the prepare request as `allowKilledGauge`.
-- Store `allowKilledGauge` in the prepared action request payload so manual overrides are audit-visible.
+When this flag is present:
 
-Do not add a server config setting for this in the first implementation. A durable config switch would make it easier to accidentally disable the guard for automation.
+- the CLI sends `allowKilledGauge: true` in each prepare request
+- the API passes it into the planner
+- the planner skips the killed-gauge guard for that request
+- the prepared action audit payload records `allowKilledGauge`
 
-## Where The Check Belongs
+Do not add a server config setting for the override. Automation should get the
+safe default unless an operator intentionally passes the CLI flag.
 
-Put the enforcement in the prepare/planning path, not only in inspect.
+## Implementation Steps
 
-Primary path:
+1. Add a minimal Curve gauge ABI.
 
-- `tidal/kick_cli.py`
-  - add `--allow-killed-gauge`
-  - pass `allowKilledGauge` in each prepare payload
-- `tidal/api/schemas/kick.py`
-  - add `allow_killed_gauge: bool = Field(default=False, alias="allowKilledGauge")`
-- `tidal/api/routes/kick.py`
-  - thread the value into `prepare_kick_action`
-- `tidal/api/services/action_prepare.py`
-  - thread the value into `KickPlanner.plan`
-  - include it in `create_prepared_action(... request_payload=...)`
-- `tidal/transaction_service/planner.py`
-  - check selected strategy candidates before preparing kick intents
-  - add killed candidates to `plan.skipped_during_prepare`
-  - continue preparing other candidates when possible
+   File: `tidal/chain/contracts/abis.py`
 
-Optional but useful after the prepare guard works:
+   ```python
+   CURVE_GAUGE_ABI = [
+       {
+           "inputs": [],
+           "name": "is_killed",
+           "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+           "stateMutability": "view",
+           "type": "function",
+       }
+   ]
+   ```
 
-- `tidal/ops/kick_inspect.py`
-  - show killed strategies as a non-ready state, e.g. `killed_gauge`
+2. Add a small strategy gauge reader.
 
-Prepare-time enforcement is the safety boundary. Inspect output is operator visibility.
+   File: `tidal/chain/contracts/yearn.py`
 
-## Gauge Reader
+   Keep it narrow:
 
-Add the smallest chain reader needed.
+   - resolve the gauge address from the strategy using the deployed strategy's
+     actual accessor
+   - call `is_killed()` on that gauge
+   - return `True`, `False`, or `None`
 
-Suggested files:
+   Use `None` for unsupported or failed reads. The planner should treat `None`
+   as "do not block".
 
-- `tidal/chain/contracts/abis.py`
-  - add a minimal gauge ABI:
+   Before coding, confirm the strategy accessor name. If the current deployed
+   strategies consistently use `gauge()`, support only `gauge()`. Add a second
+   accessor only if the deployed set proves it is needed.
 
-```python
-CURVE_GAUGE_ABI = [
-    {
-        "inputs": [],
-        "name": "is_killed",
-        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
-        "stateMutability": "view",
-        "type": "function",
-    }
-]
-```
+3. Wire the reader into `KickPlanner`.
 
-- `tidal/chain/contracts/yearn.py`
-  - add a small strategy gauge reader near the other strategy readers
-  - resolve the strategy's gauge address using the actual accessor exposed by these Yearn Curve strategies
-  - read `is_killed()` from the gauge
+   File: `tidal/transaction_service/planner.py`
 
-Implementation detail to confirm before coding:
+   Add an optional dependency such as `strategy_gauge_reader=None` to the planner
+   constructor, then in `plan(...)` add an `allow_killed_gauge: bool = False`
+   argument.
 
-- Identify the strategy gauge accessor used by the current deployed strategy contracts. If it is consistently `gauge()`, implement only that. If the deployed set uses two common names, support those two explicitly. Do not add a broad generic probing framework.
+   After shortlist selection and before auction settlement inspection:
 
-Return a small result object or tuple:
+   - collect strategy candidates
+   - if `allow_killed_gauge` is false, check those strategies
+   - move candidates with `is_killed() == True` into
+     `plan.skipped_during_prepare`
+   - use reason `strategy gauge is killed`
+   - prepare the remaining candidates normally
 
-```python
-GaugeKilledStatus(
-    strategy_address: str,
-    gauge_address: str | None,
-    is_killed: bool | None,
-    status: str,  # "ok", "no_gauge", "unsupported", "error"
-    error_message: str | None = None,
-)
-```
+   Do not move this into scanner caching or the initial SQL shortlist.
 
-The planner only blocks when:
+4. Thread the override through API prepare.
 
-```python
-status == "ok" and is_killed is True
-```
+   Files:
 
-## Planner Flow
+   - `tidal/api/schemas/kick.py`
+   - `tidal/api/routes/kick.py`
+   - `tidal/api/services/action_prepare.py`
 
-In `KickPlanner.plan(...)`:
+   Add request field:
 
-1. Build the shortlist as today.
-2. Sort selected candidates as today.
-3. If `allow_killed_gauge` is false, run killed-gauge checks for strategy candidates.
-4. Move killed candidates into `plan.skipped_during_prepare` with reason `strategy gauge is killed`.
-5. Keep non-strategy candidates and non-killed strategy candidates in the normal preparation flow.
-6. Leave auction settlement checks, live balance reads, pricing, gas estimation, and batching unchanged.
+   ```python
+   allow_killed_gauge: bool = Field(default=False, alias="allowKilledGauge")
+   ```
 
-This keeps the new guard as a narrow pre-prepare filter.
+   Pass it to `prepare_kick_action(...)`, then to `KickPlanner.plan(...)`.
+   Include `allowKilledGauge` in the prepared action request payload.
 
-## Operator Output
+5. Thread the override through the CLI.
 
-For candidate-level skips, reuse the existing skip rendering path.
+   File: `tidal/kick_cli.py`
 
-Suggested skip detail:
+   Add:
 
-```text
-strategy gauge is killed
-```
+   ```text
+   --allow-killed-gauge
+   ```
 
-If a gauge address is available, include it in the skip payload as extra detail only if it fits the existing payload shape cleanly. Do not redesign skip payloads just for this.
+   For default runs, omit `allowKilledGauge` or send `false`. When the flag is
+   present, send `allowKilledGauge: true` in prepare payloads.
 
-Headless logs should emit the same candidate skip event style already used by `tidal kick run --headless`.
+6. Keep output simple.
+
+   Reuse existing prepare skip rendering and headless skip events. The operator
+   should see:
+
+   ```text
+   strategy gauge is killed
+   ```
+
+   Do not redesign skip payloads for this feature.
 
 ## Tests
 
-Add focused tests only.
+Add focused tests only:
 
-- `tests/unit/test_kick_planner.py`
-  - killed strategy candidate is skipped and no kick transaction is prepared
-  - `allow_killed_gauge=True` bypasses the skip
-  - gauge `false` allows normal preparation
-  - fee-burner candidates are not checked
-  - unsupported/missing `is_killed()` does not block
-- `tests/unit/test_action_prepare.py`
-  - `prepare_kick_action` threads `allow_killed_gauge`
-  - prepared action audit payload includes `allowKilledGauge`
-- `tests/integration/test_api_control_plane.py`
-  - `/kick/prepare` accepts `allowKilledGauge`
-- `tests/unit/test_kick_cli.py`
-  - `tidal kick run --allow-killed-gauge` passes `allowKilledGauge: true`
-  - default run does not bypass the guard
+- planner skips a strategy candidate when the reader returns `True`
+- planner allows a strategy candidate when the reader returns `False`
+- planner allows a strategy candidate when the reader returns `None`
+- `allow_killed_gauge=True` bypasses the reader result
+- fee-burner candidates are not checked
+- API prepare accepts and forwards `allowKilledGauge`
+- prepared action audit payload includes `allowKilledGauge`
+- CLI `--allow-killed-gauge` sends `allowKilledGauge: true`
+- default CLI run does not set the override
 
-If the gauge reader is added as a separate class, test it with mocked Web3 calls instead of fork tests.
+Reader tests can use mocked Web3 calls. No fork test is required for the first
+implementation.
 
-## Documentation Updates During Implementation
+## Documentation After Implementation
 
-Update these once the behavior exists:
+Update:
 
 - `docs/cli-client-kick.md`
-  - document `--allow-killed-gauge`
 - `docs/kick-selection.md`
-  - add killed gauge to prepare-time skip reasons
 - `AUTOMATE.md`
-  - note that automation should omit `--allow-killed-gauge`
+
+Document that automation should omit `--allow-killed-gauge`.
 
 ## Non-Goals
 
 - No database migration.
-- No cached killed-gauge state in scanner tables.
-- No background polling service.
-- No server config toggle for the guard.
-- No attempt to infer killed status from token prices, auction state, or manual ignore rules.
-- No broad ABI discovery system.
+- No scanner cache for killed gauge state.
+- No background polling.
+- No server config toggle for the override.
+- No broad ABI probing framework.
+- No inspect UI changes in the first pass unless implementation work proves it is
+  trivial.
 
-## Rollout Checklist
+## Acceptance Checklist
 
-1. Confirm the live strategy gauge accessor name.
-2. Add minimal ABI and reader.
-3. Add planner-level guard.
-4. Thread `allowKilledGauge` from CLI to API to planner.
-5. Add focused tests.
-6. Update operator docs.
-7. Run the Python test subset covering planner, API prepare, and CLI.
+- A killed strategy gauge blocks kick preparation by default.
+- A non-killed, unreadable, or unsupported gauge does not block.
+- Fee-burner kicks are unchanged.
+- `tidal kick run --allow-killed-gauge` bypasses only this guard.
+- API action audit records whether the override was used.
+- Existing manual `kick.ignore` behavior is unchanged.
+- Focused planner, API, and CLI tests pass.

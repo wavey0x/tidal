@@ -171,6 +171,24 @@ def _seed_kick_log_rows(settings: Settings) -> None:
         session.commit()
 
 
+def _seed_kick_guard_status(settings: Settings) -> None:
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        session.execute(
+            models.kick_guard_status_latest.insert().values(
+                source_type="strategy",
+                source_address="0x2000000000000000000000000000000000000002",
+                auction_address="0x3000000000000000000000000000000000000003",
+                disabled=1,
+                reason="curve_gauge_killed",
+                detail="Curve gauge is killed",
+                checked_at="2026-03-28T00:02:00+00:00",
+                block_number=123,
+            )
+        )
+        session.commit()
+
+
 def _record_action_transaction(
     client: TestClient,
     headers: dict[str, str],
@@ -211,6 +229,7 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)
     _seed_dashboard_data(settings)
+    _seed_kick_guard_status(settings)
     client = TestClient(create_app(settings))
 
     response = client.get(
@@ -223,7 +242,12 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     assert payload["status"] == "ok"
     assert payload["data"]["summary"]["strategyCount"] == 1
     assert len(payload["data"]["rows"]) == 1
-    assert payload["data"]["rows"][0]["sourceName"] == "Test Strategy"
+    row = payload["data"]["rows"][0]
+    assert row["sourceName"] == "Test Strategy"
+    assert row["kickGuardDisabled"] is True
+    assert row["kickGuardReason"] == "curve_gauge_killed"
+    assert row["kickGuardDetail"] == "Curve gauge is killed"
+    assert row["kickGuardCheckedAt"] == "2026-03-28T00:02:00+00:00"
 
 
 def test_dashboard_endpoint_returns_rows_with_kick_history_without_chain_id_column(tmp_path: Path) -> None:
@@ -307,7 +331,7 @@ def test_public_run_detail_redacts_secret_like_error_messages(tmp_path: Path) ->
     assert "https://REDACTED:REDACTED@example.com/path?access_token=REDACTED" in error_message
 
 
-def test_kick_prepare_route_threads_curve_quote_override(tmp_path: Path, monkeypatch) -> None:
+def test_kick_prepare_route_threads_curve_quote_and_guard_overrides(tmp_path: Path, monkeypatch) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)
     captured: dict[str, object] = {}
@@ -317,6 +341,7 @@ def test_kick_prepare_route_threads_curve_quote_override(tmp_path: Path, monkeyp
         captured["require_curve_quote"] = kwargs.get("require_curve_quote")
         captured["txn_max_gas_limit"] = kwargs.get("txn_max_gas_limit")
         captured["min_usd_value"] = kwargs.get("min_usd_value")
+        captured["allow_killed_gauge"] = kwargs.get("allow_killed_gauge")
         return "noop", [], {"preview": {}, "transactions": []}
 
     monkeypatch.setattr("tidal.api.routes.kick.prepare_kick_action", fake_prepare_kick_action)
@@ -333,6 +358,7 @@ def test_kick_prepare_route_threads_curve_quote_override(tmp_path: Path, monkeyp
             "requireCurveQuote": False,
             "txnMaxGasLimit": 2_500_000,
             "minUsdValue": 200,
+            "allowKilledGauge": True,
         },
     )
 
@@ -340,6 +366,7 @@ def test_kick_prepare_route_threads_curve_quote_override(tmp_path: Path, monkeyp
     assert captured["require_curve_quote"] is False
     assert captured["txn_max_gas_limit"] == 2_500_000
     assert captured["min_usd_value"] == 200.0
+    assert captured["allow_killed_gauge"] is True
 
 
 def test_auction_settle_prepare_route_threads_force_override(tmp_path: Path, monkeypatch) -> None:

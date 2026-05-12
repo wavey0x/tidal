@@ -549,7 +549,20 @@ tbody tr:hover td {
   width: 120px;
   min-width: 120px;
   max-width: 120px;
+  white-space: normal;
+}
+
+.last-scan-time {
+  display: block;
   white-space: nowrap;
+}
+
+.scan-warning {
+  display: block;
+  margin-top: 2px;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1;
 }
 
 .entity-secondary {

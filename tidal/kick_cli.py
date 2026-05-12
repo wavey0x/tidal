@@ -504,6 +504,11 @@ def kick_run(
         "--require-curve/--no-require-curve",
         help="Override Curve quote strictness for prepare/send.",
     ),
+    allow_killed_gauge: bool = typer.Option(
+        False,
+        "--allow-killed-gauge",
+        help="Bypass killed Curve gauge guard for this manual run.",
+    ),
 ) -> None:
     del verbose
     effective_no_confirmation = no_confirmation or headless
@@ -520,6 +525,7 @@ def kick_run(
             limit=limit,
             min_usd_value=min_usd_value,
             require_curve=("config" if require_curve_quote is None else require_curve_quote),
+            allow_killed_gauge=allow_killed_gauge,
         )
     try:
         if headless:
@@ -593,6 +599,8 @@ def kick_run(
                     prepare_payload["txnMaxGasLimit"] = cli_ctx.settings.txn_max_gas_limit
                     if require_curve_quote is not None:
                         prepare_payload["requireCurveQuote"] = require_curve_quote
+                    if allow_killed_gauge:
+                        prepare_payload["allowKilledGauge"] = True
                     if headless:
                         prepare_response = client.prepare_kicks(prepare_payload)
                     else:

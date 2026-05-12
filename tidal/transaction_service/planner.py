@@ -129,6 +129,7 @@ class KickPlanner:
         tx_builder,
         kick_tx_repository: KickTxRepository,
         web3_client=None,
+        kick_guard_status_repository=None,
         shortlist_builder: Callable[..., object] | None = None,
         candidate_sorter: Callable[[list[KickCandidate]], list[KickCandidate]] | None = None,
         estimate_transaction_fn: Callable[..., Awaitable[tuple[int | None, int | None, str | None]]] | None = None,
@@ -143,6 +144,7 @@ class KickPlanner:
         self.tx_builder = tx_builder
         self.web3_client = web3_client or getattr(preparer, "web3_client", None) or getattr(tx_builder, "web3_client", None)
         self.kick_tx_repository = kick_tx_repository
+        self.kick_guard_status_repository = kick_guard_status_repository
         self.shortlist_builder = shortlist_builder or build_shortlist
         self.candidate_sorter = candidate_sorter or sort_candidates
         self.estimate_transaction_fn = estimate_transaction_fn
@@ -159,6 +161,7 @@ class KickPlanner:
         run_id: str,
         batch: bool = True,
         estimate_transactions: bool = True,
+        allow_killed_gauge: bool = False,
     ) -> KickPlan:
         kick_config = self.settings.kick_config
         shortlist = self.shortlist_builder(
@@ -193,6 +196,15 @@ class KickPlanner:
         )
         if not candidates_to_prepare:
             return plan
+
+        if not allow_killed_gauge:
+            candidates_to_prepare = self._filter_kick_guard_disabled_candidates(
+                candidates_to_prepare,
+                plan=plan,
+            )
+            if not candidates_to_prepare:
+                plan.ready_count = len(plan.resolve_operations) + len(plan.kick_operations)
+                return plan
 
         auction_candidates: dict[str, list[KickCandidate]] = {}
         for candidate in candidates_to_prepare:
@@ -428,6 +440,41 @@ class KickPlanner:
         plan.skipped_during_prepare.extend(individual_skips)
         plan.ready_count = len(plan.resolve_operations) + len(plan.kick_operations)
         return plan
+
+    def _filter_kick_guard_disabled_candidates(
+        self,
+        candidates: list[KickCandidate],
+        *,
+        plan: KickPlan,
+    ) -> list[KickCandidate]:
+        if self.kick_guard_status_repository is None:
+            return candidates
+
+        strategy_addresses = [
+            candidate.source_address
+            for candidate in candidates
+            if candidate.source_type == "strategy"
+        ]
+        if not strategy_addresses:
+            return candidates
+
+        statuses = self.kick_guard_status_repository.get_many("strategy", strategy_addresses)
+        allowed: list[KickCandidate] = []
+        for candidate in candidates:
+            if candidate.source_type != "strategy":
+                allowed.append(candidate)
+                continue
+            status = statuses.get(candidate.source_address)
+            if status is None or int(status.get("disabled") or 0) != 1:
+                allowed.append(candidate)
+                continue
+            plan.skipped_during_prepare.append(
+                SkippedPreparedCandidate(
+                    candidate=candidate,
+                    reason="strategy gauge is killed",
+                )
+            )
+        return allowed
 
     async def _prepare_single_kick_intent(
         self,

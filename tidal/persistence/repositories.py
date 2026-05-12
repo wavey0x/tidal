@@ -537,6 +537,43 @@ class AuctionEnabledTokenScanRepository:
         self.session.execute(stmt)
 
 
+class KickGuardStatusRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert_many(self, rows: Iterable[dict[str, object]]) -> None:
+        for row in rows:
+            stmt = insert(models.kick_guard_status_latest).values(**row)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[
+                    models.kick_guard_status_latest.c.source_type,
+                    models.kick_guard_status_latest.c.source_address,
+                ],
+                set_={
+                    "auction_address": row.get("auction_address"),
+                    "disabled": row["disabled"],
+                    "reason": row.get("reason"),
+                    "detail": row.get("detail"),
+                    "checked_at": row["checked_at"],
+                    "block_number": row.get("block_number"),
+                },
+            )
+            self.session.execute(stmt)
+
+    def get_many(self, source_type: str, source_addresses: Iterable[str]) -> dict[str, dict[str, object]]:
+        addresses = sorted(set(source_addresses))
+        if not addresses:
+            return {}
+        stmt = select(models.kick_guard_status_latest).where(
+            models.kick_guard_status_latest.c.source_type == source_type,
+            models.kick_guard_status_latest.c.source_address.in_(addresses),
+        )
+        return {
+            row["source_address"]: dict(row)
+            for row in self.session.execute(stmt).mappings()
+        }
+
+
 class ScanRunRepository:
     def __init__(self, session: Session):
         self.session = session

@@ -7,7 +7,12 @@ from tidal.auctionscan import AuctionScanService
 from tidal.chain.contracts.fee_burner import FeeBurnerReader
 from tidal.chain.contracts.erc20 import ERC20Reader
 from tidal.chain.contracts.multicall import MulticallClient
-from tidal.chain.contracts.yearn import StrategyRewardsReader, YearnCurveFactoryReader, YearnNameReader
+from tidal.chain.contracts.yearn import (
+    StrategyGaugeStatusReader,
+    StrategyRewardsReader,
+    YearnCurveFactoryReader,
+    YearnNameReader,
+)
 from tidal.chain.web3_client import Web3Client
 from tidal.config import Settings
 from tidal.constants import (
@@ -22,6 +27,7 @@ from tidal.persistence.repositories import (
     FeeBurnerTokenBalanceRepository,
     FeeBurnerTokenRepository,
     KickTxRepository,
+    KickGuardStatusRepository,
     ScanItemErrorRepository,
     ScanRunRepository,
     StrategyRepository,
@@ -106,6 +112,7 @@ def build_scanner_service(
     scan_run_repository = ScanRunRepository(session)
     scan_item_error_repository = ScanItemErrorRepository(session)
     kick_tx_repository = KickTxRepository(session)
+    kick_guard_status_repository = KickGuardStatusRepository(session)
     auction_state_reader = AuctionStateReader(
         web3_client=web3_client,
         multicall_client=multicall_client,
@@ -215,6 +222,8 @@ def build_scanner_service(
         auction_state_reader=auction_state_reader,
         auction_enabled_token_repository=auction_enabled_token_repository,
         auction_enabled_token_scan_repository=auction_enabled_token_scan_repository,
+        kick_guard_status_repository=kick_guard_status_repository,
+        strategy_gauge_status_reader=StrategyGaugeStatusReader(web3_client),
         scan_run_repository=scan_run_repository,
         scan_item_error_repository=scan_item_error_repository,
         auctionscan_service=AuctionScanService(session, settings),
@@ -251,6 +260,7 @@ def build_txn_service(
         web3_client = build_web3_client(settings)
     txn_run_repository = TxnRunRepository(session)
     kick_tx_repository = KickTxRepository(session)
+    kick_guard_status_repository = KickGuardStatusRepository(session)
 
     resolved_signer = signer
     if (
@@ -332,6 +342,7 @@ def build_txn_service(
         preparer=preparer,
         tx_builder=tx_builder,
         kick_tx_repository=kick_tx_repository,
+        kick_guard_status_repository=kick_guard_status_repository,
         web3_client=web3_client,
     )
 

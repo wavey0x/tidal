@@ -2986,8 +2986,20 @@ export default function App() {
                       onKeyDown={(event) => handleStrategyRowKeyDown(row.sourceAddress, event)}
                       tabIndex={0}
                     >
-                      <td className="mono muted last-scan-cell" title={formatTimestamp(row.scannedAt)} data-label="Last Scan">
-                        {formatRelativeTimestamp(row.scannedAt, nowMs)}
+                      <td className="mono muted last-scan-cell" data-label="Last Scan">
+                        <span className="last-scan-time" title={formatTimestamp(row.scannedAt)}>
+                          {formatRelativeTimestamp(row.scannedAt, nowMs)}
+                        </span>
+                        {row.kickGuardDisabled ? (
+                          <span
+                            className="scan-warning"
+                            title={row.kickGuardDetail || "Strategy kick disabled"}
+                            aria-label={row.kickGuardDetail || "Strategy kick disabled"}
+                            role="img"
+                          >
+                            ⚠️
+                          </span>
+                        ) : null}
                       </td>
                       <td data-label="Strategy">
                         <EntityIdentity

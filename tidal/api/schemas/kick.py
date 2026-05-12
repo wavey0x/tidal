@@ -21,5 +21,6 @@ class KickPrepareRequest(KickInspectRequest):
     sender: str | None = None
     require_curve_quote: bool | None = Field(default=None, alias="requireCurveQuote")
     txn_max_gas_limit: int | None = Field(default=None, alias="txnMaxGasLimit", ge=21_000)
+    allow_killed_gauge: bool = Field(default=False, alias="allowKilledGauge")
 
     model_config = {"populate_by_name": True}

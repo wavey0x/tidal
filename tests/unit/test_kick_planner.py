@@ -110,6 +110,20 @@ class _FakeKickDeps:
         )
 
 
+class _FakeKickGuardStatusRepository:
+    def __init__(self, statuses: dict[str, dict[str, object]]) -> None:
+        self.statuses = statuses
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def get_many(self, source_type: str, source_addresses: list[str]) -> dict[str, dict[str, object]]:
+        self.calls.append((source_type, list(source_addresses)))
+        return {
+            source_address: self.statuses[source_address]
+            for source_address in source_addresses
+            if source_address in self.statuses
+        }
+
+
 def _inspection(*previews: AuctionLotPreview) -> AuctionSettlementInspection:
     return AuctionSettlementInspection(
         auction_address="0x3333333333333333333333333333333333333333",
@@ -138,6 +152,207 @@ def _preview(
         receiver="0x5555555555555555555555555555555555555555",
         read_ok=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_kick_planner_skips_persisted_killed_gauge_strategy(monkeypatch) -> None:
+    candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
+    shortlist = SimpleNamespace(
+        selected_candidates=[candidate],
+        eligible_candidates=[candidate],
+        ignored_skips=[],
+        cooldown_skips=[],
+        deferred_same_auction_count=0,
+        limited_candidates=[],
+    )
+    deps = _FakeKickDeps(prepared_by_token={candidate.token_address: _prepared(candidate)})
+    inspect_mock = AsyncMock(return_value={})
+    monkeypatch.setattr(planner_module, "inspect_auction_settlements", inspect_mock)
+    guard_repo = _FakeKickGuardStatusRepository(
+        {
+            candidate.source_address: {
+                "disabled": 1,
+                "reason": "curve_gauge_killed",
+            }
+        }
+    )
+
+    planner = KickPlanner(
+        session=object(),
+        settings=_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_guard_status_repository=guard_repo,
+        web3_client=object(),
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)),
+    )
+
+    plan = await planner.plan(
+        source_type="strategy",
+        source_address=candidate.source_address,
+        auction_address=candidate.auction_address,
+        token_address=None,
+        limit=1,
+        sender="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        run_id="run-killed",
+        batch=True,
+    )
+
+    assert plan.tx_intents == []
+    assert plan.kick_operations == []
+    assert plan.skipped_during_prepare[0].candidate == candidate
+    assert plan.skipped_during_prepare[0].reason == "strategy gauge is killed"
+    assert guard_repo.calls == [("strategy", [candidate.source_address])]
+    inspect_mock.assert_not_called()
+    deps.prepare_kick.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_kick_planner_allow_killed_gauge_bypasses_persisted_status(monkeypatch) -> None:
+    candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
+    shortlist = SimpleNamespace(
+        selected_candidates=[candidate],
+        eligible_candidates=[candidate],
+        ignored_skips=[],
+        cooldown_skips=[],
+        deferred_same_auction_count=0,
+        limited_candidates=[],
+    )
+    deps = _FakeKickDeps(prepared_by_token={candidate.token_address: _prepared(candidate)})
+    monkeypatch.setattr(
+        planner_module,
+        "inspect_auction_settlements",
+        AsyncMock(return_value={candidate.auction_address: _inspection()}),
+    )
+    guard_repo = _FakeKickGuardStatusRepository({candidate.source_address: {"disabled": 1}})
+
+    planner = KickPlanner(
+        session=object(),
+        settings=_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_guard_status_repository=guard_repo,
+        web3_client=object(),
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)),
+    )
+
+    plan = await planner.plan(
+        source_type="strategy",
+        source_address=candidate.source_address,
+        auction_address=candidate.auction_address,
+        token_address=None,
+        limit=1,
+        sender="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        run_id="run-killed-override",
+        batch=True,
+        allow_killed_gauge=True,
+    )
+
+    assert len(plan.kick_operations) == 1
+    assert plan.skipped_during_prepare == []
+    assert guard_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_kick_planner_allows_missing_or_enabled_guard_status(monkeypatch) -> None:
+    candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
+    shortlist = SimpleNamespace(
+        selected_candidates=[candidate],
+        eligible_candidates=[candidate],
+        ignored_skips=[],
+        cooldown_skips=[],
+        deferred_same_auction_count=0,
+        limited_candidates=[],
+    )
+    deps = _FakeKickDeps(prepared_by_token={candidate.token_address: _prepared(candidate)})
+    monkeypatch.setattr(
+        planner_module,
+        "inspect_auction_settlements",
+        AsyncMock(return_value={candidate.auction_address: _inspection()}),
+    )
+    guard_repo = _FakeKickGuardStatusRepository({candidate.source_address: {"disabled": 0}})
+
+    planner = KickPlanner(
+        session=object(),
+        settings=_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_guard_status_repository=guard_repo,
+        web3_client=object(),
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)),
+    )
+
+    plan = await planner.plan(
+        source_type="strategy",
+        source_address=candidate.source_address,
+        auction_address=candidate.auction_address,
+        token_address=None,
+        limit=1,
+        sender="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        run_id="run-enabled",
+        batch=True,
+    )
+
+    assert len(plan.kick_operations) == 1
+    assert plan.skipped_during_prepare == []
+
+
+@pytest.mark.asyncio
+async def test_kick_planner_does_not_check_kick_guard_for_fee_burners(monkeypatch) -> None:
+    candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
+    candidate.source_type = "fee_burner"
+    shortlist = SimpleNamespace(
+        selected_candidates=[candidate],
+        eligible_candidates=[candidate],
+        ignored_skips=[],
+        cooldown_skips=[],
+        deferred_same_auction_count=0,
+        limited_candidates=[],
+    )
+    deps = _FakeKickDeps(prepared_by_token={candidate.token_address: _prepared(candidate)})
+    monkeypatch.setattr(
+        planner_module,
+        "inspect_auction_settlements",
+        AsyncMock(return_value={candidate.auction_address: _inspection()}),
+    )
+    guard_repo = _FakeKickGuardStatusRepository({candidate.source_address: {"disabled": 1}})
+
+    planner = KickPlanner(
+        session=object(),
+        settings=_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_guard_status_repository=guard_repo,
+        web3_client=object(),
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)),
+    )
+
+    plan = await planner.plan(
+        source_type="fee_burner",
+        source_address=candidate.source_address,
+        auction_address=candidate.auction_address,
+        token_address=None,
+        limit=1,
+        sender="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        run_id="run-fee-burner",
+        batch=True,
+    )
+
+    assert len(plan.kick_operations) == 1
+    assert plan.skipped_during_prepare == []
+    assert guard_repo.calls == []
 
 
 @pytest.mark.asyncio

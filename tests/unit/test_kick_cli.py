@@ -615,10 +615,43 @@ def test_operator_kick_run_threads_curve_quote_override(tmp_path, monkeypatch, f
     assert result.exit_code == 2
     assert client.prepare_calls
     assert all(call["txnMaxGasLimit"] == 2_500_000 for call in client.prepare_calls)
+    assert all("allowKilledGauge" not in call for call in client.prepare_calls)
     if expected is None:
         assert all("requireCurveQuote" not in call for call in client.prepare_calls)
     else:
         assert all(call["requireCurveQuote"] is expected for call in client.prepare_calls)
+
+
+def test_operator_kick_run_threads_allow_killed_gauge_override(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _BroadcastClient()
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "verify_authenticated_api_access",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+    monkeypatch.setattr(operator_kick_cli_module.typer, "confirm", lambda *args, **kwargs: False)
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--config", str(config_path), "--allow-killed-gauge"])
+
+    assert result.exit_code == 2
+    assert client.prepare_calls
+    assert all(call["allowKilledGauge"] is True for call in client.prepare_calls)
 
 
 def test_operator_kick_run_threads_min_usd_value_to_inspect_and_prepare(tmp_path, monkeypatch) -> None:

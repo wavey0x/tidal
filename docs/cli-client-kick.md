@@ -45,6 +45,12 @@ Allow prepares to continue when Curve quoting is unavailable:
 tidal kick run --no-require-curve
 ```
 
+Bypass the persisted killed-gauge guard for a one-off manual run:
+
+```bash
+tidal kick run --allow-killed-gauge
+```
+
 Lower the candidate USD threshold for a one-off run:
 
 ```bash
@@ -63,6 +69,7 @@ tidal kick run --min-usd-value 200
 - `--headless`: skip confirmation, emit compact line logs, drain the current ready set, and return success for normal no-op outcomes on `run`
 - `--verbose`: show more prepare and skip detail on `run`
 - `--require-curve` and `--no-require-curve`: tighten or relax fresh quote requirements for that run
+- `--allow-killed-gauge`: bypass a persisted killed Curve gauge status for this manual run
 - `--json`: emit machine-readable output for `inspect`
 
 Signing defaults to `TXN_KEYSTORE_PATH` and `TXN_KEYSTORE_PASSPHRASE`. Use `--keystore` and `--password-file` only when you need a one-off override. The sender address is inferred from the resolved keystore.

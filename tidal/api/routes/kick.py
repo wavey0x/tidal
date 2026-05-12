@@ -69,6 +69,7 @@ async def post_kick_prepare(
         sender=payload.sender,
         require_curve_quote=payload.require_curve_quote,
         txn_max_gas_limit=payload.txn_max_gas_limit,
+        allow_killed_gauge=payload.allow_killed_gauge,
     )
     return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}
 

@@ -39,7 +39,11 @@ SELECT
     {auction_enabled_scan_status_column} AS auction_enabled_scan_status,
     {auction_enabled_scan_scanned_at_column} AS auction_enabled_scan_scanned_at,
     {auction_enabled_scan_error_column} AS auction_enabled_scan_error,
-    {auction_token_enabled_column} AS auction_token_enabled
+    {auction_token_enabled_column} AS auction_token_enabled,
+    {kick_guard_disabled_column} AS kick_guard_disabled,
+    {kick_guard_reason_column} AS kick_guard_reason,
+    {kick_guard_detail_column} AS kick_guard_detail,
+    {kick_guard_checked_at_column} AS kick_guard_checked_at
 FROM strategy_token_balances_latest stbl
 JOIN strategies s ON s.address = stbl.strategy_address
 JOIN vaults v ON v.address = s.vault_address
@@ -47,6 +51,7 @@ JOIN tokens t ON t.address = stbl.token_address
 {strategy_want_join}
 {auction_enabled_scan_join}
 {auction_enabled_token_join}
+{kick_guard_join}
 ORDER BY s.vault_address, stbl.strategy_address, t.symbol
 """
 
@@ -80,7 +85,11 @@ SELECT
     {auction_enabled_scan_status_column} AS auction_enabled_scan_status,
     {auction_enabled_scan_scanned_at_column} AS auction_enabled_scan_scanned_at,
     {auction_enabled_scan_error_column} AS auction_enabled_scan_error,
-    {auction_token_enabled_column} AS auction_token_enabled
+    {auction_token_enabled_column} AS auction_token_enabled,
+    NULL AS kick_guard_disabled,
+    NULL AS kick_guard_reason,
+    NULL AS kick_guard_detail,
+    NULL AS kick_guard_checked_at
 FROM fee_burner_token_balances_latest fbtbl
 JOIN fee_burners fb ON fb.address = fbtbl.fee_burner_address
 JOIN tokens t ON t.address = fbtbl.token_address
@@ -192,6 +201,10 @@ class DashboardReadService:
                     "depositLimit": detail_row["deposit_limit"],
                     "active": bool(detail_row["active"]) if detail_row["active"] is not None else None,
                     "scannedAt": detail_row["scanned_at"],
+                    "kickGuardDisabled": bool(detail_row["kick_guard_disabled"]) if detail_row["kick_guard_disabled"] is not None else False,
+                    "kickGuardReason": detail_row["kick_guard_reason"],
+                    "kickGuardDetail": detail_row["kick_guard_detail"],
+                    "kickGuardCheckedAt": detail_row["kick_guard_checked_at"],
                     "balances": [],
                     "kicks": kicks_by_source.get(source_key, []),
                 }
@@ -294,6 +307,7 @@ class DashboardReadService:
             "kick_txs.token_symbol": self._has_column("kick_txs", "token_symbol"),
             "kick_txs.chain_id": self._has_column("kick_txs", "chain_id"),
             "kick_txs.auctionscan_round_id": self._has_column("kick_txs", "auctionscan_round_id"),
+            "kick_guard_status_latest": self._has_table("kick_guard_status_latest"),
             "fee_burners": self._has_table("fee_burners"),
             "fee_burners.auction_address": self._has_column("fee_burners", "auction_address"),
             "fee_burners.auction_version": self._has_column("fee_burners", "auction_version"),
@@ -338,6 +352,23 @@ class DashboardReadService:
             auction_token_enabled_column = "NULL"
             auction_enabled_token_join = ""
 
+        if features["kick_guard_status_latest"]:
+            kick_guard_disabled_column = "kgs.disabled"
+            kick_guard_reason_column = "kgs.reason"
+            kick_guard_detail_column = "kgs.detail"
+            kick_guard_checked_at_column = "kgs.checked_at"
+            kick_guard_join = (
+                "LEFT JOIN kick_guard_status_latest kgs "
+                "ON kgs.source_type = 'strategy' "
+                "AND kgs.source_address = s.address"
+            )
+        else:
+            kick_guard_disabled_column = "NULL"
+            kick_guard_reason_column = "NULL"
+            kick_guard_detail_column = "NULL"
+            kick_guard_checked_at_column = "NULL"
+            kick_guard_join = ""
+
         return STRATEGY_DETAIL_ROWS_SQL.format(
             auction_column=auction_column,
             auction_version_column=auction_version_column,
@@ -352,6 +383,11 @@ class DashboardReadService:
             auction_token_enabled_column=auction_token_enabled_column,
             auction_enabled_scan_join=auction_enabled_scan_join,
             auction_enabled_token_join=auction_enabled_token_join,
+            kick_guard_disabled_column=kick_guard_disabled_column,
+            kick_guard_reason_column=kick_guard_reason_column,
+            kick_guard_detail_column=kick_guard_detail_column,
+            kick_guard_checked_at_column=kick_guard_checked_at_column,
+            kick_guard_join=kick_guard_join,
         )
 
     def _build_fee_burner_detail_rows_sql(self, features: dict[str, bool]) -> str:

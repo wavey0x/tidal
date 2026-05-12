@@ -110,9 +110,26 @@ STRATEGY_ABI = [
         "type": "function",
     },
     {
+        "inputs": [],
+        "name": "gauge",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
         "name": "rewardsTokens",
         "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+CURVE_GAUGE_ABI = [
+    {
+        "inputs": [],
+        "name": "is_killed",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
         "stateMutability": "view",
         "type": "function",
     }

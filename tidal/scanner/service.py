@@ -77,6 +77,8 @@ class ScannerService:
         auction_state_reader,
         auction_enabled_token_repository,
         auction_enabled_token_scan_repository,
+        kick_guard_status_repository=None,
+        strategy_gauge_status_reader=None,
         scan_run_repository,
         scan_item_error_repository,
         auctionscan_service=None,
@@ -109,6 +111,8 @@ class ScannerService:
         self.auction_state_reader = auction_state_reader
         self.auction_enabled_token_repository = auction_enabled_token_repository
         self.auction_enabled_token_scan_repository = auction_enabled_token_scan_repository
+        self.kick_guard_status_repository = kick_guard_status_repository
+        self.strategy_gauge_status_reader = strategy_gauge_status_reader
         self.scan_run_repository = scan_run_repository
         self.scan_item_error_repository = scan_item_error_repository
         self.auctionscan_service = auctionscan_service
@@ -116,7 +120,7 @@ class ScannerService:
         self.alert_sink = alert_sink
 
     async def scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
-        _TOTAL_STEPS = 11
+        _TOTAL_STEPS = 12
 
         def _progress(step: int, label: str, detail: str = "") -> None:
             if on_progress is not None:
@@ -192,6 +196,11 @@ class ScannerService:
             "auctions_succeeded": 0,
             "auctions_failed": 0,
             "source": "none",
+        }
+        stage_k_stats = {
+            "sources_seen": 0,
+            "sources_disabled": 0,
+            "sources_unknown": 0,
         }
         stage_h_stats = asdict(AuctionSettlementStats())
         stage_i_stats = asdict(AuctionTokenEnablementStats())
@@ -383,6 +392,19 @@ class ScannerService:
             fee_burner_auction_rows=fee_burner_auction_rows,
             errors=errors,
         )
+
+        _progress(4, "Checking kick guards")
+        stage_k_stats = await self._refresh_kick_guard_status(strategy_auction_rows)
+        _progress(
+            4,
+            "Checking kick guards",
+            (
+                f"{stage_k_stats['sources_seen']} checked, "
+                f"{stage_k_stats['sources_disabled']} disabled, "
+                f"{stage_k_stats['sources_unknown']} unknown"
+            ),
+        )
+
         auction_addresses = sorted(
             {
                 row["auction_address"]
@@ -391,7 +413,7 @@ class ScannerService:
             }
         )
 
-        _progress(4, "Reading auction enabled tokens")
+        _progress(5, "Reading auction enabled tokens")
         stage_g_stats["auctions_seen"] = len(auction_addresses)
         stage_g_stats["source"] = "fresh"
         enabled_tokens_by_auction: dict[str, set[str]] = {}
@@ -455,9 +477,9 @@ class ScannerService:
                     )
                 stage_g_stats["auctions_failed"] = len(auction_addresses)
                 stage_g_stats["source"] = "cache"
-        _progress(4, "Reading auction enabled tokens", f"{stage_g_stats['auctions_succeeded']} scanned, {stage_g_stats['auctions_failed']} unknown")
+        _progress(5, "Reading auction enabled tokens", f"{stage_g_stats['auctions_succeeded']} scanned, {stage_g_stats['auctions_failed']} unknown")
 
-        _progress(5, "Settling stale auctions")
+        _progress(6, "Settling stale auctions")
         if self.auction_settler is not None:
             settlement_sources: list[AuctionSource] = []
             for source_type, rows in [
@@ -482,7 +504,7 @@ class ScannerService:
             stage_h_stats = asdict(settlement_result.stats)
             errors.extend(settlement_result.errors)
         _progress(
-            5,
+            6,
             "Settling stale auctions",
             (
                 f"{stage_h_stats['settlements_confirmed']} settled, "
@@ -490,11 +512,11 @@ class ScannerService:
             ),
         )
 
-        _progress(6, "Hydrating names")
+        _progress(7, "Hydrating names")
         await self._hydrate_cached_names(vault_addresses=vault_addresses, strategy_addresses=strategy_addresses, errors=errors)
-        _progress(6, "Hydrating names", "done")
+        _progress(7, "Hydrating names", "done")
 
-        _progress(7, "Resolving tokens")
+        _progress(8, "Resolving tokens")
         try:
             resolved_tokens_by_strategy, stage_b_stats = await self.reward_token_resolver.resolve_many(strategy_addresses)
         except Exception as exc:  # noqa: BLE001
@@ -599,7 +621,7 @@ class ScannerService:
                 )
 
         pairs_seen = len(pairs)
-        _progress(7, "Resolving tokens", f"{pairs_seen} pairs")
+        _progress(8, "Resolving tokens", f"{pairs_seen} pairs")
         block_number = await self.web3_client.get_block_number()
         scanned_at = utcnow()
         enable_sources_by_key: dict[tuple[str, str], AuctionEnableSource] = {}
@@ -619,7 +641,7 @@ class ScannerService:
                     factory_verified=bool(factory_verified),
                 )
 
-        _progress(8, "Reading balances")
+        _progress(9, "Reading balances")
         balance_pairs = [
             BalancePair(source_address=pair.source_address, token_address=pair.token_address)
             for pair in pairs
@@ -676,9 +698,9 @@ class ScannerService:
                 self.fee_burner_balance_repository.upsert(result)
             pairs_succeeded += 1
 
-        _progress(8, "Reading balances", f"{pairs_succeeded} succeeded, {pairs_failed} failed")
+        _progress(9, "Reading balances", f"{pairs_succeeded} succeeded, {pairs_failed} failed")
 
-        _progress(9, "Enabling auction tokens")
+        _progress(10, "Enabling auction tokens")
         if self.auction_token_enabler is not None:
             enablement_result = await self.auction_token_enabler.enable_missing_tokens(
                 run_id=run_id,
@@ -688,7 +710,7 @@ class ScannerService:
             stage_i_stats = asdict(enablement_result.stats)
             errors.extend(enablement_result.errors)
         _progress(
-            9,
+            10,
             "Enabling auction tokens",
             (
                 f"{stage_i_stats['tokens_confirmed']} enabled, "
@@ -707,18 +729,18 @@ class ScannerService:
             PriceToken(address=token_address, decimals=decimals)
             for token_address, decimals in price_token_map.items()
         ]
-        _progress(10, "Refreshing prices")
+        _progress(11, "Refreshing prices")
         stage_d_stats, price_errors = await self.token_price_refresh_service.refresh_many(
             run_id=run_id,
             tokens=price_tokens,
         )
         errors.extend(price_errors)
-        _progress(10, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens, {price_tokens_skipped} skipped")
+        _progress(11, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens, {price_tokens_skipped} skipped")
 
-        _progress(11, "Enriching AuctionScan")
+        _progress(12, "Enriching AuctionScan")
         stage_j_stats = await self._enrich_auctionscan_rounds(errors=errors)
         _progress(
-            11,
+            12,
             "Enriching AuctionScan",
             (
                 f"{stage_j_stats['kicks_checked']} checked, "
@@ -805,6 +827,9 @@ class ScannerService:
             enabled_auction_token_reads_succeeded=stage_g_stats["auctions_succeeded"],
             enabled_auction_token_reads_failed=stage_g_stats["auctions_failed"],
             enabled_auction_token_read_source=stage_g_stats["source"],
+            kick_guard_sources_seen=stage_k_stats["sources_seen"],
+            kick_guard_sources_disabled=stage_k_stats["sources_disabled"],
+            kick_guard_sources_unknown=stage_k_stats["sources_unknown"],
             settlement_auctions_seen=stage_h_stats["auctions_seen"],
             settlement_active_auctions=stage_h_stats["active_auctions"],
             settlement_eligible_tokens=stage_h_stats["eligible_tokens"],
@@ -878,6 +903,92 @@ class ScannerService:
                             token_address=want_address,
                         )
                     )
+
+    async def _refresh_kick_guard_status(self, strategy_auction_rows: list[dict[str, str | None]]) -> dict[str, int]:
+        stats = {
+            "sources_seen": 0,
+            "sources_disabled": 0,
+            "sources_unknown": 0,
+        }
+        if self.kick_guard_status_repository is None or self.strategy_gauge_status_reader is None:
+            return stats
+
+        checked_at = utcnow_iso()
+        try:
+            block_number = await self.web3_client.get_block_number()
+        except Exception:  # noqa: BLE001
+            block_number = None
+
+        rows_by_address = {
+            normalize_address(row["address"]): row
+            for row in strategy_auction_rows
+            if row.get("address")
+        }
+        mapped_strategy_addresses = [
+            address
+            for address, row in rows_by_address.items()
+            if row.get("auction_address")
+        ]
+        stats["sources_seen"] = len(mapped_strategy_addresses)
+
+        try:
+            killed_by_strategy = await self.strategy_gauge_status_reader.is_killed_many(mapped_strategy_addresses)
+        except Exception:  # noqa: BLE001
+            killed_by_strategy = {address: None for address in mapped_strategy_addresses}
+
+        status_rows: list[dict[str, object]] = []
+        for strategy_address, source_row in rows_by_address.items():
+            auction_address = (
+                normalize_address(source_row["auction_address"])
+                if source_row.get("auction_address")
+                else None
+            )
+            if auction_address is None:
+                status_rows.append(
+                    {
+                        "source_type": "strategy",
+                        "source_address": strategy_address,
+                        "auction_address": None,
+                        "disabled": 0,
+                        "reason": None,
+                        "detail": None,
+                        "checked_at": checked_at,
+                        "block_number": block_number,
+                    }
+                )
+                continue
+
+            is_killed = killed_by_strategy.get(strategy_address)
+            if is_killed is True:
+                disabled = 1
+                reason = "curve_gauge_killed"
+                detail = "Curve gauge is killed"
+                stats["sources_disabled"] += 1
+            elif is_killed is False:
+                disabled = 0
+                reason = "curve_gauge_active"
+                detail = "Curve gauge is active"
+            else:
+                disabled = 0
+                reason = "curve_gauge_unknown"
+                detail = "Curve gauge status unavailable"
+                stats["sources_unknown"] += 1
+
+            status_rows.append(
+                {
+                    "source_type": "strategy",
+                    "source_address": strategy_address,
+                    "auction_address": auction_address,
+                    "disabled": disabled,
+                    "reason": reason,
+                    "detail": detail,
+                    "checked_at": checked_at,
+                    "block_number": block_number,
+                }
+            )
+
+        self.kick_guard_status_repository.upsert_many(status_rows)
+        return stats
 
     async def _enrich_auctionscan_rounds(self, *, errors: list[ScanItemError]) -> dict[str, int]:
         stats = {

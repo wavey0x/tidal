@@ -14,6 +14,7 @@ from tidal.persistence.repositories import (
     FeeBurnerRepository,
     FeeBurnerTokenBalanceRepository,
     FeeBurnerTokenRepository,
+    KickGuardStatusRepository,
     ScanItemErrorRepository,
     ScanRunRepository,
     StrategyRepository,
@@ -229,6 +230,19 @@ class FakeAuctionTokenEnabler:
         )
 
 
+class FakeStrategyGaugeStatusReader:
+    def __init__(self, values_by_strategy: dict[str, bool | None]) -> None:
+        self.values_by_strategy = values_by_strategy
+        self.calls: list[list[str]] = []
+
+    async def is_killed_many(self, strategy_addresses: list[str]) -> dict[str, bool | None]:
+        self.calls.append(list(strategy_addresses))
+        return {
+            strategy_address: self.values_by_strategy.get(strategy_address)
+            for strategy_address in strategy_addresses
+        }
+
+
 class FakeStrategyAuctionMapper:
     def __init__(self, *, fail_refresh: bool = False, strategy_to_want: dict[str, str | None] | None = None) -> None:
         self.fail_refresh = fail_refresh
@@ -412,6 +426,87 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
         assert enabled_scan_rows[0]["auction_address"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert enabled_scan_rows[0]["status"] == "SUCCESS"
         assert enabled_scan_rows[0]["block_number"] == 20202020
+
+
+@pytest.mark.asyncio
+async def test_scanner_persists_kick_guard_status_from_strategy_gauge() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    models.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        vault_repo = VaultRepository(session)
+        strategy_repo = StrategyRepository(session)
+        fee_burner_repo = FeeBurnerRepository(session)
+        token_repo = TokenRepository(session)
+        strategy_token_repo = StrategyTokenRepository(session)
+        fee_burner_token_repo = FeeBurnerTokenRepository(session)
+        balance_repo = BalanceRepository(session)
+        fee_burner_balance_repo = FeeBurnerTokenBalanceRepository(session)
+        auction_enabled_token_repo = AuctionEnabledTokenRepository(session)
+        auction_enabled_token_scan_repo = AuctionEnabledTokenScanRepository(session)
+        kick_guard_repo = KickGuardStatusRepository(session)
+        scan_run_repo = ScanRunRepository(session)
+        scan_item_error_repo = ScanItemErrorRepository(session)
+        fake_reader = FakeStrategyGaugeStatusReader(
+            {"0x1111111111111111111111111111111111111111": True}
+        )
+
+        scanner = ScannerService(
+            session=session,
+            chain_id=1,
+            concurrency=5,
+            multicall_enabled=True,
+            web3_client=FakeWeb3Client(),
+            strategy_auction_mapper=FakeStrategyAuctionMapper(),
+            strategy_discovery_service=FakeDiscoveryService(),
+            reward_token_resolver=FakeRewardTokenResolver(),
+            token_metadata_service=TokenMetadataService(
+                chain_id=1,
+                token_repository=token_repo,
+                erc20_reader=FakeERC20Reader(),
+            ),
+            token_price_refresh_service=FakeTokenPriceRefreshService(),
+            balance_reader=FakeBalanceReader(),
+            auction_settler=None,
+            auction_token_enabler=None,
+            monitored_fee_burners=[],
+            fee_burner_token_resolver=FakeFeeBurnerTokenResolver(),
+            name_reader=FakeNameReader(),
+            vault_repository=vault_repo,
+            strategy_repository=strategy_repo,
+            fee_burner_repository=fee_burner_repo,
+            strategy_token_repository=strategy_token_repo,
+            fee_burner_token_repository=fee_burner_token_repo,
+            balance_repository=balance_repo,
+            fee_burner_balance_repository=fee_burner_balance_repo,
+            auction_state_reader=FakeAuctionStateReader(
+                values_by_auction={"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"]}
+            ),
+            auction_enabled_token_repository=auction_enabled_token_repo,
+            auction_enabled_token_scan_repository=auction_enabled_token_scan_repo,
+            kick_guard_status_repository=kick_guard_repo,
+            strategy_gauge_status_reader=fake_reader,
+            scan_run_repository=scan_run_repo,
+            scan_item_error_repository=scan_item_error_repo,
+            auctionscan_service=None,
+            auctionscan_enrichment_batch_size=0,
+            alert_sink=NullAlertSink(),
+        )
+
+        result = await scanner.scan_once()
+
+        assert result.status == "SUCCESS"
+        assert fake_reader.calls == [["0x1111111111111111111111111111111111111111"]]
+        rows = session.execute(select(models.kick_guard_status_latest)).mappings().all()
+        rows_by_source = {row["source_address"]: row for row in rows}
+        killed_row = rows_by_source["0x1111111111111111111111111111111111111111"]
+        assert killed_row["auction_address"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        assert killed_row["disabled"] == 1
+        assert killed_row["reason"] == "curve_gauge_killed"
+        assert killed_row["detail"] == "Curve gauge is killed"
+        assert killed_row["block_number"] == 20202020
+        assert rows_by_source["0x2222222222222222222222222222222222222222"]["disabled"] == 0
+        assert rows_by_source["0x2222222222222222222222222222222222222222"]["reason"] is None
 
 
 @pytest.mark.asyncio

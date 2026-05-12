@@ -5,7 +5,7 @@ from __future__ import annotations
 from eth_abi import decode as abi_decode
 from hexbytes import HexBytes
 
-from tidal.chain.contracts.abis import FACTORY_ABI, STRATEGY_ABI, VAULT_ABI
+from tidal.chain.contracts.abis import CURVE_GAUGE_ABI, FACTORY_ABI, STRATEGY_ABI, VAULT_ABI
 from tidal.chain.contracts.multicall import MulticallClient, MulticallRequest
 from tidal.chain.web3_client import Web3Client
 from tidal.constants import DEFAULT_MAX_WITHDRAWAL_QUEUE, ZERO_ADDRESS
@@ -194,6 +194,36 @@ class YearnNameReader:
         if value is None:
             return None
         return str(value).strip() or None
+
+
+class StrategyGaugeStatusReader:
+    """Reads the killed status of a strategy's Curve gauge where available."""
+
+    def __init__(self, web3_client: Web3Client):
+        self.web3_client = web3_client
+
+    async def is_killed(self, strategy_address: str) -> bool | None:
+        strategy_contract = self.web3_client.contract(strategy_address, STRATEGY_ABI)
+        try:
+            gauge_address = normalize_address(
+                await self.web3_client.call(strategy_contract.functions.gauge())
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if gauge_address == ZERO_ADDRESS:
+            return None
+
+        gauge_contract = self.web3_client.contract(gauge_address, CURVE_GAUGE_ABI)
+        try:
+            return bool(await self.web3_client.call(gauge_contract.functions.is_killed()))
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def is_killed_many(self, strategy_addresses: list[str]) -> dict[str, bool | None]:
+        output: dict[str, bool | None] = {}
+        for strategy_address in sorted({normalize_address(address) for address in strategy_addresses}):
+            output[strategy_address] = await self.is_killed(strategy_address)
+        return output
 
 
 class StrategyRewardsReader:

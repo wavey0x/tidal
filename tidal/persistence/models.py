@@ -155,6 +155,20 @@ auction_enabled_token_scans = Table(
     Column("error_message", Text, nullable=True),
 )
 
+kick_guard_status_latest = Table(
+    "kick_guard_status_latest",
+    metadata,
+    Column("source_type", String, nullable=False),
+    Column("source_address", String, nullable=False),
+    Column("auction_address", String, nullable=True),
+    Column("disabled", Integer, nullable=False, server_default="0"),
+    Column("reason", String, nullable=True),
+    Column("detail", Text, nullable=True),
+    Column("checked_at", String, nullable=False),
+    Column("block_number", Integer, nullable=True),
+    PrimaryKeyConstraint("source_type", "source_address"),
+)
+
 scan_runs = Table(
     "scan_runs",
     metadata,
@@ -286,6 +300,7 @@ api_action_transactions = Table(
 Index("ix_strategy_token_balances_strategy_scanned", strategy_token_balances_latest.c.strategy_address, strategy_token_balances_latest.c.scanned_at)
 Index("ix_fee_burner_token_balances_scanned", fee_burner_token_balances_latest.c.fee_burner_address, fee_burner_token_balances_latest.c.scanned_at)
 Index("ix_auction_enabled_tokens_latest_active", auction_enabled_tokens_latest.c.auction_address, auction_enabled_tokens_latest.c.active)
+Index("ix_kick_guard_status_disabled", kick_guard_status_latest.c.disabled, kick_guard_status_latest.c.source_type)
 Index("ix_scan_item_errors_run_id", scan_item_errors.c.run_id)
 Index("ix_scan_item_errors_source_identity", scan_item_errors.c.source_address, scan_item_errors.c.token_address, scan_item_errors.c.stage, scan_item_errors.c.error_code)
 Index("ix_scan_item_errors_identity", scan_item_errors.c.strategy_address, scan_item_errors.c.token_address, scan_item_errors.c.stage, scan_item_errors.c.error_code)

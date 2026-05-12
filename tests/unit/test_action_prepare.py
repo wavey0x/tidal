@@ -215,7 +215,13 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         )
 
     monkeypatch.setattr("tidal.api.services.action_prepare.build_txn_service", fake_build_txn_service)
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-1")
+
+    def fake_create_prepared_action(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args
+        captured["request_payload"] = kwargs["request_payload"]
+        return "action-1"
+
+    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", fake_create_prepared_action)
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
@@ -230,11 +236,13 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         min_usd_value=200,
         require_curve_quote=False,
         txn_max_gas_limit=2_500_000,
+        allow_killed_gauge=True,
     )
 
     assert captured["require_curve_quote"] is False
     assert captured["txn_max_gas_limit"] == 2_500_000
     assert captured["txn_usd_threshold"] == 200.0
+    assert captured["request_payload"]["allowKilledGauge"] is True
     assert status == "ok"
     assert warnings == []
     assert data["actionId"] == "action-1"

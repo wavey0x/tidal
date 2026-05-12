@@ -21,6 +21,7 @@ The shortlist is built from cached scanner data in SQLite:
 - auction mappings
 - want token addresses
 - enabled-token cache per auction
+- kick guard status from scanner checks, including killed Curve gauges
 
 The shortlist currently includes both:
 
@@ -125,14 +126,20 @@ Cooldown is controlled by:
 
 Once a candidate is selected for preparation, Tidal does the expensive work only for that exact candidate:
 
-1. read the live source balance
-2. apply token-specific USD kick cap if configured
-3. skip if the live value falls below threshold
-4. fetch a live quote for the exact sell amount
-5. derive start price and minimum price from the live quote
-6. estimate gas and show confirmation
+1. skip strategy candidates with a persisted disabled kick guard status
+2. read the live source balance
+3. apply token-specific USD kick cap if configured
+4. skip if the live value falls below threshold
+5. fetch a live quote for the exact sell amount
+6. derive start price and minimum price from the live quote
+7. estimate gas and show confirmation
 
 This keeps CLI client latency proportional to the candidate being acted on, not to the whole shortlist.
+
+The scanner refreshes strategy kick guard status during normal runs. For Curve-style strategies,
+it reads the strategy gauge and then the gauge `is_killed()` flag. A killed gauge is persisted as
+disabled and causes prepare to skip that strategy with `strategy gauge is killed`. Manual
+operator runs can bypass only this guard with `tidal kick run --allow-killed-gauge`.
 
 ## CLI Client Flow Versus Daemon Flow
 
@@ -153,6 +160,7 @@ A candidate that looked ready during shortlist time may still be skipped later b
 - token sizing cap pushes it below threshold
 - quote API fails
 - Curve quote is missing while strict mode is enabled
+- scanner marked the strategy kick guard disabled, such as a killed Curve gauge
 - auction state changed
 - the lot should be settled instead of kicked
 

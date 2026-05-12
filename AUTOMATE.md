@@ -8,6 +8,7 @@ Policy:
 
 - Strategy sources require a usable Curve quote.
 - Fee-burner sources may run without a Curve quote.
+- Strategy sources use the scanner's persisted kick guard status; killed Curve gauges are skipped.
 - Minimum sell-side liquidity is `$250`.
 
 ## Server Config
@@ -71,6 +72,9 @@ ExecStart=/home/wavey/tidal/venv/bin/tidal kick run --headless --source-type str
 ExecStart=/home/wavey/tidal/venv/bin/tidal kick run --headless --source-type fee-burner --no-require-curve
 TimeoutStartSec=12min
 ```
+
+Do not include `--allow-killed-gauge` in automation. That flag is only for a deliberate manual
+override after reviewing the warning in the UI.
 
 If the API is not local, remove `tidal-api.service` from `After=`.
 

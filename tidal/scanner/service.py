@@ -378,6 +378,11 @@ class ScannerService:
 
         strategy_auction_rows = self.strategy_repository.auction_details_for_addresses(strategy_addresses)
         fee_burner_auction_rows = self.fee_burner_repository.auction_details_for_addresses(fee_burner_addresses)
+        await self._hydrate_auction_want_metadata(
+            strategy_auction_rows=strategy_auction_rows,
+            fee_burner_auction_rows=fee_burner_auction_rows,
+            errors=errors,
+        )
         auction_addresses = sorted(
             {
                 row["auction_address"]
@@ -837,6 +842,42 @@ class ScannerService:
             pairs_succeeded=pairs_succeeded,
             pairs_failed=pairs_failed,
         )
+
+    async def _hydrate_auction_want_metadata(
+        self,
+        *,
+        strategy_auction_rows: list[dict[str, str | None]],
+        fee_burner_auction_rows: list[dict[str, str | None]],
+        errors: list[ScanItemError],
+    ) -> None:
+        seen: set[str] = set()
+        for source_type, rows in [
+            ("strategy", strategy_auction_rows),
+            ("fee_burner", fee_burner_auction_rows),
+        ]:
+            for row in rows:
+                if not row["want_address"]:
+                    continue
+                want_address = normalize_address(row["want_address"])
+                if want_address in seen:
+                    continue
+                seen.add(want_address)
+                try:
+                    await self.token_metadata_service.get_or_fetch(
+                        want_address,
+                        is_core_reward=(want_address in CORE_REWARD_TOKENS),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(
+                        ScanItemError(
+                            stage="METADATA",
+                            error_code="want_token_metadata_failed",
+                            error_message=str(exc),
+                            source_type=source_type,
+                            source_address=row["address"],
+                            token_address=want_address,
+                        )
+                    )
 
     async def _enrich_auctionscan_rounds(self, *, errors: list[ScanItemError]) -> dict[str, int]:
         stats = {

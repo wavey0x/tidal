@@ -16,7 +16,7 @@ class TokenMetadataService:
         self.token_repository = token_repository
         self.erc20_reader = erc20_reader
 
-    async def get_or_fetch(self, token_address: str, *, is_core_reward: bool) -> TokenMetadata:
+    async def get_or_fetch(self, token_address: str, *, is_core_reward: bool = False) -> TokenMetadata:
         token_address = normalize_address(token_address)
         existing = self.token_repository.get(token_address)
         if existing is not None:

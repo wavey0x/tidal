@@ -15,6 +15,7 @@ from tidal.auction_settlement import (
 )
 from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.chain.web3_client import Web3Client
+from tidal.constants import CORE_REWARD_TOKENS
 from tidal.persistence.repositories import KickTxRepository
 from tidal.time import utcnow_iso
 from tidal.transaction_service.kick_shared import (
@@ -211,14 +212,20 @@ class AuctionSettlementService:
 
     async def _hydrate_symbols(self, candidate: ResolveCandidate) -> None:
         try:
-            token_metadata = await self.token_metadata_service.get_or_fetch(candidate.token_address)
+            token_metadata = await self.token_metadata_service.get_or_fetch(
+                candidate.token_address,
+                is_core_reward=(candidate.token_address in CORE_REWARD_TOKENS),
+            )
             candidate.token_symbol = token_metadata.symbol
         except Exception:  # noqa: BLE001
             candidate.token_symbol = None
 
         if candidate.source.want_address:
             try:
-                want_metadata = await self.token_metadata_service.get_or_fetch(candidate.source.want_address)
+                want_metadata = await self.token_metadata_service.get_or_fetch(
+                    candidate.source.want_address,
+                    is_core_reward=(candidate.source.want_address in CORE_REWARD_TOKENS),
+                )
                 candidate.want_symbol = want_metadata.symbol
             except Exception:  # noqa: BLE001
                 candidate.want_symbol = None
@@ -405,4 +412,3 @@ class AuctionSettlementService:
         if tx_hash is not None:
             row["tx_hash"] = tx_hash
         return self.kick_tx_repository.insert(row)
-

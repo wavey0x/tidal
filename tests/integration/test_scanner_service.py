@@ -230,8 +230,9 @@ class FakeAuctionTokenEnabler:
 
 
 class FakeStrategyAuctionMapper:
-    def __init__(self, *, fail_refresh: bool = False) -> None:
+    def __init__(self, *, fail_refresh: bool = False, strategy_to_want: dict[str, str | None] | None = None) -> None:
         self.fail_refresh = fail_refresh
+        self.strategy_to_want = strategy_to_want or {}
         self.refresh_calls = 0
         self.cached_mapping = {
             "0x1111111111111111111111111111111111111111": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -251,7 +252,7 @@ class FakeStrategyAuctionMapper:
         mapped_count = sum(1 for strategy in strategy_set if self.cached_mapping.get(strategy))
         return AuctionMappingRefreshResult(
             strategy_to_auction={strategy: self.cached_mapping.get(strategy) for strategy in strategy_set},
-            strategy_to_want={strategy: None for strategy in strategy_set},
+            strategy_to_want={strategy: self.strategy_to_want.get(strategy) for strategy in strategy_set},
             strategy_to_auction_version={strategy: self.cached_versions.get(strategy) for strategy in strategy_set},
             auction_count=4,
             valid_auction_count=2,
@@ -308,7 +309,11 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
         )
         fake_name_reader = FakeNameReader()
         fake_token_price_refresh_service = FakeTokenPriceRefreshService()
-        fake_strategy_auction_mapper = FakeStrategyAuctionMapper()
+        fake_strategy_auction_mapper = FakeStrategyAuctionMapper(
+            strategy_to_want={
+                "0x1111111111111111111111111111111111111111": "0x4000000000000000000000000000000000000004",
+            },
+        )
 
         scanner = ScannerService(
             session=session,
@@ -354,8 +359,9 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
         assert result_second.status == "SUCCESS"
 
         tokens_rows = session.execute(select(models.tokens)).mappings().all()
-        assert len(tokens_rows) == 3
+        assert len(tokens_rows) == 4
         token_addresses = {row["address"] for row in tokens_rows}
+        assert "0x4000000000000000000000000000000000000004" in token_addresses
         assert "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" in token_addresses
 
         balance_rows = session.execute(select(models.strategy_token_balances_latest)).mappings().all()
@@ -365,7 +371,7 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
         assert all(row["token_address"] == row["token_address"].lower() for row in balance_rows)
 
         # Shared token metadata should only be fetched once per unique token.
-        assert fake_erc20.decimals_calls == 3
+        assert fake_erc20.decimals_calls == 4
         # Price refresh runs once per scan and dedupes token addresses.
         assert fake_token_price_refresh_service.calls == 2
         assert len(fake_token_price_refresh_service.last_tokens) == 3

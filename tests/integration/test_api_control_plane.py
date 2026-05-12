@@ -1337,3 +1337,39 @@ def test_kick_logs_endpoint_supports_pagination_and_search(tmp_path: Path) -> No
     exact_payload = exact_kick.json()["data"]
     assert exact_payload["total"] == 1
     assert exact_payload["kicks"][0]["id"] == kick_id
+
+
+def test_kick_logs_endpoint_falls_back_to_cached_token_symbols(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    _seed_dashboard_data(settings)
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        session.execute(
+            models.kick_txs.insert().values(
+                run_id="run-fallback",
+                operation_type="kick",
+                source_type="strategy",
+                source_address="0x2000000000000000000000000000000000000002",
+                strategy_address="0x2000000000000000000000000000000000000002",
+                token_address="0x5000000000000000000000000000000000000005",
+                auction_address="0x3000000000000000000000000000000000000003",
+                token_symbol=None,
+                want_address="0x4000000000000000000000000000000000000004",
+                want_symbol=None,
+                status="CONFIRMED",
+                tx_hash="0xfallback",
+                created_at="2026-03-28T00:04:00+00:00",
+            )
+        )
+        session.commit()
+
+    client = TestClient(create_app(settings))
+    headers = {"Authorization": f"Bearer {_TEST_API_KEY}"}
+    response = client.get("/api/v1/tidal/logs/kicks?q=0xfallback", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["total"] == 1
+    assert payload["kicks"][0]["tokenSymbol"] == "CRV"
+    assert payload["kicks"][0]["wantSymbol"] == "USDC"

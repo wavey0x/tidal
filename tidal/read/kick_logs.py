@@ -82,8 +82,8 @@ class KickLogReadService:
 
         features = self._get_schema_features()
         operation_type_expr, source_type_expr, resolved_source_address_expr = self._build_kick_source_expressions(features)
-        token_symbol_expr = "COALESCE(k.token_symbol, '')" if features["kick_txs.token_symbol"] else "''"
-        want_symbol_expr = "COALESCE(k.want_symbol, '')" if features["kick_txs.want_symbol"] else "''"
+        token_symbol_expr = "COALESCE(NULLIF(k.token_symbol, ''), '')" if features["kick_txs.token_symbol"] else "''"
+        want_symbol_expr = "COALESCE(NULLIF(k.want_symbol, ''), '')" if features["kick_txs.want_symbol"] else "''"
         search_operation_type_expr = "COALESCE(k.operation_type, 'kick')" if features["kick_txs.operation_type"] else "'kick'"
         clauses: list[str] = []
         params: dict[str, object] = {"limit": limit, "offset": offset}
@@ -331,7 +331,11 @@ class KickLogReadService:
 
     def _build_kicks_detail_sql(self, features: dict[str, bool], *, where_clause: str) -> str:
         operation_type_expr, source_type_expr, source_address_expr = self._build_kick_source_expressions(features)
-        kick_token_symbol_column = "COALESCE(k.token_symbol, t.symbol)" if features["kick_txs.token_symbol"] else "t.symbol"
+        kick_token_symbol_column = (
+            "COALESCE(NULLIF(k.token_symbol, ''), t.symbol)"
+            if features["kick_txs.token_symbol"]
+            else "t.symbol"
+        )
         kick_auctionscan_round_id_column = "k.auctionscan_round_id" if features["kick_txs.auctionscan_round_id"] else "NULL"
         kick_auctionscan_last_checked_at_column = (
             "k.auctionscan_last_checked_at" if features["kick_txs.auctionscan_last_checked_at"] else "NULL"
@@ -342,7 +346,11 @@ class KickLogReadService:
         kick_step_decay_rate_bps_column = "k.step_decay_rate_bps" if features["kick_txs.step_decay_rate_bps"] else "NULL"
         kick_settle_token_column = "k.settle_token" if features["kick_txs.settle_token"] else "NULL"
         kick_stuck_abort_reason_column = "k.stuck_abort_reason" if features["kick_txs.stuck_abort_reason"] else "NULL"
-        kick_want_symbol_column = "COALESCE(k.want_symbol, wt.symbol)" if features["kick_txs.want_symbol"] else "wt.symbol"
+        kick_want_symbol_column = (
+            "COALESCE(NULLIF(k.want_symbol, ''), wt.symbol)"
+            if features["kick_txs.want_symbol"]
+            else "wt.symbol"
+        )
         kick_minimum_quote_column = "k.minimum_quote" if features["kick_txs.minimum_quote"] else "NULL"
 
         if features["fee_burners"]:

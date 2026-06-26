@@ -7,7 +7,6 @@
 chain_id: 1
 auction_kicker_address: "0x354eD194390C431250b639Ab5cbA178D587612Fd"
 txn_usd_threshold: 250
-txn_max_base_fee_gwei: 0.5
 txn_max_priority_fee_gwei: 2
 txn_max_gas_limit: 500000
 txn_start_price_buffer_bps: 1000

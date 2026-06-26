@@ -20,6 +20,8 @@ def _clear_runtime_env(monkeypatch) -> None:
         "PREPARED_ACTION_MAX_AGE_SECONDS",
         "TXN_DATA_FRESHNESS_LIMIT_SECONDS",
         "TXN_MAX_DATA_AGE_SECONDS",
+        "TXN_BASE_FEE_CAP_GWEI",
+        "TXN_MAX_BASE_FEE_GWEI",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -46,6 +48,7 @@ def test_load_client_settings_defaults_to_tidal_home_paths(tmp_path, monkeypatch
     assert settings.resolved_db_path == app_home / "server" / "tidal.db"
     assert settings.resolved_txn_keystore_path == cli_home / "keys" / "ops.json"
     assert settings.prepared_action_max_age_seconds == 300
+    assert settings.txn_base_fee_cap_gwei == 5.0
     assert settings.rpc_url == "https://example-rpc.invalid"
 
 
@@ -150,6 +153,62 @@ kick:
     assert settings.txn_data_freshness_limit_seconds == 1234
 
 
+def test_load_client_settings_reads_base_fee_cap_from_config(tmp_path, monkeypatch) -> None:
+    home_root = tmp_path / "home"
+    app_home = home_root / ".tidal"
+    cli_home = app_home / "cli"
+    cli_home.mkdir(parents=True)
+    (cli_home / "config.yaml").write_text(
+        "txn_base_fee_cap_gwei: 8\n",
+        encoding="utf-8",
+    )
+
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(home_root))
+
+    settings = load_client_settings()
+
+    assert settings.txn_base_fee_cap_gwei == 8.0
+
+
+def test_load_client_settings_ignores_removed_base_fee_cap_names(tmp_path, monkeypatch) -> None:
+    home_root = tmp_path / "home"
+    app_home = home_root / ".tidal"
+    cli_home = app_home / "cli"
+    cli_home.mkdir(parents=True)
+    (cli_home / "config.yaml").write_text(
+        "txn_max_base_fee_gwei: 99\n",
+        encoding="utf-8",
+    )
+    (cli_home / ".env").write_text("TXN_MAX_BASE_FEE_GWEI=88\n", encoding="utf-8")
+
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(home_root))
+
+    settings = load_client_settings()
+
+    assert settings.txn_base_fee_cap_gwei == 5.0
+
+
+def test_load_client_settings_env_overrides_base_fee_cap(tmp_path, monkeypatch) -> None:
+    home_root = tmp_path / "home"
+    app_home = home_root / ".tidal"
+    cli_home = app_home / "cli"
+    cli_home.mkdir(parents=True)
+    (cli_home / "config.yaml").write_text(
+        "txn_base_fee_cap_gwei: 8\n",
+        encoding="utf-8",
+    )
+    (cli_home / ".env").write_text("TXN_BASE_FEE_CAP_GWEI=7\n", encoding="utf-8")
+
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(home_root))
+
+    settings = load_client_settings()
+
+    assert settings.txn_base_fee_cap_gwei == 7.0
+
+
 def test_load_server_settings_uses_project_config_and_embedded_kick(tmp_path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
     config_dir = project_root / "config"
@@ -195,6 +254,7 @@ kick:
     assert settings.auctionscan_enrichment_batch_size == 10
     assert settings.multicall_auction_batch_calls == 100
     assert settings.txn_usd_threshold == 250.0
+    assert settings.txn_base_fee_cap_gwei == 5.0
     assert settings.kick_config.pricing_policy.default_profile_name == "volatile"
 
 

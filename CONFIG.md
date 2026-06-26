@@ -98,7 +98,7 @@ Some settings may still belong in tracked config, but should be nested under `ki
 
 - `auction_kicker_address`
 - `txn_usd_threshold`
-- `txn_max_base_fee_gwei`
+- `txn_base_fee_cap_gwei`
 - `txn_max_priority_fee_gwei`
 - `txn_max_gas_limit`
 - `txn_start_price_buffer_bps`

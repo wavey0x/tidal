@@ -11,7 +11,6 @@ tidal_api_request_timeout_seconds: 30
 chain_id: 1
 prepared_action_max_age_seconds: 300
 txn_usd_threshold: 250
-txn_max_base_fee_gwei: 0.5
 txn_max_priority_fee_gwei: 2
 txn_max_gas_limit: 500000
 txn_start_price_buffer_bps: 1000

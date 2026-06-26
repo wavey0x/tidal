@@ -162,12 +162,14 @@ Current defaults from `tidal/config.py` include:
 - `rpc_timeout_seconds = 10`
 - `price_timeout_seconds = 10`
 - `txn_usd_threshold = 250`
-- `txn_max_base_fee_gwei = 0.5`
+- `txn_base_fee_cap_gwei = 5`
 - `txn_max_priority_fee_gwei = 2`
 - `txn_quote_spot_warning_threshold_pct = 2`
 - `prepared_action_max_age_seconds = 300`
 - `cooldown_minutes = 60` in `config/server.yaml`
 - `tidal_api_request_timeout_seconds = 30`
+
+`txn_base_fee_cap_gwei` defaults to 5 gwei in code. Add it to YAML or set `TXN_BASE_FEE_CAP_GWEI` only when intentionally overriding that cap.
 
 Scan auto-settle and token auto-enable are not config settings.
 Enable them per invocation with `tidal-server scan run --auto-settle --auto-enable-tokens --no-confirmation`.

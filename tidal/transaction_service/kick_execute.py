@@ -37,7 +37,7 @@ class KickExecutor:
         kick_tx_repository,
         tx_builder,
         preparer=None,
-        max_base_fee_gwei: float,
+        base_fee_cap_gwei: float,
         max_priority_fee_gwei: int,
         skip_base_fee_check: bool = False,
         max_gas_limit: int,
@@ -51,7 +51,7 @@ class KickExecutor:
         self.kick_tx_repository = kick_tx_repository
         self.tx_builder = tx_builder
         self.preparer = preparer
-        self.max_base_fee_gwei = max_base_fee_gwei
+        self.base_fee_cap_gwei = base_fee_cap_gwei
         self.max_priority_fee_gwei = max_priority_fee_gwei
         self.skip_base_fee_check = skip_base_fee_check
         self.max_gas_limit = max_gas_limit
@@ -326,13 +326,13 @@ class KickExecutor:
                 error_message=f"base fee check failed: {exc}",
             )
 
-        if not self.skip_base_fee_check and base_fee_gwei > self.max_base_fee_gwei:
+        if not self.skip_base_fee_check and base_fee_gwei > self.base_fee_cap_gwei:
             return self._fail_batch(
                 run_id,
                 prepared_kicks,
                 now_iso,
                 status=KickStatus.ERROR,
-                error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds limit {self.max_base_fee_gwei}",
+                error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds cap {self.base_fee_cap_gwei}",
             )
 
         tx_params = {
@@ -366,6 +366,7 @@ class KickExecutor:
             )
 
         priority_fee_wei = await resolve_priority_fee_wei(self.web3_client, self.max_priority_fee_gwei)
+        fee_base_gwei = base_fee_gwei if self.skip_base_fee_check else self.base_fee_cap_gwei
 
         if self.confirm_fn is not None:
             kick_summaries = []
@@ -421,7 +422,7 @@ class KickExecutor:
                 "gas_limit": gas_limit,
                 "base_fee_gwei": base_fee_gwei,
                 "priority_fee_gwei": priority_fee_wei / 1e9,
-                "max_fee_per_gas_gwei": max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei,
+                "max_fee_per_gas_gwei": fee_base_gwei + (priority_fee_wei / 1e9),
                 "gas_cost_eth": gas_estimate * base_fee_gwei / 1e9,
                 "quote_spot_warning_threshold_pct": float(self.quote_spot_warning_threshold_pct),
             }
@@ -451,7 +452,7 @@ class KickExecutor:
                 return results
 
         nonce = await self.web3_client.get_transaction_count(signer.address)
-        max_fee_wei = int((max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei) * 10**9)
+        max_fee_wei = int(fee_base_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
             "to": kicker_address,
             "data": tx_data,
@@ -631,14 +632,14 @@ class KickExecutor:
                 **op_kwargs,
             )
 
-        if not self.skip_base_fee_check and base_fee_gwei > self.max_base_fee_gwei:
+        if not self.skip_base_fee_check and base_fee_gwei > self.base_fee_cap_gwei:
             return self._fail(
                 run_id,
                 prepared_operation.candidate,
                 now_iso,
                 operation_type="resolve_auction",
                 status=KickStatus.ERROR,
-                error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds limit {self.max_base_fee_gwei}",
+                error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds cap {self.base_fee_cap_gwei}",
                 **op_kwargs,
             )
 
@@ -677,8 +678,9 @@ class KickExecutor:
 
         gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
         priority_fee_wei = await resolve_priority_fee_wei(self.web3_client, self.max_priority_fee_gwei)
+        fee_base_gwei = base_fee_gwei if self.skip_base_fee_check else self.base_fee_cap_gwei
         nonce = await self.web3_client.get_transaction_count(signer.address)
-        max_fee_wei = int((max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei) * 10**9)
+        max_fee_wei = int(fee_base_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
             "to": intent.to,
             "data": intent.data,

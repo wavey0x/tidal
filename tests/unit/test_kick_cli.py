@@ -690,6 +690,235 @@ def test_operator_kick_run_threads_min_usd_value_to_inspect_and_prepare(tmp_path
     assert all(call["minUsdValue"] == 200.0 for call in client.prepare_calls)
 
 
+def test_operator_kick_run_help_shows_max_base_fee_flag(tmp_path) -> None:
+    config_path = _write_config(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--help", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "--max-base-fee-g" in result.output
+    assert "Skip sending a" in result.output
+
+
+def test_operator_kick_run_rejects_negative_max_base_fee(tmp_path) -> None:
+    config_path = _write_config(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        operator_app,
+        ["kick", "run", "--max-base-fee-gwei", "-1", "--config", str(config_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "max-base-fee-gwei" in result.output
+
+
+def test_operator_kick_run_threads_base_fee_cap_to_execute(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _BroadcastClient()
+    execute_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+
+    def fake_execute_prepared_action_sync(**kwargs):  # noqa: ANN003
+        execute_calls.append(kwargs)
+        return [_broadcast_record(transactions=kwargs["transactions"], sender=kwargs["sender"], tx_hash="0x" + "1" * 64)]
+
+    monkeypatch.setattr(
+        operator_kick_cli_module,
+        "execute_prepared_action_sync",
+        fake_execute_prepared_action_sync,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        operator_app,
+        ["kick", "run", "--no-confirmation", "--max-base-fee-gwei", "3", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 0
+    assert execute_calls[0]["base_fee_cap_gwei"] == 3.0
+
+
+def test_operator_kick_run_uses_default_base_fee_cap(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _BroadcastClient()
+    execute_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+
+    def fake_execute_prepared_action_sync(**kwargs):  # noqa: ANN003
+        execute_calls.append(kwargs)
+        return [_broadcast_record(transactions=kwargs["transactions"], sender=kwargs["sender"], tx_hash="0x" + "1" * 64)]
+
+    monkeypatch.setattr(
+        operator_kick_cli_module,
+        "execute_prepared_action_sync",
+        fake_execute_prepared_action_sync,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--no-confirmation", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert execute_calls[0]["base_fee_cap_gwei"] == 5.0
+
+
+def test_operator_kick_run_config_base_fee_cap_overrides_default(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path, extra="txn_base_fee_cap_gwei: 8\n")
+    client = _BroadcastClient()
+    execute_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+
+    def fake_execute_prepared_action_sync(**kwargs):  # noqa: ANN003
+        execute_calls.append(kwargs)
+        return [_broadcast_record(transactions=kwargs["transactions"], sender=kwargs["sender"], tx_hash="0x" + "1" * 64)]
+
+    monkeypatch.setattr(
+        operator_kick_cli_module,
+        "execute_prepared_action_sync",
+        fake_execute_prepared_action_sync,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--no-confirmation", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert execute_calls[0]["base_fee_cap_gwei"] == 8.0
+
+
+def test_operator_kick_run_skips_interactive_candidate_above_base_fee_cap(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _BroadcastClient(
+        [
+            _ready_entry(
+                token_address="0x3333333333333333333333333333333333333333",
+                source_address="0x1111111111111111111111111111111111111111",
+                auction_address="0x2222222222222222222222222222222222222222",
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+    monkeypatch.setattr(operator_kick_cli_module.typer, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        operator_kick_cli_module,
+        "execute_prepared_action_sync",
+        lambda **kwargs: (_ for _ in ()).throw(
+            operator_kick_cli_module.BaseFeeCapSkip(
+                "Base fee 6.00 gwei exceeds cap 5.00; skipped.",
+                base_fee_gwei=6.0,
+                base_fee_cap_gwei=5.0,
+            )
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--config", str(config_path)])
+
+    assert result.exit_code == 2
+    assert "Base fee 6.00 gwei exceeds cap 5.00; skipped." in result.output
+    assert "All prepared kick transactions were skipped." in result.output
+    assert "Confirmed" not in result.output
+
+
+def test_operator_kick_run_headless_candidate_above_base_fee_cap_exits_success(tmp_path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    client = _BroadcastClient(
+        [
+            _ready_entry(
+                token_address="0x3333333333333333333333333333333333333333",
+                source_address="0x1111111111111111111111111111111111111111",
+                auction_address="0x2222222222222222222222222222222222222222",
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "control_plane_client",
+        lambda self, auth=True: client,
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module.CLIContext,
+        "resolve_execution",
+        lambda self, **kwargs: SimpleNamespace(
+            signer=SimpleNamespace(),
+            sender="0x9999999999999999999999999999999999999999",
+        ),
+    )
+    monkeypatch.setattr(
+        operator_kick_cli_module,
+        "execute_prepared_action_sync",
+        lambda **kwargs: (_ for _ in ()).throw(
+            operator_kick_cli_module.BaseFeeCapSkip(
+                "Base fee 6.00 gwei exceeds cap 5.00; skipped.",
+                base_fee_gwei=6.0,
+                base_fee_cap_gwei=5.0,
+            )
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(operator_app, ["kick", "run", "--headless", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "kick.candidate.skip" in result.output
+    assert "reason='Base fee 6.00 gwei exceeds cap 5.00; skipped.'" in result.output
+    assert "kick.run.complete status=noop reason=prepared_skipped" in result.output
+    assert "skipped=1" in result.output
+
+
 def test_operator_kick_run_continues_across_distinct_auctions_in_interactive_mode(tmp_path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     client = _BroadcastClient()
@@ -750,7 +979,7 @@ def test_operator_kick_run_continues_across_distinct_auctions_in_interactive_mod
     assert "Submitting transaction..." in result.output
     assert "Confirmed" in result.output
     assert "Gas limit:   252,000" in result.output
-    assert "max 2.50 gwei" in result.output
+    assert "max 7.00 gwei" in result.output
     assert result.output.count("Confirmed") == 2
     assert "Kick transaction sent. Ending run after the first submitted candidate." not in result.output
     assert "No kick transactions were sent." not in result.output

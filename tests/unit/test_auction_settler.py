@@ -115,7 +115,7 @@ def _make_settler(session, *, web3_client):
         signer=_FakeSigner(),
         kick_tx_repository=KickTxRepository(session),
         token_metadata_service=_FakeTokenMetadataService(),
-        max_base_fee_gwei=0.5,
+        base_fee_cap_gwei=0.5,
         max_priority_fee_gwei=2,
         max_gas_limit=500000,
         chain_id=1,

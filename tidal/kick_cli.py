@@ -32,6 +32,7 @@ from tidal.cli_renderers import emit_json, render_kick_inspect, render_kick_subm
 from tidal.control_plane.client import ControlPlaneError
 from tidal.errors import ConfigurationError
 from tidal.operator_cli_support import (
+    BaseFeeCapSkip,
     execute_prepared_action_sync,
     progress_status,
     render_action_preview,
@@ -297,7 +298,7 @@ def _prepare_skips(data: dict[str, object], *, candidate: KickInspectEntry | Non
     return skips
 
 
-def _resolve_preview_fee_context(cli_ctx: CLIContext) -> dict[str, float]:
+def _resolve_preview_fee_context(cli_ctx: CLIContext, *, base_fee_cap_gwei: float) -> dict[str, float]:
     base_fee_gwei = 0.0
     max_priority = float(cli_ctx.settings.txn_max_priority_fee_gwei)
     priority_fee_gwei = max_priority
@@ -330,7 +331,7 @@ def _resolve_preview_fee_context(cli_ctx: CLIContext) -> dict[str, float]:
     return {
         "base_fee_gwei": base_fee_gwei,
         "priority_fee_gwei": priority_fee_gwei,
-        "max_fee_per_gas_gwei": max(float(cli_ctx.settings.txn_max_base_fee_gwei), base_fee_gwei) + max_priority,
+        "max_fee_per_gas_gwei": base_fee_cap_gwei + priority_fee_gwei,
     }
 
 
@@ -499,6 +500,12 @@ def kick_run(
     keystore: KeystoreOption = None,
     password_file: PasswordFileOption = None,
     verbose: VerboseOption = False,
+    max_base_fee_gwei: float | None = typer.Option(
+        None,
+        "--max-base-fee-gwei",
+        min=0,
+        help="Skip sending a prepared kick when current base fee is above this gwei cap.",
+    ),
     require_curve_quote: bool | None = typer.Option(
         None,
         "--require-curve/--no-require-curve",
@@ -513,6 +520,11 @@ def kick_run(
     del verbose
     effective_no_confirmation = no_confirmation or headless
     cli_ctx = CLIContext(config, api_base_url=api_base_url, api_key=api_key)
+    effective_base_fee_cap_gwei = (
+        float(max_base_fee_gwei)
+        if max_base_fee_gwei is not None
+        else float(cli_ctx.settings.txn_base_fee_cap_gwei)
+    )
     normalized_source_type = _normalize_source_type_filter(source_type)
     normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
@@ -524,6 +536,7 @@ def kick_run(
             auction=normalized_auction_address,
             limit=limit,
             min_usd_value=min_usd_value,
+            max_base_fee_gwei=effective_base_fee_cap_gwei,
             require_curve=("config" if require_curve_quote is None else require_curve_quote),
             allow_killed_gauge=allow_killed_gauge,
         )
@@ -667,7 +680,10 @@ def kick_run(
                     else:
                         if preview_fee_context is None:
                             with progress_status("Loading network fee preview..."):
-                                preview_fee_context = _resolve_preview_fee_context(cli_ctx)
+                                preview_fee_context = _resolve_preview_fee_context(
+                                    cli_ctx,
+                                    base_fee_cap_gwei=effective_base_fee_cap_gwei,
+                                )
                         summary = _kick_submission_summary(
                             prepared_data,
                             candidate=candidate,
@@ -676,7 +692,7 @@ def kick_run(
                                 "base_fee_gwei": 0.0,
                                 "priority_fee_gwei": float(cli_ctx.settings.txn_max_priority_fee_gwei),
                                 "max_fee_per_gas_gwei": (
-                                    max(float(cli_ctx.settings.txn_max_base_fee_gwei), 0.0)
+                                    effective_base_fee_cap_gwei
                                     + float(cli_ctx.settings.txn_max_priority_fee_gwei)
                                 ),
                             },
@@ -726,19 +742,8 @@ def kick_run(
                         continue
                     if exec_ctx.signer is None or exec_ctx.sender is None:
                         raise typer.Exit(code=1)
-                    if headless:
-                        action_records = execute_prepared_action_sync(
-                            settings=cli_ctx.settings,
-                            client=client,
-                            action_id=str(prepared_data["actionId"]),
-                            sender=exec_ctx.sender,
-                            signer=exec_ctx.signer,
-                            transactions=tx_intents,
-                        )
-                        _emit_headless_broadcast_records(action_records, candidate=candidate)
-                    else:
-                        typer.echo()
-                        with submission_progress("Submitting transaction...") as update_progress:
+                    try:
+                        if headless:
                             action_records = execute_prepared_action_sync(
                                 settings=cli_ctx.settings,
                                 client=client,
@@ -746,8 +751,37 @@ def kick_run(
                                 sender=exec_ctx.sender,
                                 signer=exec_ctx.signer,
                                 transactions=tx_intents,
-                                progress_callback=update_progress,
+                                base_fee_cap_gwei=effective_base_fee_cap_gwei,
                             )
+                            _emit_headless_broadcast_records(action_records, candidate=candidate)
+                        else:
+                            typer.echo()
+                            with submission_progress("Submitting transaction...") as update_progress:
+                                action_records = execute_prepared_action_sync(
+                                    settings=cli_ctx.settings,
+                                    client=client,
+                                    action_id=str(prepared_data["actionId"]),
+                                    sender=exec_ctx.sender,
+                                    signer=exec_ctx.signer,
+                                    transactions=tx_intents,
+                                    progress_callback=update_progress,
+                                    base_fee_cap_gwei=effective_base_fee_cap_gwei,
+                                )
+                    except BaseFeeCapSkip as exc:
+                        skipped_confirmation_count += 1
+                        reason = str(exc)
+                        if headless:
+                            _emit_headless_skip(candidate=candidate, reason=reason)
+                        else:
+                            render_skip_panel(
+                                reason=reason,
+                                token_symbol=candidate.token_symbol,
+                                want_symbol=candidate.want_symbol,
+                                source_name=candidate.source_name,
+                                source_address=candidate.source_address,
+                                auction_address=candidate.auction_address,
+                            )
+                        continue
                     if not headless and action_records:
                         render_broadcast_result(action_records)
                         broadcast_feedback_emitted = True

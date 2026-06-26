@@ -112,7 +112,7 @@ class Settings(BaseSettings):
         alias="AUCTION_KICKER_ADDRESS",
     )
     txn_usd_threshold: float = Field(default=250.0, alias="TXN_USD_THRESHOLD")
-    txn_max_base_fee_gwei: float = Field(default=0.5, alias="TXN_MAX_BASE_FEE_GWEI")
+    txn_base_fee_cap_gwei: float = Field(default=5.0, alias="TXN_BASE_FEE_CAP_GWEI")
     txn_max_priority_fee_gwei: int = Field(default=2, alias="TXN_MAX_PRIORITY_FEE_GWEI")
     txn_max_gas_limit: int = Field(default=500000, alias="TXN_MAX_GAS_LIMIT")
     txn_start_price_buffer_bps: int = Field(default=1000, alias="TXN_START_PRICE_BUFFER_BPS")

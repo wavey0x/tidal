@@ -77,7 +77,7 @@ class AuctionSettlementService:
         signer: TransactionSigner,
         kick_tx_repository: KickTxRepository,
         token_metadata_service,
-        max_base_fee_gwei: float,
+        base_fee_cap_gwei: float,
         max_priority_fee_gwei: int,
         max_gas_limit: int,
         chain_id: int,
@@ -87,7 +87,7 @@ class AuctionSettlementService:
         self.signer = signer
         self.kick_tx_repository = kick_tx_repository
         self.token_metadata_service = token_metadata_service
-        self.max_base_fee_gwei = max_base_fee_gwei
+        self.base_fee_cap_gwei = base_fee_cap_gwei
         self.max_priority_fee_gwei = max_priority_fee_gwei
         self.max_gas_limit = max_gas_limit
         self.chain_id = chain_id
@@ -185,12 +185,12 @@ class AuctionSettlementService:
             )
             return AuctionSettlementPassResult(stats=stats, errors=errors)
 
-        if base_fee_gwei > self.max_base_fee_gwei:
+        if base_fee_gwei > self.base_fee_cap_gwei:
             stats.skipped_high_base_fee = True
             logger.info(
                 "auction_settlement_skipped_high_base_fee",
                 base_fee_gwei=f"{base_fee_gwei:.2f}",
-                limit_gwei=self.max_base_fee_gwei,
+                cap_gwei=self.base_fee_cap_gwei,
                 eligible_tokens=stats.eligible_tokens,
             )
             return AuctionSettlementPassResult(stats=stats, errors=errors)
@@ -276,7 +276,7 @@ class AuctionSettlementService:
 
         gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
         nonce = await self.web3_client.get_transaction_count(self.signer.address)
-        max_fee_wei = int((max(self.max_base_fee_gwei, base_fee_gwei) + self.max_priority_fee_gwei) * 10**9)
+        max_fee_wei = int(self.base_fee_cap_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
             "to": to_checksum_address(self.settings.auction_kicker_address),
             "data": tx_data,

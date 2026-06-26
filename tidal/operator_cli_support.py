@@ -25,6 +25,21 @@ from tidal.time import utcnow_iso
 from tidal.transaction_service.types import TxIntent
 
 
+class BaseFeeCapSkip(RuntimeError):
+    """Raised when a prepared action should be skipped before broadcast."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        base_fee_gwei: float | None,
+        base_fee_cap_gwei: float,
+    ) -> None:
+        super().__init__(message)
+        self.base_fee_gwei = base_fee_gwei
+        self.base_fee_cap_gwei = base_fee_cap_gwei
+
+
 def render_action_preview(data: dict[str, Any], *, heading: str) -> None:
     render_prepared_action_summary(data, heading=heading)
 
@@ -145,6 +160,7 @@ async def broadcast_prepared_action(
     receipt_timeout_seconds: int = 120,
     outbox: ActionReportOutbox | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    base_fee_cap_gwei: float | None = None,
 ) -> list[dict[str, Any]]:  # noqa: ANN001
     if any(not isinstance(tx, TxIntent) for tx in transactions):
         raise TypeError("transactions must be TxIntent instances")
@@ -156,22 +172,33 @@ async def broadcast_prepared_action(
         pass
     web3_client = build_web3_client(settings)
     try:
-        nonce = await web3_client.get_transaction_count(sender)
         checksum_sender = to_checksum_address(sender)
 
         try:
             base_fee_wei = await web3_client.get_base_fee()
             base_fee_gwei = base_fee_wei / 1e9
-        except Exception:
+        except Exception as exc:
+            if base_fee_cap_gwei is not None:
+                raise BaseFeeCapSkip(
+                    f"Base fee check failed; skipped to avoid sending above cap {base_fee_cap_gwei:.2f} gwei.",
+                    base_fee_gwei=None,
+                    base_fee_cap_gwei=base_fee_cap_gwei,
+                ) from exc
             base_fee_gwei = 0.0
+        if base_fee_cap_gwei is not None and base_fee_gwei > base_fee_cap_gwei:
+            raise BaseFeeCapSkip(
+                f"Base fee {base_fee_gwei:.2f} gwei exceeds cap {base_fee_cap_gwei:.2f}; skipped.",
+                base_fee_gwei=base_fee_gwei,
+                base_fee_cap_gwei=base_fee_cap_gwei,
+            )
         try:
             priority_fee_wei = await web3_client.get_max_priority_fee()
         except Exception:
             priority_fee_wei = int(settings.txn_max_priority_fee_gwei * 10**9)
         priority_fee_wei = min(priority_fee_wei, int(settings.txn_max_priority_fee_gwei * 10**9))
-        max_fee_wei = int(
-            (max(settings.txn_max_base_fee_gwei, base_fee_gwei) + settings.txn_max_priority_fee_gwei) * 10**9
-        )
+        fee_base_gwei = base_fee_cap_gwei if base_fee_cap_gwei is not None else base_fee_gwei
+        max_fee_wei = int(fee_base_gwei * 10**9) + int(priority_fee_wei)
+        nonce = await web3_client.get_transaction_count(sender)
 
         results: list[dict[str, Any]] = []
         for tx_index, tx in enumerate(transactions):
@@ -305,6 +332,7 @@ def execute_prepared_action_sync(
     transactions: list[TxIntent],
     outbox: ActionReportOutbox | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    base_fee_cap_gwei: float | None = None,
 ) -> list[dict[str, Any]]:  # noqa: ANN001
     return asyncio.run(
         broadcast_prepared_action(
@@ -316,6 +344,7 @@ def execute_prepared_action_sync(
             transactions=transactions,
             outbox=outbox,
             progress_callback=progress_callback,
+            base_fee_cap_gwei=base_fee_cap_gwei,
         )
     )
 

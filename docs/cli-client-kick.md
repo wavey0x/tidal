@@ -57,6 +57,12 @@ Lower the candidate USD threshold for a one-off run:
 tidal kick run --min-usd-value 200
 ```
 
+Skip sends while mainnet base fee is above 5 gwei:
+
+```bash
+tidal kick run --max-base-fee-gwei 5
+```
+
 ## Important Flags
 
 - `--source-type`: filter to `strategy` or `fee-burner`
@@ -64,6 +70,7 @@ tidal kick run --min-usd-value 200
 - `--auction`: target one auction address
 - `--limit`: cap how many candidates are considered
 - `--min-usd-value`: override `txn_usd_threshold` for candidate selection in this inspect or run
+- `--max-base-fee-gwei`: override the send-time base-fee cap for this run
 - `--show-all`: include non-ready entries on `inspect`
 - `--no-confirmation`: skip the interactive confirmation prompt
 - `--headless`: skip confirmation, emit compact line logs, drain the current ready set, and return success for normal no-op outcomes on `run`
@@ -86,6 +93,7 @@ The client does not precompute and send a whole batch at once. Instead it repeat
 
 That keeps the final transaction payload aligned with the latest on-chain state.
 If a prepared transaction sits longer than `prepared_action_max_age_seconds`, the client skips it instead of sending stale quotes.
+If the current base fee is above `txn_base_fee_cap_gwei` or `--max-base-fee-gwei`, the client skips that candidate instead of signing or broadcasting.
 With `--headless`, the client keeps preparing and sending the current ready queue until it is cleared, skipped, or blocked. Normal no-op outcomes such as no ready candidates or prepare-time skips exit successfully for timer use.
 
 ## Review And Warning Notes

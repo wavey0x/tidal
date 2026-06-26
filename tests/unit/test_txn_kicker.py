@@ -293,7 +293,7 @@ async def test_kick_executor_execute_resolve_auction_persists_confirmed_row(sess
         signer=_FakeSigner(),
         kick_tx_repository=KickTxRepository(session),
         tx_builder=tx_builder,
-        max_base_fee_gwei=1.0,
+        base_fee_cap_gwei=1.0,
         max_priority_fee_gwei=2,
         max_gas_limit=500000,
         chain_id=1,

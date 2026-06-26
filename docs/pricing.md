@@ -25,7 +25,7 @@ Parameters:
 
 The scanner persists:
 
-- `summary.high_price` as the token USD value
+- `summary.median_price` as the token USD value
 - `token.logo_url` as the token logo when present
 
 Price refreshes are paced between request starts by `price_delay_seconds`, which
@@ -126,7 +126,7 @@ After the live token-to-token quote is computed, Tidal also requests a just-in-t
 GET /v1/price
 ```
 
-This uses the same `summary.high_price` extraction path as the scanner.
+This uses the same `summary.median_price` extraction path as the scanner.
 
 That want-token USD mark is not used to rank candidates. It exists to make the confirmation output and warning logic more informative.
 

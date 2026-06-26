@@ -16,12 +16,13 @@ def _provider(api_key: str | None = None) -> TokenPriceAggProvider:
     )
 
 
-def test_extract_price_usd_reads_summary_high_price() -> None:
+def test_extract_price_usd_reads_summary_median_price() -> None:
     provider = _provider()
     payload = {
         "summary": {
             "successful_providers": 3,
-            "high_price": "1.2345",
+            "high_price": "99",
+            "median_price": "1.2345",
         }
     }
 
@@ -29,12 +30,36 @@ def test_extract_price_usd_reads_summary_high_price() -> None:
     assert price == Decimal("1.2345")
 
 
-def test_extract_price_usd_not_found_when_high_price_missing() -> None:
+def test_extract_price_usd_uses_median_when_high_price_is_outlier() -> None:
+    provider = _provider()
+    payload = {
+        "providers": {
+            "curve": {"status": "ok", "success": True, "price": "2.8790155877118"},
+            "defillama": {"status": "ok", "success": True, "price": "0.23911544192347303"},
+            "enso": {"status": "ok", "success": True, "price": "0.23808502527153536"},
+            "lifi": {"status": "ok", "success": True, "price": "0.240137"},
+        },
+        "summary": {
+            "successful_providers": 4,
+            "high_price": "2.8790155877118",
+            "low_price": "0.23808502527153536",
+            "median_price": "0.239626220961736515",
+            "deviation_bps": 110924,
+        },
+    }
+
+    price = provider._extract_price_usd(payload)  # noqa: SLF001
+
+    assert price == Decimal("0.239626220961736515")
+
+
+def test_extract_price_usd_not_found_when_median_price_missing_for_not_found_token() -> None:
     provider = _provider()
     payload = {
         "summary": {
             "successful_providers": 0,
             "high_price": None,
+            "median_price": None,
         },
         "providers": {
             "curve": {"status": "no_route"},
@@ -47,16 +72,48 @@ def test_extract_price_usd_not_found_when_high_price_missing() -> None:
         _ = provider._extract_price_usd(payload)  # noqa: SLF001
 
 
-def test_extract_price_usd_missing_high_price_with_transient_errors() -> None:
+def test_extract_price_usd_missing_median_price_with_transient_errors() -> None:
     provider = _provider()
     payload = {
         "summary": {
             "successful_providers": 0,
             "high_price": None,
+            "median_price": None,
         },
         "providers": {
             "curve": {"status": "error"},
             "defillama": {"status": "error"},
+        },
+    }
+
+    with pytest.raises(ValueError):
+        _ = provider._extract_price_usd(payload)  # noqa: SLF001
+
+
+def test_extract_price_usd_rejects_high_price_without_median_price() -> None:
+    provider = _provider()
+    payload = {
+        "summary": {
+            "successful_providers": 1,
+            "high_price": "4.2",
+        },
+    }
+
+    with pytest.raises(ValueError, match="missing summary.median_price"):
+        _ = provider._extract_price_usd(payload)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "median_price",
+    ["not-a-number", "-1"],
+)
+def test_extract_price_usd_rejects_invalid_median_price(median_price: str) -> None:
+    provider = _provider()
+    payload = {
+        "summary": {
+            "successful_providers": 1,
+            "high_price": "4.2",
+            "median_price": median_price,
         },
     }
 
@@ -81,6 +138,7 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
             "summary": {
                 "successful_providers": 1,
                 "high_price": "4.2",
+                "median_price": "4.2",
             }
         }
 
@@ -111,6 +169,7 @@ async def test_quote_usd_sends_authorization_bearer_when_configured() -> None:
             "summary": {
                 "successful_providers": 1,
                 "high_price": "1",
+                "median_price": "1",
             }
         }
 
@@ -135,6 +194,7 @@ async def test_quote_usd_returns_logo_url_when_price_not_found() -> None:
             "summary": {
                 "successful_providers": 0,
                 "high_price": None,
+                "median_price": None,
             },
             "providers": {
                 "curve": {"status": "no_route"},
@@ -196,6 +256,7 @@ async def test_quote_usd_retries_429_after_retry_after_header(monkeypatch) -> No
             "summary": {
                 "successful_providers": 1,
                 "high_price": "1.01",
+                "median_price": "1.01",
             }
         }
 

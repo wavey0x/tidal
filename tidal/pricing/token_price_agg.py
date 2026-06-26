@@ -277,15 +277,15 @@ class TokenPriceAggProvider:
                 raise TokenPriceNotFoundError("token price not found in response")
             raise ValueError("missing summary in price response")
 
-        high_price = summary.get("high_price")
-        if high_price is None:
+        median_price = summary.get("median_price")
+        if median_price is None:
             if _looks_like_not_found_payload(payload):
-                raise TokenPriceNotFoundError("token price not found in summary.high_price")
-            raise ValueError("missing summary.high_price in price response")
+                raise TokenPriceNotFoundError("token price not found in summary.median_price")
+            raise ValueError("missing summary.median_price in price response")
 
-        price_usd = _to_decimal(high_price)
+        price_usd = _to_decimal(median_price)
         if price_usd is None:
-            raise ValueError("invalid summary.high_price in price response")
+            raise ValueError("invalid summary.median_price in price response")
         if price_usd < 0:
             raise ValueError("negative usd quote")
         return price_usd
@@ -370,8 +370,8 @@ def _looks_like_not_found_payload(payload: Any) -> bool:
         return False
 
     successful_providers = summary.get("successful_providers")
-    high_price = summary.get("high_price")
-    if successful_providers != 0 or high_price is not None:
+    median_price = summary.get("median_price")
+    if successful_providers != 0 or median_price is not None:
         return False
 
     statuses = _collect_provider_statuses(payload.get("providers"))

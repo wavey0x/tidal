@@ -19,6 +19,16 @@ class PriceToken:
     decimals: int
 
 
+@dataclass(slots=True, frozen=True)
+class _PriceRefreshResult:
+    address: str
+    status: str
+    price_usd: str | None
+    error_message: str | None
+    logo_url: str | None
+    preserve_price_usd: bool = False
+
+
 class TokenPriceRefreshService:
     """Refreshes latest token prices once per unique token per scan."""
 
@@ -71,50 +81,90 @@ class TokenPriceRefreshService:
         ]
 
         sem = asyncio.Semaphore(self.concurrency)
+        pace_lock = asyncio.Lock()
+        next_start_at = 0.0
 
-        async def _refresh_token(token: PriceToken) -> tuple[str, str, str | None, str | None, str | None]:
+        async def _wait_for_start_slot() -> None:
+            nonlocal next_start_at
+            if self.delay_seconds <= 0:
+                return
+
+            loop = asyncio.get_running_loop()
+            async with pace_lock:
+                now = loop.time()
+                wait_seconds = max(0.0, next_start_at - now)
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+                    now = loop.time()
+                next_start_at = now + self.delay_seconds
+
+        async def _refresh_token(token: PriceToken) -> _PriceRefreshResult:
             async with sem:
-                if self.delay_seconds > 0:
-                    await asyncio.sleep(self.delay_seconds)
+                await _wait_for_start_slot()
                 try:
                     quote = await self.price_provider.quote_usd(token.address, token.decimals)
                 except httpx.HTTPStatusError as exc:
                     if exc.response is not None and exc.response.status_code == 404:
-                        return token.address, "NOT_FOUND", None, str(exc), None
-                    return token.address, "FAILED", None, str(exc), None
+                        return _PriceRefreshResult(token.address, "NOT_FOUND", None, str(exc), None)
+                    return _PriceRefreshResult(
+                        token.address,
+                        "FAILED",
+                        None,
+                        str(exc),
+                        None,
+                        preserve_price_usd=_is_transient_price_error(exc),
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    return token.address, "FAILED", None, str(exc), None
+                    return _PriceRefreshResult(
+                        token.address,
+                        "FAILED",
+                        None,
+                        str(exc),
+                        None,
+                        preserve_price_usd=_is_transient_price_error(exc),
+                    )
 
                 status = "SUCCESS" if quote.price_usd is not None else "NOT_FOUND"
                 price_usd = str(quote.price_usd) if quote.price_usd is not None else None
-                return token.address, status, price_usd, None, quote.logo_url
+                return _PriceRefreshResult(token.address, status, price_usd, None, quote.logo_url)
 
         results = await asyncio.gather(*[_refresh_token(token) for token in unique_tokens])
 
-        for canonical_address, status, price_usd, error_message, logo_url in results:
+        for result in results:
+            canonical_address = result.address
             original_addresses = canonical_groups.get(canonical_address, [canonical_address])
             fetched_at = utcnow_iso()
 
             for original_address in original_addresses:
-                self.token_repository.set_latest_price(
-                    address=original_address,
-                    price_usd=price_usd,
-                    source=self.price_provider.source_name,
-                    status=status,
-                    fetched_at=fetched_at,
-                    run_id=run_id,
-                    error_message=error_message,
-                )
-                if error_message is None:
+                if result.preserve_price_usd:
+                    self.token_repository.mark_price_refresh_failed(
+                        address=original_address,
+                        source=self.price_provider.source_name,
+                        status=result.status,
+                        fetched_at=fetched_at,
+                        run_id=run_id,
+                        error_message=result.error_message,
+                    )
+                else:
+                    self.token_repository.set_latest_price(
+                        address=original_address,
+                        price_usd=result.price_usd,
+                        source=self.price_provider.source_name,
+                        status=result.status,
+                        fetched_at=fetched_at,
+                        run_id=run_id,
+                        error_message=result.error_message,
+                    )
+                if result.error_message is None:
                     self.token_repository.set_logo_url(
                         address=original_address,
-                        logo_url=logo_url,
+                        logo_url=result.logo_url,
                     )
 
-            if status == "SUCCESS":
+            if result.status == "SUCCESS":
                 stats["tokens_succeeded"] += len(original_addresses)
                 continue
-            if status == "NOT_FOUND":
+            if result.status == "NOT_FOUND":
                 stats["tokens_not_found"] += len(original_addresses)
                 continue
 
@@ -124,9 +174,19 @@ class TokenPriceRefreshService:
                     ScanItemError(
                         stage="PRICE_READ",
                         error_code="token_price_lookup_failed",
-                        error_message=error_message or "token price lookup failed",
+                        error_message=result.error_message or "token price lookup failed",
                         token_address=original_address,
                     )
                 )
 
         return stats, errors
+
+
+def _is_transient_price_error(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response is None:
+            return False
+        status_code = exc.response.status_code
+        return status_code == 429 or status_code >= 500
+
+    return isinstance(exc, (httpx.TimeoutException, httpx.TransportError, TimeoutError, ConnectionError, OSError))

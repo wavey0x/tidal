@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     price_timeout_seconds: int = Field(default=10, alias="PRICE_TIMEOUT_SECONDS")
     price_retry_attempts: int = Field(default=3, alias="PRICE_RETRY_ATTEMPTS")
     price_concurrency: int = Field(default=10, alias="PRICE_CONCURRENCY")
-    price_delay_seconds: float = Field(default=0, alias="PRICE_DELAY_SECONDS")
+    price_delay_seconds: float = Field(default=0.25, alias="PRICE_DELAY_SECONDS")
     auctionscan_base_url: str = Field(default="https://auctionscan.info", alias="AUCTIONSCAN_BASE_URL")
     auctionscan_api_base_url: str = Field(
         default="https://auctionscan.info/api",

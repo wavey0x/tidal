@@ -319,6 +319,28 @@ class TokenRepository:
             )
         )
 
+    def mark_price_refresh_failed(
+        self,
+        *,
+        address: str,
+        source: str,
+        status: str,
+        fetched_at: str,
+        run_id: str,
+        error_message: str | None,
+    ) -> None:
+        self.session.execute(
+            update(models.tokens)
+            .where(models.tokens.c.address == address)
+            .values(
+                price_source=source,
+                price_status=status,
+                price_fetched_at=fetched_at,
+                price_run_id=run_id,
+                price_error_message=error_message,
+            )
+        )
+
     def get_logo_state(self, address: str) -> TokenLogoState | None:
         stmt = (
             select(

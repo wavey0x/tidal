@@ -249,6 +249,7 @@ kick:
     assert settings.tidal_api_host == "0.0.0.0"
     assert settings.tidal_api_port == 8787
     assert settings.token_price_agg_base_url == "https://prices.wavey.info"
+    assert settings.price_delay_seconds == 0.25
     assert settings.auctionscan_base_url == "https://auctionscan.info"
     assert settings.auctionscan_api_base_url == "https://auctionscan.info/api"
     assert settings.auctionscan_enrichment_batch_size == 10

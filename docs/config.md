@@ -161,6 +161,7 @@ Current defaults from `tidal/config.py` include:
 - `multicall_auction_batch_calls = 100`
 - `rpc_timeout_seconds = 10`
 - `price_timeout_seconds = 10`
+- `price_delay_seconds = 0.25`
 - `txn_usd_threshold = 250`
 - `txn_base_fee_cap_gwei = 5`
 - `txn_max_priority_fee_gwei = 2`

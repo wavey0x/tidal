@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 import structlog
 
-from tidal.chain.retry import call_with_retries
+from tidal.chain.retry import is_retryable_error
 from tidal.normalizers import normalize_address
 
 logger = structlog.get_logger(__name__)
@@ -46,6 +49,9 @@ class TokenPriceAggProvider:
 
     source_name = "token_price_agg_usd_price"
     quote_timeout_ms = 7000
+    _rate_limit_base_delay_seconds = 1.0
+    _rate_limit_max_delay_seconds = 10.0
+    _retry_base_delay_seconds = 0.25
 
     def __init__(
         self,
@@ -102,10 +108,7 @@ class TokenPriceAggProvider:
 
         max_soft_retries = 2
         for attempt in range(max_soft_retries):
-            payload = await call_with_retries(
-                lambda: self._get_price(client, "/v1/quote", params),
-                attempts=self.retry_attempts,
-            )
+            payload = await self._get_with_retries(client, "/v1/quote", params)
             result = self._parse_quote_response(payload, request_url)
 
             if result.amount_out_raw is not None or attempt + 1 >= max_soft_retries:
@@ -184,10 +187,7 @@ class TokenPriceAggProvider:
             "use_underlying": "true",
         }
         client = await self._client()
-        payload = await call_with_retries(
-            lambda: self._get_price(client, path, params),
-            attempts=self.retry_attempts,
-        )
+        payload = await self._get_with_retries(client, path, params)
 
         logo_url = self._extract_logo_url(payload)
         try:
@@ -196,6 +196,54 @@ class TokenPriceAggProvider:
             price_usd = None
 
         return TokenPriceQuote(price_usd=price_usd, quote_amount_in_raw=1, logo_url=logo_url)
+
+    async def _get_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        params: dict[str, str | int],
+    ) -> Any:
+        attempts = max(1, self.retry_attempts)
+        last_error: BaseException | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._get_price(client, path, params)
+            except BaseException as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt >= attempts or not _is_retryable_price_error(exc):
+                    raise
+
+                delay_seconds = self._retry_delay_seconds(exc, attempt)
+                status_code = _http_status_code(exc)
+                logger.info(
+                    "price_api_retry",
+                    path=path,
+                    status_code=status_code,
+                    attempt=attempt,
+                    delay_seconds=round(delay_seconds, 3),
+                )
+                await asyncio.sleep(delay_seconds)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("unreachable price retry state")
+
+    def _retry_delay_seconds(self, exc: BaseException, attempt: int) -> float:
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            return retry_after
+
+        if _http_status_code(exc) == 429:
+            base_delay = self._rate_limit_base_delay_seconds
+            max_delay = self._rate_limit_max_delay_seconds
+        else:
+            base_delay = self._retry_base_delay_seconds
+            max_delay = 2.0
+
+        backoff = min(base_delay * (2 ** (attempt - 1)), max_delay)
+        jitter = random.uniform(0, base_delay)
+        return min(backoff + jitter, max_delay)
 
     async def _get_price(
         self,
@@ -256,6 +304,45 @@ class TokenPriceAggProvider:
 
         normalized = str(logo_url).strip()
         return normalized or None
+
+
+def _is_retryable_price_error(exc: BaseException) -> bool:
+    status_code = _http_status_code(exc)
+    if status_code is not None:
+        return status_code == 429 or status_code >= 500
+    return is_retryable_error(exc)
+
+
+def _http_status_code(exc: BaseException) -> int | None:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return exc.response.status_code
+    return None
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    if not isinstance(exc, httpx.HTTPStatusError) or exc.response is None:
+        return None
+
+    raw_value = exc.response.headers.get("Retry-After")
+    if raw_value is None:
+        return None
+
+    stripped = raw_value.strip()
+    if not stripped:
+        return None
+
+    try:
+        seconds = float(stripped)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(stripped)
+        except (TypeError, ValueError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+
+    return min(max(0.0, seconds), TokenPriceAggProvider._rate_limit_max_delay_seconds)
 
 
 def _looks_like_not_found_payload(payload: Any) -> bool:

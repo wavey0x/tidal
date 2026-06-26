@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import httpx
 import pytest
 
 from tidal.pricing.token_price_agg import QuoteResult, TokenPriceAggProvider, TokenPriceNotFoundError
@@ -164,6 +165,81 @@ async def test_quote_usd_treats_http_404_payload_without_summary_as_not_found() 
 
     assert quote.price_usd is None
     assert quote.logo_url is None
+
+
+@pytest.mark.asyncio
+async def test_quote_usd_retries_429_after_retry_after_header(monkeypatch) -> None:
+    provider = TokenPriceAggProvider(
+        chain_id=1,
+        base_url="https://prices.wavey.info",
+        api_key=None,
+        timeout_seconds=10,
+        retry_attempts=2,
+    )
+    calls = 0
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    async def fake_get_price(client, path, params):  # noqa: ANN001
+        del client
+        del path
+        del params
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            request = httpx.Request("GET", "https://prices.wavey.info/v1/price")
+            response = httpx.Response(429, request=request, headers={"Retry-After": "3"})
+            raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+        return {
+            "summary": {
+                "successful_providers": 1,
+                "high_price": "1.01",
+            }
+        }
+
+    monkeypatch.setattr("tidal.pricing.token_price_agg.asyncio.sleep", fake_sleep)
+    provider._get_price = fake_get_price  # type: ignore[method-assign]  # noqa: SLF001
+
+    quote = await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
+
+    assert quote.price_usd == Decimal("1.01")
+    assert calls == 2
+    assert sleep_calls == [3.0]
+
+
+@pytest.mark.asyncio
+async def test_quote_usd_does_not_retry_http_404(monkeypatch) -> None:
+    provider = TokenPriceAggProvider(
+        chain_id=1,
+        base_url="https://prices.wavey.info",
+        api_key=None,
+        timeout_seconds=10,
+        retry_attempts=3,
+    )
+    calls = 0
+
+    async def fail_sleep(seconds: float) -> None:
+        raise AssertionError(f"unexpected sleep {seconds}")
+
+    async def fake_get_price(client, path, params):  # noqa: ANN001
+        del client
+        del path
+        del params
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("GET", "https://prices.wavey.info/v1/price")
+        response = httpx.Response(404, request=request)
+        raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+    monkeypatch.setattr("tidal.pricing.token_price_agg.asyncio.sleep", fail_sleep)
+    provider._get_price = fake_get_price  # type: ignore[method-assign]  # noqa: SLF001
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
+
+    assert calls == 1
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,12 @@ The scanner persists:
 - `summary.high_price` as the token USD value
 - `token.logo_url` as the token logo when present
 
+Price refreshes are paced between request starts by `price_delay_seconds`, which
+defaults to `0.25` seconds. If a refresh hits a transient provider/API failure
+such as HTTP 429, timeout, or HTTP 5xx, Tidal records the failure status and
+error message but keeps the last known numeric `price_usd`. True not-found
+responses still clear the cached price.
+
 This cached USD price is used for:
 
 - dashboard USD values

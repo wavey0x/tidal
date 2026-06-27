@@ -155,6 +155,59 @@ deposits, LP withdrawals, swaps, mints, redeems, or zaps. Put route-specific
 details in `metadata`, not permanent top-level fields. The same action model
 should work later for other protocols.
 
+## Route Discovery And Configuration
+
+There are three separate layers:
+
+1. Route capability in code: a route adapter, such as `CurveLpDepositAdapter`,
+   knows how to detect, preview, and encode one class of action.
+2. Optional route metadata in server config: only needed when the adapter cannot
+   safely infer pool details from chain reads.
+3. On-chain route registration: the operator owner registers the matching route
+   module once, such as `curve.lp.deposit.v1 -> CurveLpDepositRoute`.
+
+Do not require manual config for every strategy or every reward token.
+
+For the normal BOLD-USDC shape, Tidal should discover the route automatically if
+all of these are true:
+
+- the candidate source's `want` is the LP token or pool
+- that address exposes the supported `coins(i)` and preview methods
+- the reward token is one of the coins
+- the supported deposit function can mint LP tokens directly to the source
+
+In that case no per-strategy config entry is needed. The scanner already knows
+the source, reward token, balance, auction, and want. The route adapter can read
+`want`, probe `coins(i)`, see that BOLD or USDC is an LP coin, preview the
+single-sided deposit, and prepare `lp_deposit`.
+
+Use config only for non-obvious shapes:
+
+- LP token differs from the deposit pool
+- deposits must go through a zap
+- a pool has multiple supported deposit ABIs and needs an explicit `depositKind`
+- a route should be enabled only for specific sources, wants, or reward tokens
+- a protocol needs static metadata that cannot be read reliably on-chain
+
+Keep this config small and declarative. Suggested shape:
+
+```yaml
+routes:
+  curve_lp_deposit:
+    enabled: true
+    targets:
+      - label: "BOLD-USDC"
+        want: "0xLpTokenOrPool"
+        pool: "0xDepositPool"
+        coin_count: 2
+        deposit_kind: "curve-2coin-receiver"
+        allowed_tokens:
+          - "0xRewardToken"
+```
+
+The config should describe audited exceptions and allowlists. It should not be
+the main source of discovery for ordinary pools.
+
 ## Contract Model
 
 Replace `AuctionKicker` with one stable `TradeHandlerOperator`.

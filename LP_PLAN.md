@@ -81,35 +81,63 @@ Auction behavior is preserved but becomes one of several `operation_type` values
 
 ### Data model
 
-Replace the auction-shaped `kick_txs` table with a generic operations table.
-`kick_txs` already carries an `operation_type` column (defaulting to `kick`), so
-this is mostly keeping stable query keys as columns and collapsing route- or
-auction-specific detail into a metadata blob:
+Replace the auction-shaped `kick_txs` table with a generic operations table, but
+do **not** blindly collapse existing auction columns into JSON. The current
+raw-SQL log model, dashboard reads, cooldown lookups, and Auctionscan poller read
+and update several auction fields as ordinary columns. Moving those into
+`metadata_json` would force `json_extract` into hot SELECT/WHERE/ORDER paths and
+would lose simple index efficiency.
+
+Use a hybrid schema:
+
+- Keep stable query, display, cooldown, and poller fields as nullable columns.
+- Put route-specific or rarely queried detail in `metadata_json`.
+- Promote a metadata field to a real column later if it becomes a filter,
+  ordering key, poller key, or high-volume lookup.
 
 ```
 operator_operations(
   id, run_id, chain_id, operation_type,
   source_type, source_address,
   auction_address,
-  token_in, amount_in, want_address,
+  token_in, token_symbol, amount_in, normalized_amount_in,
+  price_usd, usd_value,
+  want_address, want_symbol,
+  starting_price, minimum_price, minimum_quote,
+  quote_amount, quote_response_json,
+  start_price_buffer_bps, min_price_buffer_bps, step_decay_rate_bps,
+  settle_token, stuck_abort_reason,
+  auctionscan_round_id, auctionscan_last_checked_at, auctionscan_matched_at,
   status, tx_hash, gas_used, gas_price_gwei, block_number,
   error_message, metadata_json,
   created_at, updated_at
 )
 ```
 
-Keep fields that need ordinary filtering, indexing, or cooldown lookups as
-columns. `auction_address` stays nullable: auction actions set it, route actions
-set it only when there is a useful candidate auction context. Move auction
-pricing fields (starting/minimum price, quote, auctionscan cache) and route
-details (pool, coin index, expected/min out, preview block) into
-`metadata_json`. This avoids schema churn for every future route.
+The auction columns stay nullable so non-auction route rows render cleanly.
+`auction_address` is set for auction actions and may be set for route rows only
+when there is a useful candidate auction context.
 
-Auction kick metadata:
+`metadata_json` is still useful, but its role is narrower: it stores route
+details such as pool, coin index, expected/min out, preview block, and
+route-specific audit data. It can also store verbose auction payloads that are
+not used by logs, filters, cooldowns, or Auctionscan polling.
+
+Carry forward equivalent column indexes for the existing hot paths:
+
+- created-at and status-created log queries
+- source/token and auction/token cooldown lookups
+- run detail lookups
+- Auctionscan pending-poll queries over confirmed auction kicks with null
+  `auctionscan_round_id`
+
+Do not implement Auctionscan polling through JSON extraction.
+
+Auction kick metadata can be small because the common auction fields above remain
+columns:
 
 ```json
-{ "auctionAddress": "0x...", "startingPrice": "...", "minimumPrice": "...",
-  "minimumQuote": "...", "quoteAmount": "...", "quoteResponse": {} }
+{ "quoteResponseSummary": {}, "pricingProfileName": "volatile" }
 ```
 
 LP deposit metadata:
@@ -405,6 +433,8 @@ or route — writes a row. There is no separate route-log path.
   kind). The detail drawer renders `metadata_json` for route rows.
 - `lp_deposit` / `lp_withdraw` rows render cleanly with no auction address.
   Auctionscan fields and matching stay auction-only.
+- Auctionscan read/update paths continue to use first-class columns, not
+  `metadata_json`.
 
 Rename the public surface to match the model:
 
@@ -465,7 +495,8 @@ Python:
 - tx builder encodes `executeRoute` / `batchExecuteRoutes`
 - executor persists `lp_deposit` in `operator_operations`; API logs and web
   `/logs` render route and auction actions in one timeline
-- Auctionscan lookup ignores non-auction rows
+- Auctionscan lookup ignores non-auction rows and continues to query/update
+  column fields, not JSON metadata
 - old config names and old kick-only operation types are gone
 
 Fork checks (run against an audited BOLD-USDC or DOLA target):
@@ -477,8 +508,9 @@ Fork checks (run against an audited BOLD-USDC or DOLA target):
 ## Implementation Order
 
 1. Audit BOLD-USDC, DOLA LPs, and yCRV targets.
-2. Rename names and schema from kick-only to operator actions; collapse
-   `kick_txs` into `operator_operations` with `metadata_json`.
+2. Rename names and schema from kick-only to operator actions; migrate
+   `kick_txs` into `operator_operations` with a hybrid schema: preserve hot
+   auction/log/poller columns, add `metadata_json` for route-specific detail.
 3. Move auction-only filters out of `build_shortlist` and into the auction
    fallback step; split selection into auction-neutral shortlist + fallback.
 4. Replace `AuctionKicker` with `TradeHandlerOperator`; port auction tests.

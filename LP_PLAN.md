@@ -141,13 +141,19 @@ PreparedRouteAction(
     token_in=...,
     amount_in=...,
     want=...,
+    expected_out=...,
+    min_out=...,
+    slippage_bps=...,
+    preview_block=...,
     route_data=...,
     metadata={...},
 )
 ```
 
-Put route-specific details in `metadata`, not permanent top-level fields. The
-same action model should work later for other protocols.
+Use the output-bound fields when the route has protocol output risk, such as LP
+deposits, LP withdrawals, swaps, mints, redeems, or zaps. Put route-specific
+details in `metadata`, not permanent top-level fields. The same action model
+should work later for other protocols.
 
 ## Contract Model
 
@@ -275,11 +281,8 @@ Preview:
 2. Apply existing threshold and sizing policy.
 3. Build the single-coin amounts array.
 4. Call the supported LP preview method, such as `calc_token_amount`.
-5. Apply a small code-default slippage buffer.
+5. Compute `minLpOut` with the route's min-out policy.
 6. Encode `CurveLpDepositData`.
-
-Start with a code default of `50 bps` for LP slippage. Do not add a new config
-unless real production pools require it.
 
 Blocked outcomes:
 
@@ -290,6 +293,43 @@ Blocked outcomes:
 - source want does not match the LP output
 
 These should produce clear operator-facing skip reasons.
+
+## Min-Out And Public RPC Safety
+
+Any route that receives protocol output must set an explicit output bound before
+Tidal broadcasts through public RPC.
+
+This applies to LP deposits, LP withdrawals, swaps, zaps, mints, redeems, and any
+future route where public mempool execution can land after unfavorable state
+changes.
+
+Each route adapter owns a small min-out policy:
+
+1. Read the protocol preview from the same chain state used for prepare.
+2. Record the preview method and preview block in action metadata.
+3. Compute route-specific price impact when the protocol exposes enough data.
+4. Set `slippage_bps = max(route_default_bps, impact_bps + safety_bps)`.
+5. Cap `slippage_bps` with a route-specific maximum.
+6. Compute `min_out = expected_out * (10_000 - slippage_bps) / 10_000`.
+7. Block the route if `expected_out == 0`, `min_out == 0`, preview data is stale,
+   or required preview data is unavailable.
+
+Start with code defaults, not user config:
+
+- Curve LP deposit default: `50 bps`
+- route max: set during target audit
+- preview max age: reuse `prepared_action_max_age_seconds`
+
+Only add operator config after real production routes prove the defaults need to
+vary by deployment.
+
+The transaction builder must put `min_out` inside route calldata. A route module
+must never use `0` as a placeholder min-out unless the route proves in code and
+tests that the output amount is invariant.
+
+Execution should reject stale prepared actions. If an action is too old, Tidal
+should re-read live balance, re-preview expected output, recompute `min_out`, and
+rebuild calldata before signing.
 
 ## Data Model
 
@@ -339,17 +379,52 @@ Examples:
   "depositKind": "curve-2coin-receiver",
   "expectedLpOut": "...",
   "minLpOut": "...",
-  "slippageBps": 50
+  "slippageBps": 50,
+  "previewBlock": 12345678,
+  "previewMethod": "calc_token_amount"
 }
 ```
 
 This avoids schema churn for each future route.
+
+## Logs And Web Visibility
+
+Every operator action must write a database log row, including new route actions.
+
+`operator_operations` is the source of truth for:
+
+- CLI logs
+- API logs
+- the web app `/logs` view
+- run detail pages
+- failure summaries
+
+The API read model should be renamed from kick logs to operator operation logs
+and should return all operation types in one timeline. The web app should keep a
+single `/logs` view, but it should no longer assume every row is an auction kick.
+
+Required log behavior:
+
+- `lp_deposit` rows appear in `/logs` alongside auction actions.
+- filters work across status, source, token, transaction hash, run id, and
+  operation type.
+- search includes route metadata where useful, such as pool, route id, and
+  deposit kind.
+- each row shows a readable operation label and route-specific detail summary.
+- the detail drawer can render `metadata_json` for route actions.
+- Auctionscan fields and matching remain auction-action-only.
+- route actions without an auction address must still render cleanly.
+
+Do not keep a separate route-log path. The operator log is one shared operation
+timeline.
 
 ## API, CLI, And Service Names
 
 Make the public surface match the new model.
 
 - Rename prepare payloads from kick-only language to action/operator language.
+- Rename `/api/v1/tidal/logs/kicks` to an operator-log endpoint.
+- Keep the web app route `/logs`, but wire it to the operator-log endpoint.
 - Rename transaction intent operation values:
   - `kick` -> `auction-kick`
   - `resolve-auction` -> `auction-resolve`
@@ -410,12 +485,18 @@ Python:
 - route adapter prepares an LP deposit when reward token is in LP coins
 - LP route preparation does not call quote pricing
 - LP route preparation runs before auction settlement inspection
+- LP route computes nonzero `expected_out` and `min_out`
+- LP route records preview block, preview method, and slippage bps
+- stale LP route previews are rejected and re-prepared before signing
 - token not in LP coins falls through to auction prepare
 - LP coin with unsupported deposit shape is skipped, not auctioned
 - LP preview failure is a clear skip
 - tx builder encodes `executeRoute` / `batchExecuteRoutes`
 - executor persists `lp_deposit` in the generic operations table
 - preview payload includes route metadata
+- API logs return `lp_deposit` rows from the generic operations table
+- web `/logs` renders route actions and auction actions in one timeline
+- Auctionscan lookup ignores non-auction route actions
 - old config names and old kick-only types are removed
 
 Fork checks:
@@ -423,6 +504,7 @@ Fork checks:
 - run against at least one audited BOLD-USDC or DOLA target
 - verify the prepared calldata estimates successfully
 - verify LP output recipient is the source, not the TradeHandler
+- verify calldata contains a nonzero public-RPC-safe `minLpOut`
 
 ## Implementation Order
 
@@ -436,11 +518,13 @@ Fork checks:
 6. Add Solidity unit and fork tests for auction behavior and LP route behavior.
 7. Add Tidal route adapter infrastructure.
 8. Implement `CurveLpDepositAdapter`.
-9. Update tx builder, planner, executor, API payloads, CLI output, config
+9. Add generic operation logging, API log reads, and web `/logs` rendering for
+   all operation types.
+10. Update tx builder, planner, executor, API payloads, CLI output, config
    templates, and docs.
-10. Run Python tests, Foundry tests, and one dry-run prepare against each audited
+11. Run Python tests, Foundry tests, and one dry-run prepare against each audited
     target family.
-11. Deploy the new operator, allowlist it as a TradeHandler mech, register the
+12. Deploy the new operator, allowlist it as a TradeHandler mech, register the
     first route module, update server config, and run the operator service with a
     narrow target filter first.
 

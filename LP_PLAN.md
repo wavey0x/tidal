@@ -12,7 +12,7 @@ Tidal already selected and validated. It should not discover LPs, inspect
 The clean shape is:
 
 1. Tidal scans and shortlists reward-token candidates as it does today.
-2. Tidal asks non-auction route adapters whether a better direct action exists.
+2. Tidal asks non-auction route resolvers whether a better direct action exists.
 3. If a safe route exists, Tidal prepares that route and removes the candidate
    from the auction path.
 4. If no route applies, the existing auction kick path handles the candidate.
@@ -44,6 +44,10 @@ columns each time.
 - `tidal/transaction_service/planner.py` currently groups candidates by auction
   before prepare. That is wrong for LP deposits because an LP deposit does not
   care whether the related auction is idle, live, or dirty.
+- `tidal/transaction_service/evaluator.py` currently applies cached auction
+  enabled-token filtering and keeps only one candidate per auction before the
+  planner sees the final selected set. Those are auction-only rules and must
+  move after route discovery.
 - `tidal/transaction_service/kick_prepare.py` currently prepares only quote-based
   auction kicks.
 - `tidal/transaction_service/kick_tx.py` only encodes auction-kicker calls.
@@ -75,6 +79,7 @@ Keep auction behavior, but make it one operation type:
 - `auction_sweep`
 - `auction_enable_tokens`
 - `lp_deposit`
+- `lp_withdraw`
 
 Remove the old names instead of aliasing them.
 
@@ -82,15 +87,19 @@ Remove the old names instead of aliasing them.
 
 The planner should prepare actions in this order:
 
-1. Build the shortlist from scanned balances and thresholds.
-2. Apply ignore/cooldown/gauge guards.
-3. Run non-auction route adapters against each candidate.
+1. Build an auction-neutral shortlist from scanned balances and thresholds.
+2. Apply global source, ignore, data-freshness, and safety guards.
+3. Run non-auction route resolvers against each candidate before any
+   auction-only filtering.
 4. Split the candidate set:
    - prepared route actions
    - candidates that did not match any route
    - route-blocked candidates that should not be auctioned
-5. Run auction settlement inspection only on the remaining auction candidates.
-6. Prepare quote-based auction kicks only for clean auction candidates.
+5. Apply operation-aware cooldowns to prepared route actions and auction
+   fallback candidates.
+6. Apply cached auction enabled-token checks, per-auction dedupe, auction
+   settlement inspection, and quote preparation only to the remaining auction
+   fallback candidates.
 7. Estimate gas and build transaction intents.
 8. Execute or dry-run actions and persist results as operator operations.
 
@@ -99,36 +108,73 @@ The important behavior:
 - If no route applies, the current auction flow remains the fallback.
 - If a route clearly applies but is unsafe or unsupported, skip the candidate
   with a clear reason. Do not silently auction it.
+- Auction-only filters must not run before route discovery.
 - Route actions do not call the quote API.
 - Route actions are not blocked by auction settlement state.
 - Route actions can batch with the same route initially. Do not mix auction and
   route operations in one transaction until there is a clear reason.
 
-## Route Adapter Model
+## Route Resolver Model
 
-Use off-chain route adapters for discovery and preview.
+Use off-chain route resolvers for discovery, preview, min-out calculation, and
+route calldata encoding. A resolver is Python code shipped with Tidal. It is not
+a contract and it is not a user-created config file.
 
 ```python
-class RouteAdapter(Protocol):
+class RouteResolver(Protocol):
     route_id: bytes
     operation_type: str
+    priority: int
 
-    async def inspect(candidate: ActionCandidate) -> RouteInspection:
-        ...
-
-    async def prepare(candidate: ActionCandidate, inspection: RouteInspection) -> PreparedRouteAction:
+    async def resolve(candidate: ActionCandidate, context: RouteContext) -> RouteResolution:
         ...
 ```
 
-`RouteInspection` should have three outcomes:
+`RouteResolution` should have three outcomes:
 
-- `not_applicable`: continue to the next adapter or auction fallback
-- `applicable`: prepare and use the route action
+- `not_applicable`: continue to the next resolver or auction fallback
+- `prepared`: use the returned route action
 - `blocked`: skip the candidate and do not auction it
 
 This distinction matters. A token that is a coin in the strategy's LP should not
 be auctioned just because the LP deposit preview failed or the pool shape is not
 yet supported.
+
+The action planner owns one small `ActionRouter` that runs registered resolvers
+in deterministic priority order:
+
+1. The planner builds `ActionCandidate` rows from scanned balances.
+2. The planner applies global ignore, threshold, data-freshness, and source
+   guards.
+3. `ActionRouter` calls each resolver for each candidate.
+4. The first prepared route wins.
+5. A blocked route stops processing for that candidate and records a skip.
+6. Only candidates with no applicable route enter the auction settlement and
+   quote-based auction path.
+
+This keeps discovery off-chain while still keeping execution constrained by
+audited on-chain route modules.
+
+Suggested code layout after the operator refactor:
+
+- Python resolver protocol and result types:
+  `tidal/transaction_service/routes/base.py`
+- Python router that runs resolvers before auction preparation:
+  `tidal/transaction_service/action_router.py`
+- Curve LP resolver implementations:
+  `tidal/transaction_service/routes/curve_lp.py`
+- Solidity route modules:
+  `contracts/src/routes/CurveLpDepositRoute.sol` and
+  `contracts/src/routes/CurveLpWithdrawRoute.sol`
+- Stable operator contract:
+  `contracts/src/TradeHandlerOperator.sol`
+- Optional route metadata:
+  `config/server.yaml` under `routes`
+
+Operators should not create resolver files or write route logic in config. If a
+new protocol family needs support, that is a Tidal code change: add a resolver,
+add a route module only if the operator needs new on-chain commands, deploy or
+register the module, then add narrow metadata only for audited exceptions.
 
 Prepared actions should use a common shape:
 
@@ -159,14 +205,17 @@ should work later for other protocols.
 
 There are three separate layers:
 
-1. Route capability in code: a route adapter, such as `CurveLpDepositAdapter`,
+1. Route capability in code: a route resolver, such as `CurveLpDepositResolver`,
    knows how to detect, preview, and encode one class of action.
-2. Optional route metadata in server config: only needed when the adapter cannot
+2. Optional route metadata in server config: only needed when the resolver cannot
    safely infer pool details from chain reads.
 3. On-chain route registration: the operator owner registers the matching route
    module once, such as `curve.lp.deposit.v1 -> CurveLpDepositRoute`.
 
 Do not require manual config for every strategy or every reward token.
+Do not require operators to author route code. A new resolver is a Tidal code
+change; server config only supplies audited metadata or allowlists for shapes
+that cannot be inferred safely.
 
 For the normal BOLD-USDC shape, Tidal should discover the route automatically if
 all of these are true:
@@ -177,9 +226,15 @@ all of these are true:
 - the supported deposit function can mint LP tokens directly to the source
 
 In that case no per-strategy config entry is needed. The scanner already knows
-the source, reward token, balance, auction, and want. The route adapter can read
+the source, reward token, balance, auction, and want. The route resolver can read
 `want`, probe `coins(i)`, see that BOLD or USDC is an LP coin, preview the
 single-sided deposit, and prepare `lp_deposit`.
+
+The inverse should also be discoverable as a separate route: if the candidate
+token is the LP token and the source's `want` is one of the LP's coins, Tidal can
+prepare an LP withdrawal to that component instead of auctioning the LP token.
+That should use a different route resolver, for example `CurveLpWithdrawResolver`,
+because preview, min-out, and calldata differ from deposits.
 
 Use config only for non-obvious shapes:
 
@@ -203,6 +258,17 @@ routes:
         deposit_kind: "curve-2coin-receiver"
         allowed_tokens:
           - "0xRewardToken"
+
+  curve_lp_withdraw:
+    enabled: true
+    targets:
+      - label: "BOLD-USDC"
+        lp_token: "0xLpToken"
+        pool: "0xDepositPool"
+        coin_count: 2
+        withdraw_kind: "curve-2coin-one-coin-receiver"
+        allowed_outputs:
+          - "0xComponentToken"
 ```
 
 The config should describe audited exceptions and allowlists. It should not be
@@ -311,11 +377,58 @@ Do not support mint-to-TradeHandler pool variants in phase 1.
 Do not support tokens or pools that leave residual allowance after an exact
 single-coin deposit in phase 1.
 
-## Off-Chain LP Detection
+## Sibling Route: Curve LP Withdraw To Component
 
-The first Tidal adapter should be `CurveLpDepositAdapter`.
+The inverse case should be `CurveLpWithdrawRoute`, not a mode hidden inside
+`CurveLpDepositRoute`.
 
-Detection:
+Use it when:
+
+- `call.tokenIn` is the LP token
+- `call.want` is one of the LP's underlying coins
+- the pool supports a preview method such as `calc_withdraw_one_coin`
+- the pool supports a withdraw function that sends the component token directly
+  to `call.source`
+
+Route data:
+
+```solidity
+struct CurveLpWithdrawData {
+    address pool;
+    uint8 coinIndex;
+    uint8 coinCount;
+    uint8 withdrawKind;
+    uint256 minTokenOut;
+}
+```
+
+Validation in the route module:
+
+- `pool` is nonzero.
+- `coinIndex < coinCount`.
+- `withdrawKind` is supported.
+- `ICurvePool(pool).coins(coinIndex) == call.want`.
+- the audited pool shape proves `call.tokenIn` is the LP token.
+- the selected withdraw function sends the component token to `call.source`.
+
+Command program:
+
+1. `tokenIn.transferFrom(source, tradeHandler, amountIn)`
+2. `tokenIn.approve(pool, amountIn)`
+3. `pool.remove_liquidity_one_coin(amountIn, coinIndex, minTokenOut, source)`
+   using the audited selector
+4. rely on the audited pool spending the exact approved amount
+
+Do not support withdraw variants that send output to `msg.sender` in phase 1,
+because that would send components to the TradeHandler unless we add dynamic
+post-withdraw balance handling.
+
+## Off-Chain LP Route Detection
+
+The first Tidal resolvers should be `CurveLpDepositResolver` and, if target
+audits show an immediate inverse opportunity, `CurveLpWithdrawResolver`.
+
+Deposit detection:
 
 1. Determine the candidate want:
    - strategy source: read `strategy.want()`
@@ -328,7 +441,17 @@ Detection:
 For LP token and deposit pool shapes where `want != pool`, use explicit route
 metadata from the target audit. Do not guess.
 
-Preview:
+Withdraw detection:
+
+1. Determine the candidate want.
+2. Treat `candidate.token_address` as the possible LP token.
+3. Resolve the pool from either the token itself or explicit route metadata.
+4. Try bounded `coins(i)` reads for supported pool shapes.
+5. If `want` is one of the coins and the candidate token is the LP token, the
+   withdraw route is applicable.
+6. Confirm the exact withdraw and preview ABI is supported.
+
+Deposit preview:
 
 1. Read live token balance from the source.
 2. Apply existing threshold and sizing policy.
@@ -337,13 +460,25 @@ Preview:
 5. Compute `minLpOut` with the route's min-out policy.
 6. Encode `CurveLpDepositData`.
 
+Withdraw preview:
+
+1. Read live LP token balance from the source.
+2. Apply existing threshold and sizing policy.
+3. Call the supported LP withdraw preview, such as
+   `calc_withdraw_one_coin(amountIn, coinIndex)`.
+4. Compute `minTokenOut` with the route's min-out policy.
+5. Encode `CurveLpWithdrawData`.
+
 Blocked outcomes:
 
 - token is an LP coin but deposit ABI is unsupported
+- token is the LP token but withdraw ABI is unsupported
 - LP preview fails
 - preview output is zero
 - receiver-style minting is unavailable
+- receiver-style component withdrawal is unavailable
 - source want does not match the LP output
+- source want is not an LP coin for the withdraw route
 
 These should produce clear operator-facing skip reasons.
 
@@ -356,7 +491,7 @@ This applies to LP deposits, LP withdrawals, swaps, zaps, mints, redeems, and an
 future route where public mempool execution can land after unfavorable state
 changes.
 
-Each route adapter owns a small min-out policy:
+Each route resolver owns a small min-out policy:
 
 1. Read the protocol preview from the same chain state used for prepare.
 2. Record the preview method and preview block in action metadata.
@@ -459,6 +594,7 @@ single `/logs` view, but it should no longer assume every row is an auction kick
 Required log behavior:
 
 - `lp_deposit` rows appear in `/logs` alongside auction actions.
+- `lp_withdraw` rows appear in `/logs` alongside auction actions.
 - filters work across status, source, token, transaction hash, run id, and
   operation type.
 - search includes route metadata where useful, such as pool, route id, and
@@ -484,6 +620,7 @@ Make the public surface match the new model.
   - `sweep-auction` -> `auction-sweep`
   - `enable-tokens` -> `auction-enable-tokens`
   - `lp-deposit` is new
+  - `lp-withdraw` is new
 - Rename config and templates to `trade_handler_operator_address`.
 - Rename the service command:
   - `tidal kick run` -> `tidal operator run`
@@ -510,9 +647,14 @@ For each target, record:
 - `coins(i)` outputs
 - preview function and selector
 - deposit function and selector
+- withdraw preview function and selector
+- withdraw function and selector
 - whether receiver-style minting is supported
+- whether receiver-style component withdrawal is supported
 - whether one-sided deposit is supported
+- whether one-sided withdrawal is supported
 - expected LP token recipient
+- expected component token recipient
 - whether existing TradeHandler allowance is sufficient
 
 Only targets that satisfy the receiver-style route constraints should be enabled
@@ -530,24 +672,40 @@ Solidity:
 - Curve LP route validates `coins(coinIndex) == tokenIn`
 - Curve LP route rejects wrong output LP token
 - Curve LP route builds a receiver-style deposit that mints LP tokens to source
+- Curve LP withdraw route validates `coins(coinIndex) == want`
+- Curve LP withdraw route rejects wrong input LP token
+- Curve LP withdraw route builds a receiver-style one-coin withdrawal that sends
+  the component token to source
 - batch route execution works for same-route calls
 - route never accepts raw keeper-provided commands
 
 Python:
 
-- route adapter prepares an LP deposit when reward token is in LP coins
+- route resolver prepares an LP deposit when reward token is in LP coins
+- route resolver prepares an LP withdrawal when reward token is the LP token and
+  `want` is one of the LP coins
 - LP route preparation does not call quote pricing
 - LP route preparation runs before auction settlement inspection
+- LP route discovery runs before cached auction enabled-token filtering
+- LP route discovery sees multiple same-auction candidates before auction
+  dedupe
+- auction kick cooldowns do not block route actions unless an operation-aware
+  route cooldown rule explicitly matches
 - LP route computes nonzero `expected_out` and `min_out`
 - LP route records preview block, preview method, and slippage bps
 - stale LP route previews are rejected and re-prepared before signing
 - token not in LP coins falls through to auction prepare
 - LP coin with unsupported deposit shape is skipped, not auctioned
+- LP token with unsupported withdraw shape is skipped, not auctioned
 - LP preview failure is a clear skip
 - tx builder encodes `executeRoute` / `batchExecuteRoutes`
 - executor persists `lp_deposit` in the generic operations table
+- executor persists `lp_withdraw` in the generic operations table when the
+  withdraw route is enabled
 - preview payload includes route metadata
 - API logs return `lp_deposit` rows from the generic operations table
+- API logs return `lp_withdraw` rows from the generic operations table when the
+  withdraw route is enabled
 - web `/logs` renders route actions and auction actions in one timeline
 - Auctionscan lookup ignores non-auction route actions
 - old config names and old kick-only types are removed
@@ -557,27 +715,33 @@ Fork checks:
 - run against at least one audited BOLD-USDC or DOLA target
 - verify the prepared calldata estimates successfully
 - verify LP output recipient is the source, not the TradeHandler
+- verify component output recipient is the source, not the TradeHandler
 - verify calldata contains a nonzero public-RPC-safe `minLpOut`
+- verify withdraw calldata contains a nonzero public-RPC-safe `minTokenOut`
 
 ## Implementation Order
 
 1. Audit BOLD-USDC, DOLA LPs, and yCRV targets.
 2. Refactor names and schema from kick-only to operator actions.
-3. Replace `AuctionKicker` with `TradeHandlerOperator` and port existing auction
+3. Split candidate selection into an auction-neutral balance shortlist plus
+   auction-only fallback filters.
+4. Replace `AuctionKicker` with `TradeHandlerOperator` and port existing auction
    tests.
-4. Add the route registry to `TradeHandlerOperator`.
-5. Implement `CurveLpDepositRoute` for the smallest audited receiver-style pool
-   shape.
-6. Add Solidity unit and fork tests for auction behavior and LP route behavior.
-7. Add Tidal route adapter infrastructure.
-8. Implement `CurveLpDepositAdapter`.
-9. Add generic operation logging, API log reads, and web `/logs` rendering for
+5. Add the route registry to `TradeHandlerOperator`.
+6. Implement `CurveLpDepositRoute` for the smallest audited receiver-style pool
+   shape. Add `CurveLpWithdrawRoute` in the same phase if the target audit shows
+   an immediate LP-token-to-component opportunity.
+7. Add Solidity unit and fork tests for auction behavior and LP route behavior.
+8. Add Tidal route resolver infrastructure.
+9. Implement `CurveLpDepositResolver`. Add `CurveLpWithdrawResolver` in the same
+   phase if the route module is included.
+10. Add generic operation logging, API log reads, and web `/logs` rendering for
    all operation types.
-10. Update tx builder, planner, executor, API payloads, CLI output, config
+11. Update tx builder, planner, executor, API payloads, CLI output, config
    templates, and docs.
-11. Run Python tests, Foundry tests, and one dry-run prepare against each audited
+12. Run Python tests, Foundry tests, and one dry-run prepare against each audited
     target family.
-12. Deploy the new operator, allowlist it as a TradeHandler mech, register the
+13. Deploy the new operator, allowlist it as a TradeHandler mech, register the
     first route module, update server config, and run the operator service with a
     narrow target filter first.
 
@@ -586,7 +750,9 @@ Fork checks:
 The simple version is not "teach the contract about LPs." The simple version is
 "Tidal chooses actions; a stable operator executes approved actions."
 
-LP deposits are just the first non-auction action. The first route should be
-small and strict: audited Curve-style pools with receiver-style deposits only.
-Future protocols get new off-chain adapters and, when necessary, one small
-on-chain route module registered on the existing operator.
+LP deposits are just the first non-auction action. The inverse LP-token to
+component-token flow is the same architecture but a separate withdraw route. The
+first routes should stay small and strict: audited Curve-style pools with
+receiver-style deposits or withdrawals only. Future protocols get new off-chain
+resolvers and, when necessary, one small on-chain route module registered on the
+existing operator.

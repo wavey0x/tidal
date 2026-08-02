@@ -9,10 +9,13 @@ import uvicorn
 
 from tidal.api.app import create_app
 from tidal.auth_cli import app as auth_app
+from tidal.auction_round_repair import AuctionRoundRepair
 from tidal.cli_context import CLIContext
 from tidal.cli_options import ConfigOption
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
+from tidal.persistence.db import Database
+from tidal.runtime import build_web3_client
 from tidal.resources import read_template_text
 from tidal.scan_cli import app as scan_app
 
@@ -64,6 +67,45 @@ def db_migrate(config: ConfigOption = None) -> None:
     cli_ctx.settings.resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
     run_migrations(cli_ctx.settings.database_url)
     typer.echo("migrations applied")
+
+
+@db_app.command("repair-auction-rounds")
+def db_repair_auction_rounds(
+    config: ConfigOption = None,
+    apply: bool = typer.Option(False, "--apply", help="Apply deterministic receipt and round-link repairs."),
+) -> None:
+    import asyncio
+
+    configure_logging(output_mode=OutputMode.TEXT)
+    cli_ctx = CLIContext(config, mode="server")
+    settings = cli_ctx.settings
+    database = Database(settings.database_url)
+    web3_client = build_web3_client(settings)
+
+    async def _run():  # noqa: ANN202
+        try:
+            with database.session() as session:
+                return await AuctionRoundRepair(
+                    session=session,
+                    settings=settings,
+                    web3_client=web3_client,
+                ).run(apply=apply)
+        finally:
+            await web3_client.close()
+
+    report = asyncio.run(_run())
+    for pair in report.pairs:
+        live_suffix = " live" if pair.live_on_chain is True else ""
+        typer.echo(
+            f"{pair.auction_address} {pair.token_address} "
+            f"{pair.outcome} {pair.reason_code or '-'}{live_suffix} "
+            f"{'OK' if pair.passed else 'UNRESOLVED'}"
+        )
+    if report.reconciliation_errors:
+        typer.echo(f"{len(report.reconciliation_errors)} reconciliation error(s)", err=True)
+    if not report.passed:
+        raise typer.Exit(code=1)
+    typer.echo("auction round audit passed")
 
 
 @api_app.command("serve")

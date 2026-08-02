@@ -10,7 +10,7 @@ The kick engine should answer:
 
 The system deliberately separates cached ranking from live transaction pricing.
 
-Manual ignore rules and cooldown rules live under `kick:` in `config/server.yaml`.
+Manual ignore, bounded no-fill retry, and cooldown rules live under `kick:` in `config/server.yaml`.
 
 ## Shortlist Inputs
 
@@ -109,9 +109,21 @@ Ignored candidates are tracked as:
 
 This is intentional. An ignored high-USD token should not block a lower-USD token from the same auction from becoming actionable.
 
+## No-Fill Retry Guard
+
+After ignores, Tidal evaluates explicitly linked, confirmed round evidence for
+the same `(auction, token)` pair. One and two consecutive no-fills defer until
+their configured 12-hour and 24-hour backoffs are due. A third no-fill blocks
+automation. Incomplete or ambiguous evidence also blocks.
+
+A productive round resets the sequence. Every retry still uses the current live
+balance and fresh quotes. The only bypass is one exact manual preparation with
+`--auction`, `--token`, and `--allow-no-fill-retry`; it cannot bypass incomplete
+or unknown evidence.
+
 ## Cooldown Check
 
-After ignore rules, Tidal checks recent kick history for the same `(auction, token)` pair.
+After the no-fill guard, Tidal checks recent kick history for the same `(auction, token)` pair.
 
 If the pair was kicked too recently, it is marked as:
 

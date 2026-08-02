@@ -20,6 +20,8 @@ class KickAction(str, Enum):
 
 class SkipReason(str, Enum):
     IGNORED = "IGNORED"
+    NO_FILL_DEFER = "NO_FILL_DEFER"
+    NO_FILL_BLOCK = "NO_FILL_BLOCK"
     COOLDOWN = "COOLDOWN"
 
 
@@ -123,6 +125,7 @@ class KickDecision:
     action: KickAction
     skip_reason: SkipReason | None = None
     detail: str | None = None
+    policy_data: dict[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -387,6 +390,7 @@ class KickPlan:
     selected_count: int
     ready_count: int
     ignored_skips: list[dict[str, object]] = field(default_factory=list)
+    no_fill_skips: list[dict[str, object]] = field(default_factory=list)
     cooldown_skips: list[dict[str, object]] = field(default_factory=list)
     deferred_same_auction_count: int = 0
     limited_count: int = 0
@@ -422,6 +426,8 @@ class KickPlan:
             "readyCount": self.ready_count,
             "ignoredCount": len(self.ignored_skips),
             "ignoredSkips": self.ignored_skips,
+            "noFillCount": len(self.no_fill_skips),
+            "noFillSkips": self.no_fill_skips,
             "deferredSameAuctionCount": self.deferred_same_auction_count,
             "limitedCount": self.limited_count,
             "cooldownCount": len(self.cooldown_skips),

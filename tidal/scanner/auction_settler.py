@@ -82,6 +82,7 @@ class AuctionSettlementService:
         max_gas_limit: int,
         chain_id: int,
         settings,
+        operation_reconciler=None,
     ) -> None:
         self.web3_client = web3_client
         self.signer = signer
@@ -92,6 +93,7 @@ class AuctionSettlementService:
         self.max_gas_limit = max_gas_limit
         self.chain_id = chain_id
         self.settings = settings
+        self.operation_reconciler = operation_reconciler
 
     async def settle_stale_auctions(
         self,
@@ -336,18 +338,28 @@ class AuctionSettlementService:
 
         receipt_status = receipt.get("status", 0)
         receipt_gas_used = receipt.get("gasUsed")
-        effective_gas_price = receipt.get("effectiveGasPrice")
         receipt_block = receipt.get("blockNumber")
-        effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
         final_status = "CONFIRMED" if receipt_status == 1 else "REVERTED"
-        self.kick_tx_repository.update_status(
-            kick_tx_id,
-            status=final_status,
-            gas_used=receipt_gas_used,
-            gas_price_gwei=effective_gwei,
-            block_number=receipt_block,
-            error_message="resolve transaction reverted" if final_status == "REVERTED" else None,
-        )
+        if self.operation_reconciler is not None:
+            reconciliation_error = await self.operation_reconciler.finalize_receipt(tx_hash, receipt)
+            if reconciliation_error is not None:
+                stats.settlements_failed += 1
+                return ScanItemError(
+                    stage="OPERATION_RECONCILIATION",
+                    error_code=reconciliation_error,
+                    error_message="confirmed settlement evidence could not be reconciled",
+                    source_type=candidate.source.source_type,
+                    source_address=candidate.source.source_address,
+                    token_address=candidate.token_address,
+                )
+        else:
+            self.kick_tx_repository.update_status(
+                kick_tx_id,
+                status=final_status,
+                gas_used=receipt_gas_used,
+                block_number=receipt_block,
+                error_message="resolve transaction reverted" if final_status == "REVERTED" else None,
+            )
 
         if final_status == "CONFIRMED":
             stats.settlements_confirmed += 1
@@ -395,7 +407,6 @@ class AuctionSettlementService:
             "source_address": candidate.source.source_address,
             "token_address": candidate.token_address,
             "auction_address": candidate.source.auction_address,
-            "normalized_balance": "0",
             "status": status,
             "created_at": now_iso,
             "token_symbol": candidate.token_symbol,
@@ -405,8 +416,12 @@ class AuctionSettlementService:
         }
         if candidate.source.source_type == "strategy":
             row["strategy_address"] = candidate.source.source_address
-        if candidate.balance_raw:
-            row["sell_amount"] = str(candidate.balance_raw)
+        round_kick = self.kick_tx_repository.latest_confirmed_unclosed_kick(
+            candidate.source.auction_address,
+            candidate.token_address,
+        )
+        if round_kick is not None:
+            row["round_kick_id"] = int(round_kick["id"])
         if error_message is not None:
             row["error_message"] = error_message
         if tx_hash is not None:

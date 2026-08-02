@@ -17,6 +17,7 @@ Use this page after [Install](install.md). It focuses on the supported `tidal-se
 The intended runtime surface is:
 
 - `tidal-server db migrate`
+- `tidal-server db repair-auction-rounds`
 - `tidal-server scan run`
 - `tidal-server api serve`
 - `tidal-server auth ...`
@@ -40,7 +41,8 @@ tidal-server scan run --config config/server.yaml
 tidal-server api serve --config config/server.yaml
 ```
 
-If the API should reconcile receipts in the background, set `RPC_URL` so the API process can start its reconciler.
+Set `RPC_URL` for scanner reconciliation and on-chain reads. Receipt finalization
+uses the same reconciler for local execution, API-reported receipts, and scans.
 
 ## Scan Execution
 
@@ -93,6 +95,9 @@ The API bind defaults live in code: `tidal_api_host=0.0.0.0` and `tidal_api_port
 Set them explicitly only when you need a non-default bind.
 
 Most scanner, pricing, multicall, and reconcile tuning also now defaults in code. Only override those via environment variables when you are intentionally tuning a deployment.
+
+For Telegram operational alerts, configure all three neutral `TELEGRAM_*`
+variables documented in [Configuration](config.md) in the ignored server `.env`.
 
 Scan auto-settle and token auto-enable are not configured in `server.yaml`.
 Enable them explicitly with `--auto-settle` or `--auto-enable-tokens` when needed.

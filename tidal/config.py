@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import dotenv_values
-from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, field_validator
+from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from tidal.paths import default_config_path, default_env_path, default_server_config_path, default_server_env_path, resolve_path, tidal_home
@@ -106,6 +106,14 @@ class Settings(BaseSettings):
     )
     auctionscan_recheck_seconds: int = Field(default=90, alias="AUCTIONSCAN_RECHECK_SECONDS")
     auctionscan_enrichment_batch_size: int = Field(default=10, alias="AUCTIONSCAN_ENRICHMENT_BATCH_SIZE")
+    scan_stale_after_minutes: int = Field(default=90, gt=0, alias="SCAN_STALE_AFTER_MINUTES")
+
+    telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
+    telegram_admin_alert_chat_id: str | None = Field(default=None, alias="TELEGRAM_ADMIN_ALERT_CHAT_ID")
+    telegram_operations_alert_chat_id: str | None = Field(
+        default=None,
+        alias="TELEGRAM_OPERATIONS_ALERT_CHAT_ID",
+    )
 
     auction_kicker_address: str = Field(
         default="0x2a76c6ad151af2edbe16755fc3bff67176f01071",
@@ -172,6 +180,21 @@ class Settings(BaseSettings):
                 return value
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _validate_telegram_configuration(self) -> "Settings":
+        values = (
+            self.telegram_bot_token,
+            self.telegram_admin_alert_chat_id,
+            self.telegram_operations_alert_chat_id,
+        )
+        configured = tuple(bool(value and value.strip()) for value in values)
+        if any(configured) and not all(configured):
+            raise ValueError(
+                "TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_ALERT_CHAT_ID, and "
+                "TELEGRAM_OPERATIONS_ALERT_CHAT_ID must be configured together"
+            )
+        return self
 
     @property
     def resolved_config_path(self) -> Path:

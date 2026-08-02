@@ -51,6 +51,12 @@ Bypass the persisted killed-gauge guard for a one-off manual run:
 tidal kick run --allow-killed-gauge
 ```
 
+Allow one deliberate retry after a pair exhausts its no-fill budget:
+
+```bash
+tidal kick run --auction 0x... --token 0x... --allow-no-fill-retry
+```
+
 Lower the candidate USD threshold for a one-off run:
 
 ```bash
@@ -68,6 +74,7 @@ tidal kick run --max-base-fee-gwei 5
 - `--source-type`: filter to `strategy` or `fee-burner`
 - `--source`: target one source address
 - `--auction`: target one auction address
+- `--token`: target one sell token address
 - `--limit`: cap how many candidates are considered
 - `--min-usd-value`: override `txn_usd_threshold` for candidate selection in this inspect or run
 - `--max-base-fee-gwei`: override the send-time base-fee cap for this run
@@ -77,6 +84,8 @@ tidal kick run --max-base-fee-gwei 5
 - `--verbose`: show more prepare and skip detail on `run`
 - `--require-curve` and `--no-require-curve`: tighten or relax fresh quote requirements for that run
 - `--allow-killed-gauge`: bypass a persisted killed Curve gauge status for this manual run
+- `--allow-no-fill-retry`: bypass only an exhausted no-fill budget for the exact
+  `--auction` and `--token` pair; it is rejected with `--headless`
 - `--json`: emit machine-readable output for `inspect`
 
 Signing defaults to `TXN_KEYSTORE_PATH` and `TXN_KEYSTORE_PASSPHRASE`. Use `--keystore` and `--password-file` only when you need a one-off override. The sender address is inferred from the resolved keystore.

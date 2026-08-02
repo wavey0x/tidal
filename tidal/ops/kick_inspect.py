@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain
 
 from tidal.auction_settlement import (
@@ -14,6 +14,7 @@ from tidal.auction_settlement import (
     live_funded_previews,
     path_reason,
 )
+from tidal.auction_rounds import NoFillGuard
 from tidal.normalizers import normalize_address
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
 from tidal.runtime import build_web3_client
@@ -83,6 +84,8 @@ class KickInspectResult:
     cooldown_skips: list[KickInspectEntry]
     deferred_same_auction: list[KickInspectEntry]
     limited: list[KickInspectEntry]
+    no_fill_count: int = 0
+    no_fill_skips: list[KickInspectEntry] = field(default_factory=list)
 
 
 def inspect_kick_candidates(
@@ -97,6 +100,7 @@ def inspect_kick_candidates(
     include_live_inspection: bool = True,
 ) -> KickInspectResult:
     kick_config = settings.kick_config
+    kick_tx_repository = KickTxRepository(session)
     shortlist = build_shortlist(
         session,
         usd_threshold=settings.txn_usd_threshold,
@@ -108,7 +112,11 @@ def inspect_kick_candidates(
         limit=limit,
         ignore_policy=kick_config.ignore_policy,
         cooldown_policy=kick_config.cooldown_policy,
-        kick_tx_repository=KickTxRepository(session),
+        kick_tx_repository=kick_tx_repository,
+        no_fill_guard=NoFillGuard(
+            kick_tx_repository,
+            kick_config.no_fill_policy.retry_delays_minutes,
+        ),
     )
     ready_candidates = shortlist.selected_candidates
     token_repo = TokenRepository(session)
@@ -265,6 +273,18 @@ def inspect_kick_candidates(
         build_entry(decision.candidate, state="cooldown", detail=decision.detail)
         for decision in shortlist.cooldown_skips
     ]
+    no_fill_entries = [
+        build_entry(
+            decision.candidate,
+            state=(
+                "no_fill_defer"
+                if decision.skip_reason is not None and decision.skip_reason.value == "NO_FILL_DEFER"
+                else "no_fill_block"
+            ),
+            detail=decision.detail,
+        )
+        for decision in getattr(shortlist, "no_fill_skips", ())
+    ]
     deferred_entries = [
         build_entry(candidate, state="deferred_same_auction")
         for candidate in shortlist.deferred_same_auction_candidates
@@ -293,4 +313,6 @@ def inspect_kick_candidates(
         cooldown_skips=cooldown_entries,
         deferred_same_auction=deferred_entries,
         limited=limited_entries,
+        no_fill_count=len(no_fill_entries),
+        no_fill_skips=no_fill_entries,
     )

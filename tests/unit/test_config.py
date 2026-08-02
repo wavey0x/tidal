@@ -134,6 +134,8 @@ chain_id: 1
 txn_data_freshness_limit_seconds: 1234
 kick:
   default_profile: volatile
+  no_fill:
+    retry_delays_minutes: [720, 1440]
   profiles:
     volatile:
       start_price_buffer_bps: 1000
@@ -226,6 +228,8 @@ monitored_fee_burners:
     label: "yCRV Fee Burner"
 kick:
   default_profile: volatile
+  no_fill:
+    retry_delays_minutes: [720, 1440]
   profiles:
     volatile:
       start_price_buffer_bps: 1000
@@ -257,6 +261,7 @@ kick:
     assert settings.txn_usd_threshold == 250.0
     assert settings.txn_base_fee_cap_gwei == 5.0
     assert settings.kick_config.pricing_policy.default_profile_name == "volatile"
+    assert settings.kick_config.no_fill_policy.retry_delays_minutes == (720, 1440)
 
 
 def test_load_server_settings_does_not_fall_back_to_client_env_file(tmp_path, monkeypatch) -> None:
@@ -273,6 +278,8 @@ def test_load_server_settings_does_not_fall_back_to_client_env_file(tmp_path, mo
 chain_id: 1
 kick:
   default_profile: volatile
+  no_fill:
+    retry_delays_minutes: [720, 1440]
   profiles:
     volatile:
       start_price_buffer_bps: 1000

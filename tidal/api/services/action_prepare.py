@@ -113,7 +113,13 @@ async def prepare_kick_action(
     require_curve_quote: bool | None = None,
     txn_max_gas_limit: int | None = None,
     allow_killed_gauge: bool = False,
+    allow_no_fill_retry: bool = False,
 ) -> tuple[str, list[str], dict[str, object]]:
+    if allow_no_fill_retry and not (auction_address and token_address):
+        raise APIError(
+            "allowNoFillRetry requires an exact auctionAddress and tokenAddress pair",
+            status_code=422,
+        )
     effective_settings = _settings_with_kick_overrides(
         settings,
         txn_max_gas_limit=txn_max_gas_limit,
@@ -131,6 +137,7 @@ async def prepare_kick_action(
         run_id="api-prepare",
         batch=True,
         allow_killed_gauge=allow_killed_gauge,
+        allow_no_fill_retry=allow_no_fill_retry,
     )
     preview = plan.to_preview_payload()
     transactions = plan.to_transaction_payloads()
@@ -155,6 +162,7 @@ async def prepare_kick_action(
             "requireCurveQuote": require_curve_quote,
             "txnMaxGasLimit": effective_settings.txn_max_gas_limit,
             "allowKilledGauge": allow_killed_gauge,
+            "allowNoFillRetry": allow_no_fill_retry,
         },
         preview_payload=preview,
         transactions=transactions,

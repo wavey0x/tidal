@@ -142,7 +142,7 @@ class TxnService:
             "want_address": candidate.want_address,
             "want_symbol": candidate.want_symbol,
             "token_symbol": candidate.token_symbol,
-            "sell_amount": prepared_kick.sell_amount_str,
+            "requested_sell_amount": prepared_kick.sell_amount_str,
             "starting_price": prepared_kick.starting_price_str,
             "minimum_price": prepared_kick.minimum_price_str,
             "minimum_quote": prepared_kick.minimum_quote_str,
@@ -174,8 +174,6 @@ class TxnService:
             "stuck_abort_reason": prepared_operation.reason,
             "normalized_balance": prepared_operation.normalized_balance,
         }
-        if prepared_operation.balance_raw:
-            row["sell_amount"] = str(prepared_operation.balance_raw)
         if candidate.source_type == "strategy":
             row["strategy_address"] = candidate.source_address
         self.kick_tx_repository.insert(row)
@@ -189,6 +187,8 @@ class TxnService:
         source_address: str | None = None,
         auction_address: str | None = None,
         limit: int | None = None,
+        token_address: str | None = None,
+        allow_no_fill_retry: bool = False,
     ) -> TxnRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
@@ -217,6 +217,8 @@ class TxnService:
                 source_address=source_address,
                 auction_address=auction_address,
                 limit=limit,
+                token_address=token_address,
+                allow_no_fill_retry=allow_no_fill_retry,
             )
         finally:
             if lock_file is not None:
@@ -233,6 +235,8 @@ class TxnService:
         source_address: str | None = None,
         auction_address: str | None = None,
         limit: int | None = None,
+        token_address: str | None = None,
+        allow_no_fill_retry: bool = False,
     ) -> TxnRunResult:
         # 1. INSERT txn_runs with status=RUNNING.
         self.txn_run_repository.create({
@@ -251,12 +255,13 @@ class TxnService:
             source_type=source_type,
             source_address=source_address,
             auction_address=auction_address,
-            token_address=None,
+            token_address=token_address,
             limit=limit,
             sender=self._planner_sender() if live else None,
             run_id=run_id,
             batch=batch,
             estimate_transactions=live,
+            allow_no_fill_retry=allow_no_fill_retry,
         )
 
         logger.info(
@@ -269,6 +274,7 @@ class TxnService:
             candidates_shortlisted=len(plan.ranked_candidates),
             candidates_eligible=plan.eligible_count,
             ignored_count=len(plan.ignored_skips),
+            no_fill_count=len(plan.no_fill_skips),
             cooldown_count=len(plan.cooldown_skips),
             deferred_same_auction_count=plan.deferred_same_auction_count,
             limited_candidates_count=plan.limited_count,

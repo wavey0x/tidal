@@ -13,6 +13,7 @@ from tidal.auction_settlement import (
     live_funded_previews,
     path_reason,
 )
+from tidal.auction_rounds import NoFillAction, NoFillGuard
 from tidal.config import Settings
 from tidal.normalizers import to_decimal_string
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
@@ -59,6 +60,20 @@ def _cooldown_skip_payloads(shortlist) -> list[dict[str, object]]:  # noqa: ANN0
             "detail": decision.detail,
         }
         for decision in shortlist.cooldown_skips
+    ]
+
+
+def _no_fill_skip_payloads(shortlist) -> list[dict[str, object]]:  # noqa: ANN001
+    return [
+        {
+            "sourceAddress": decision.candidate.source_address,
+            "auctionAddress": decision.candidate.auction_address,
+            "tokenAddress": decision.candidate.token_address,
+            "tokenSymbol": decision.candidate.token_symbol,
+            "detail": decision.detail,
+            **(decision.policy_data or {}),
+        }
+        for decision in getattr(shortlist, "no_fill_skips", ())
     ]
 
 
@@ -162,8 +177,13 @@ class KickPlanner:
         batch: bool = True,
         estimate_transactions: bool = True,
         allow_killed_gauge: bool = False,
+        allow_no_fill_retry: bool = False,
     ) -> KickPlan:
         kick_config = self.settings.kick_config
+        no_fill_guard = NoFillGuard(
+            self.kick_tx_repository,
+            kick_config.no_fill_policy.retry_delays_minutes,
+        )
         shortlist = self.shortlist_builder(
             self.session,
             usd_threshold=self.settings.txn_usd_threshold,
@@ -176,6 +196,8 @@ class KickPlanner:
             ignore_policy=kick_config.ignore_policy,
             cooldown_policy=kick_config.cooldown_policy,
             kick_tx_repository=self.kick_tx_repository,
+            no_fill_guard=no_fill_guard,
+            allow_exhausted_retry=allow_no_fill_retry,
         )
         candidates_to_prepare = self.candidate_sorter(shortlist.selected_candidates)
 
@@ -189,6 +211,7 @@ class KickPlanner:
             selected_count=len(shortlist.selected_candidates) + len(shortlist.limited_candidates),
             ready_count=len(shortlist.selected_candidates),
             ignored_skips=_ignore_skip_payloads(shortlist),
+            no_fill_skips=_no_fill_skip_payloads(shortlist),
             cooldown_skips=_cooldown_skip_payloads(shortlist),
             deferred_same_auction_count=shortlist.deferred_same_auction_count,
             limited_count=len(shortlist.limited_candidates),
@@ -329,6 +352,20 @@ class KickPlanner:
         prepared_kicks: list[PreparedKick] = []
 
         for candidate in clean_candidates:
+            final_guard = no_fill_guard.decide(
+                auction_address=candidate.auction_address,
+                token_address=candidate.token_address,
+                allow_exhausted_retry=allow_no_fill_retry,
+            )
+            if final_guard.action != NoFillAction.ALLOW:
+                retry_at = final_guard.retry_at.isoformat() if final_guard.retry_at is not None else None
+                reason = final_guard.reason_code.value
+                if retry_at is not None:
+                    reason += f" | retry at {retry_at}"
+                plan.skipped_during_prepare.append(
+                    SkippedPreparedCandidate(candidate=candidate, reason=reason)
+                )
+                continue
             result = await self.preparer.prepare_kick(
                 candidate,
                 run_id=run_id,

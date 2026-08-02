@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
+from tidal.auction_rounds import NoFillAction, NoFillGuard
 from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy
 from tidal.transaction_service.types import KickAction, KickCandidate, KickDecision, SkipReason, SourceType
 
@@ -25,6 +26,7 @@ class ShortlistResult:
     selected_candidates: list[KickCandidate]
     deferred_same_auction_count: int
     ignored_skips: list[KickDecision] = field(default_factory=list)
+    no_fill_skips: list[KickDecision] = field(default_factory=list)
     cooldown_skips: list[KickDecision] = field(default_factory=list)
     deferred_same_auction_candidates: list[KickCandidate] = field(default_factory=list)
     limited_candidates: list[KickCandidate] = field(default_factory=list)
@@ -229,6 +231,65 @@ def _apply_cooldown_policy(
     return allowed, cooldown_skips
 
 
+def _apply_no_fill_policy(
+    candidates: list[KickCandidate],
+    *,
+    no_fill_guard: NoFillGuard | None,
+    allow_exhausted_retry: bool,
+) -> tuple[list[KickCandidate], list[KickDecision]]:
+    if no_fill_guard is None:
+        return candidates, []
+
+    allowed: list[KickCandidate] = []
+    skipped: list[KickDecision] = []
+    for candidate in candidates:
+        guard_decision = no_fill_guard.decide(
+            auction_address=candidate.auction_address,
+            token_address=candidate.token_address,
+            allow_exhausted_retry=allow_exhausted_retry,
+        )
+        if guard_decision.action == NoFillAction.ALLOW:
+            allowed.append(candidate)
+            continue
+        retry_at = guard_decision.retry_at.isoformat() if guard_decision.retry_at is not None else None
+        detail = guard_decision.reason_code.value
+        if retry_at is not None:
+            detail += f" | retry at {retry_at}"
+        skipped.append(
+            KickDecision(
+                candidate=candidate,
+                action=KickAction.SKIP,
+                skip_reason=(
+                    SkipReason.NO_FILL_DEFER
+                    if guard_decision.action == NoFillAction.DEFER
+                    else SkipReason.NO_FILL_BLOCK
+                ),
+                detail=detail,
+                policy_data={
+                    "decision": guard_decision.action.value,
+                    "reasonCode": guard_decision.reason_code.value,
+                    "consecutiveNoFills": guard_decision.consecutive_no_fills,
+                    "retryOrdinal": guard_decision.retry_ordinal,
+                    "retryTotal": guard_decision.retry_total,
+                    "retryAt": retry_at,
+                    "kickIds": list(guard_decision.kick_ids),
+                    "recoveryIds": list(guard_decision.recovery_ids),
+                },
+            )
+        )
+        logger.info(
+            "txn_candidate_no_fill_policy",
+            source=candidate.source_address,
+            auction=candidate.auction_address,
+            token=candidate.token_address,
+            decision=guard_decision.action.value,
+            reason_code=guard_decision.reason_code.value,
+            consecutive_no_fills=guard_decision.consecutive_no_fills,
+            retry_at=retry_at,
+        )
+    return allowed, skipped
+
+
 def build_shortlist(
     session: Session,
     *,
@@ -242,6 +303,8 @@ def build_shortlist(
     ignore_policy: IgnorePolicy | None = None,
     cooldown_policy: CooldownPolicy | None = None,
     kick_tx_repository: KickTxRepository | None = None,
+    no_fill_guard: NoFillGuard | None = None,
+    allow_exhausted_retry: bool = False,
 ) -> ShortlistResult:
     """Query SQLite for source-token pairs above threshold with fresh data."""
 
@@ -401,8 +464,13 @@ def build_shortlist(
         all_eligible_candidates,
         ignore_policy=resolved_ignore_policy,
     )
-    candidates_after_cooldown, cooldown_skips = _apply_cooldown_policy(
+    candidates_after_no_fill, no_fill_skips = _apply_no_fill_policy(
         candidates_after_ignore,
+        no_fill_guard=no_fill_guard,
+        allow_exhausted_retry=allow_exhausted_retry,
+    )
+    candidates_after_cooldown, cooldown_skips = _apply_cooldown_policy(
+        candidates_after_no_fill,
         kick_tx_repository=kick_tx_repository,
         cooldown_policy=resolved_cooldown_policy,
     )
@@ -422,6 +490,7 @@ def build_shortlist(
         eligible_candidates=all_eligible_candidates,
         selected_candidates=selected_candidates,
         ignored_skips=ignored_skips,
+        no_fill_skips=no_fill_skips,
         cooldown_skips=cooldown_skips,
         deferred_same_auction_candidates=deferred_same_auction_candidates,
         deferred_same_auction_count=len(deferred_same_auction_candidates),

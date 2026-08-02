@@ -52,6 +52,7 @@ Auth behavior:
 |---|---|---|
 | `GET` | `/health` | Liveness/ready check |
 | `GET` | `/api/v1/tidal/dashboard` | Dashboard payload for strategies, fee burners, balances, and auction metadata |
+| `GET` | `/api/v1/tidal/alerts` | Current read-only operational alerts and scheduled retry watches |
 | `GET` | `/api/v1/tidal/logs/kicks` | Kick history with filters |
 | `GET` | `/api/v1/tidal/logs/scans` | Scan run history |
 | `GET` | `/api/v1/tidal/logs/runs/{run_id}` | Detail for one historical run |
@@ -120,9 +121,13 @@ Adds:
 {
   "sender": "0x...",
   "requireCurveQuote": true,
-  "minUsdValue": 200
+  "minUsdValue": 200,
+  "allowNoFillRetry": false
 }
 ```
+
+`allowNoFillRetry` requires an exact `auctionAddress` and `tokenAddress` and
+bypasses only an exhausted no-fill retry budget for that one preparation.
 
 ### `POST /auctions/deploy/prepare`
 
@@ -210,7 +215,7 @@ database is locked; retry the request
 
 ## Operational Notes
 
-- Dashboard and logs are intentionally public.
+- Dashboard, Alerts, and logs are intentionally public.
 - Mutating routes are authenticated.
 - The server prepares actions, but the CLI client signs locally.
-- The API process may run a background receipt reconciler when `RPC_URL` is configured.
+- The scanner runs one bounded shared receipt-reconciliation pass before evaluating operational alerts.

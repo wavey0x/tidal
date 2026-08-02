@@ -90,11 +90,17 @@ class CooldownPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class NoFillPolicy:
+    retry_delays_minutes: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class KickConfig:
     pricing_policy: PricingPolicy
     token_sizing_policy: TokenSizingPolicy
     ignore_policy: IgnorePolicy
     cooldown_policy: CooldownPolicy
+    no_fill_policy: NoFillPolicy
 
 
 def _coerce_bps(value: object, *, field_name: str, profile_name: str) -> int:
@@ -319,6 +325,28 @@ def _build_cooldown_policy(raw: Mapping[str, object]) -> CooldownPolicy:
     )
 
 
+def _build_no_fill_policy(raw: Mapping[str, object]) -> NoFillPolicy:
+    raw_no_fill = raw.get("no_fill")
+    if not isinstance(raw_no_fill, dict):
+        raise ValueError("kick config must define no_fill")
+    raw_delays = raw_no_fill.get("retry_delays_minutes")
+    if not isinstance(raw_delays, list) or not raw_delays:
+        raise ValueError("no_fill.retry_delays_minutes must be a non-empty list")
+
+    delays: list[int] = []
+    for index, raw_delay in enumerate(raw_delays):
+        try:
+            delay = int(raw_delay)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"no_fill.retry_delays_minutes[{index}] must be an integer") from exc
+        if isinstance(raw_delay, bool) or delay <= 0:
+            raise ValueError(f"no_fill.retry_delays_minutes[{index}] must be a positive integer")
+        if delays and delay <= delays[-1]:
+            raise ValueError("no_fill.retry_delays_minutes must be strictly increasing")
+        delays.append(delay)
+    return NoFillPolicy(retry_delays_minutes=tuple(delays))
+
+
 def build_kick_config(raw: Mapping[str, object] | None = None) -> KickConfig:
     resolved_raw = raw or {}
     return KickConfig(
@@ -326,6 +354,7 @@ def build_kick_config(raw: Mapping[str, object] | None = None) -> KickConfig:
         token_sizing_policy=_build_token_sizing_policy(resolved_raw),
         ignore_policy=_build_ignore_policy(resolved_raw),
         cooldown_policy=_build_cooldown_policy(resolved_raw),
+        no_fill_policy=_build_no_fill_policy(resolved_raw),
     )
 
 

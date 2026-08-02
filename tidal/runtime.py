@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from tidal.alerts.base import NullAlertSink
+from tidal.alerts.dispatcher import AlertDispatcher
+from tidal.alerts.service import AlertService
+from tidal.alerts.telegram import TelegramAlertSink
 from tidal.auctionscan import AuctionScanService
 from tidal.chain.contracts.fee_burner import FeeBurnerReader
 from tidal.chain.contracts.erc20 import ERC20Reader
@@ -35,6 +38,7 @@ from tidal.persistence.repositories import (
     TokenRepository,
     VaultRepository,
 )
+from tidal.operation_reconciler import OperationReconciler
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.pricing.service import TokenPriceRefreshService
 from tidal.scanner.balance_reader import BalanceReader
@@ -140,7 +144,12 @@ def build_scanner_service(
         token_repository=token_repository,
     )
 
-    alert_sink = NullAlertSink()
+    alert_sink = build_alert_sink(settings)
+    operation_reconciler = OperationReconciler(
+        session=session,
+        web3_client=web3_client,
+        auction_kicker_address=settings.auction_kicker_address,
+    )
 
     signer = None
     if auto_settle or auto_enable_tokens:
@@ -164,6 +173,7 @@ def build_scanner_service(
             max_gas_limit=settings.txn_max_gas_limit,
             chain_id=settings.chain_id,
             settings=settings,
+            operation_reconciler=operation_reconciler,
         )
 
     auction_token_enabler = None
@@ -229,6 +239,24 @@ def build_scanner_service(
         auctionscan_service=AuctionScanService(session, settings),
         auctionscan_enrichment_batch_size=settings.auctionscan_enrichment_batch_size,
         alert_sink=alert_sink,
+        operation_reconciler=operation_reconciler,
+        alert_service=AlertService(session=session, settings=settings),
+        alert_dispatcher=AlertDispatcher(session=session, sink=alert_sink),
+    )
+
+
+def build_alert_sink(settings: Settings):  # noqa: ANN201
+    values = (
+        settings.telegram_bot_token,
+        settings.telegram_admin_alert_chat_id,
+        settings.telegram_operations_alert_chat_id,
+    )
+    if not all(value and value.strip() for value in values):
+        return NullAlertSink()
+    return TelegramAlertSink(
+        bot_token=str(settings.telegram_bot_token),
+        admin_alert_chat_id=str(settings.telegram_admin_alert_chat_id),
+        operations_alert_chat_id=str(settings.telegram_operations_alert_chat_id),
     )
 
 
@@ -335,6 +363,11 @@ def build_txn_service(
         chain_id=settings.chain_id,
         confirm_fn=confirm_fn,
         quote_spot_warning_threshold_pct=settings.txn_quote_spot_warning_threshold_pct,
+        operation_reconciler=OperationReconciler(
+            session=session,
+            web3_client=web3_client,
+            auction_kicker_address=settings.auction_kicker_address,
+        ),
     )
     planner = KickPlanner(
         session=session,

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Big from "big.js";
 import { keccak_256 } from "js-sha3";
@@ -49,6 +49,8 @@ function parseLocation() {
     page = "kicks";
   } else if (path === "fee-burner") {
     page = "fee-burner";
+  } else if (path === "alerts") {
+    page = "alerts";
   }
   return {
     page,
@@ -61,7 +63,13 @@ function parseLocation() {
 }
 
 function navigateTo(page, params) {
-  const slug = page === "kicks" ? "logs" : page === "fee-burner" ? "fee-burner" : "strategies";
+  const slug = page === "kicks"
+    ? "logs"
+    : page === "fee-burner"
+      ? "fee-burner"
+      : page === "alerts"
+        ? "alerts"
+        : "strategies";
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params || {})) {
     if (value == null || value === "") {
@@ -522,6 +530,21 @@ function formatTimestamp(value) {
     return value;
   }
   return date.toLocaleString();
+}
+
+function formatUtcTimestamp(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    timeZone: "UTC",
+    timeZoneName: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatRelativeTimestamp(value, nowMs) {
@@ -1092,7 +1115,7 @@ function ThemeSwitch({ themePreference, resolvedTheme, onCycle }) {
   );
 }
 
-function TabBar({ activePage, onChangePage }) {
+function TabBar({ activePage, onChangePage, alertCount = 0 }) {
   return (
     <nav className="tab-bar" role="tablist">
       <button
@@ -1121,6 +1144,20 @@ function TabBar({ activePage, onChangePage }) {
         onClick={() => onChangePage("kicks")}
       >
         Logs
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activePage === "alerts"}
+        className={`tab-item ${activePage === "alerts" ? "is-active" : ""}`}
+        onClick={() => onChangePage("alerts")}
+      >
+        Alerts
+        {alertCount > 0 ? (
+          <span className="alert-nav-badge" aria-label={`${alertCount} alerts need action`}>
+            {alertCount}
+          </span>
+        ) : null}
       </button>
     </nav>
   );
@@ -2276,6 +2313,144 @@ function FeeBurnerPage({
   );
 }
 
+function AlertRoundTimeline({ rounds = [] }) {
+  if (!rounds.length) return null;
+  return (
+    <ol className="alert-timeline">
+      {rounds.map((round) => (
+        <li key={`${round.kickId}-${round.closeId || "open"}`}>
+          <div className="alert-timeline-heading">
+            <span>Round {round.kickId}</span>
+            <span className="alert-state-text">{String(round.outcome || "UNKNOWN").replaceAll("_", " ")}</span>
+          </div>
+          <div className="alert-evidence-grid mono">
+            <span>Placed {round.placedAmount ?? "?"}</span>
+            <span>Recovered {round.recoveredAmount ?? "?"}</span>
+            {round.requestedAmount != null && round.requestedAmount !== round.placedAmount ? (
+              <span>Requested {round.requestedAmount}</span>
+            ) : null}
+            <span>Quote {round.quoteAmount ?? "?"}</span>
+            <span>Minimum {round.minimumQuote ?? "?"}</span>
+          </div>
+          {round.providers?.entries?.length ? (
+            <div className="alert-provider-evidence">
+              {round.providers.entries.map((provider) => (
+                <span key={provider.name} className="mono">
+                  {provider.name}: {provider.status || "unknown"} {provider.amountOut ?? "?"}
+                </span>
+              ))}
+              {round.providers.spreadPct != null ? (
+                <span>
+                  Providers were within {round.providers.spreadPct}% of one another; this does not identify the cause.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="alert-inline-links">
+            {round.kickTxHash ? <><span>Kick</span> <EtherscanTxLink txHash={round.kickTxHash} /></> : null}
+            {round.closeTxHash ? <><span>Close</span> <EtherscanTxLink txHash={round.closeTxHash} /></> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function AlertCard({ item, nowMs }) {
+  const sourceLabel = item.scope?.sourceType === "fee_burner" ? "Fee burner" : "Strategy";
+  const retryLabel = item.retryAt
+    ? `${new Date(item.retryAt).getTime() <= nowMs ? "Eligible now" : formatRelativeTimestamp(item.retryAt, nowMs)} · ${formatUtcTimestamp(item.retryAt)}`
+    : null;
+  return (
+    <article className={`alert-card alert-${item.severity}`}>
+      <div className="alert-card-header">
+        <div>
+          <div className="alert-kicker">{item.severity} · {item.status.replaceAll("_", " ")}</div>
+          <h3>{item.title}</h3>
+        </div>
+        <span className="alert-age">
+          <span>{formatRelativeTimestamp(item.openedAt, nowMs)}</span>
+          <span>{formatUtcTimestamp(item.openedAt)}</span>
+        </span>
+      </div>
+      <p>{item.summary}</p>
+      {item.scope?.sourceAddress ? (
+        <EntityIdentity primary={sourceLabel} address={item.scope.sourceAddress} />
+      ) : null}
+      <div className="alert-addresses">
+        {item.scope?.auctionAddress ? (
+          <div><span>Auction</span><AddressLinkCopy address={item.scope.auctionAddress} /></div>
+        ) : null}
+        {item.scope?.tokenAddress ? (
+          <div><span>Token</span><AddressLinkCopy address={item.scope.tokenAddress} /></div>
+        ) : null}
+      </div>
+      {retryLabel ? <div className="alert-retry"><strong>Retry</strong> {retryLabel}</div> : null}
+      <div className="alert-next-action">
+        <strong>Next</strong>
+        <span>{item.nextAction?.instruction}</span>
+        {item.nextAction?.command ? (
+          <span className="alert-command mono">
+            {item.nextAction.command}
+            <CopyIconButton
+              valueToCopy={item.nextAction.command}
+              title="Copy command"
+              ariaLabel="Copy scoped retry command"
+            />
+          </span>
+        ) : null}
+      </div>
+      <div className="alert-links">
+        {item.links?.logs ? <a href={item.links.logs}>Tidal Logs</a> : null}
+        {item.links?.etherscan ? <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">Etherscan</a> : null}
+        {item.links?.auctionScan ? <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">AuctionScan</a> : null}
+      </div>
+      <details className="alert-details">
+        <summary>Evidence</summary>
+        {item.kind === "auction_retry" ? (
+          <AlertRoundTimeline rounds={item.evidence?.rounds || []} />
+        ) : (
+          <dl className="alert-evidence-list">
+            {Object.entries(item.evidence || {}).map(([key, value]) => (
+              <div key={key}><dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt><dd className="mono">{Array.isArray(value) ? value.join(", ") : String(value ?? "—")}</dd></div>
+            ))}
+          </dl>
+        )}
+      </details>
+    </article>
+  );
+}
+
+function AlertsPage({ data, loading, error, nowMs }) {
+  const items = data?.items || [];
+  const needsAction = items.filter((item) => item.status === "needs_action");
+  const watching = items.filter((item) => item.status === "watching");
+  return (
+    <section className="alerts-page" aria-live="polite">
+      <div className="alerts-heading">
+        <div><h2>Alerts</h2><p>Canonical issues that affect auction automation and scanner health.</p></div>
+        {data?.evaluatedAt ? <span>Evaluated {formatRelativeTimestamp(data.evaluatedAt, nowMs)}</span> : null}
+      </div>
+      {loading && !data ? <p className="muted">Loading alerts…</p> : null}
+      {error ? <p className="error">{error}</p> : null}
+      {!loading && !error && !items.length ? (
+        <div className="alerts-empty">
+          <strong>No operator action needed</strong>
+          <span>
+            Last evaluated {formatRelativeTimestamp(data?.evaluatedAt, nowMs)} · latest successful scan {formatRelativeTimestamp(data?.latestSuccessfulScanAt, nowMs)}
+          </span>
+        </div>
+      ) : null}
+      {needsAction.length ? (
+        <section className="alert-section"><h2>Needs action</h2>{needsAction.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} />)}</section>
+      ) : null}
+      {watching.length ? (
+        <section className="alert-section"><h2>Watching</h2>{watching.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} />)}</section>
+      ) : null}
+    </section>
+  );
+}
+
 export default function App() {
   const [initialLocation] = useState(() => parseLocation());
   const [activePage, setActivePage] = useState(() => initialLocation.page);
@@ -2297,6 +2472,9 @@ export default function App() {
   const [summary, setSummary] = useState(null);
   const [loadingRows, setLoadingRows] = useState(true);
   const [error, setError] = useState("");
+  const [alertsData, setAlertsData] = useState(null);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState("");
   const [displayMode, setDisplayMode] = useState("usd");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isMobile = useMediaQuery("(max-width: 600px)");
@@ -2318,6 +2496,42 @@ export default function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  const loadAlerts = useCallback(async (signal) => {
+    setAlertsError("");
+    try {
+      const response = await apiFetch("/alerts", { signal });
+      if (!response.ok) throw new Error("Unable to load alerts");
+      const payload = await response.json();
+      setAlertsData(payload?.data || { items: [], needsActionCount: 0 });
+    } catch (loadError) {
+      if (loadError.name !== "AbortError") {
+        setAlertsError(loadError.message || "Unable to load alerts");
+      }
+    } finally {
+      if (!signal.aborted) setAlertsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadAlerts(controller.signal);
+    return () => controller.abort();
+  }, [loadAlerts]);
+
+  useEffect(() => {
+    if (activePage !== "alerts") return undefined;
+    let controller = new AbortController();
+    const intervalId = window.setInterval(() => {
+      controller.abort();
+      controller = new AbortController();
+      loadAlerts(controller.signal);
+    }, 60000);
+    return () => {
+      controller.abort();
+      window.clearInterval(intervalId);
+    };
+  }, [activePage, loadAlerts]);
 
   const resolvedTheme = themePreference || systemTheme;
   const headerLogoSrc = resolvedTheme === "dark" ? "/tidal-logo-dark.svg" : "/tidal-logo-light.svg";
@@ -2872,7 +3086,11 @@ export default function App() {
             <img src={headerLogoSrc} alt="" className="brand-logo" aria-hidden="true" />
             <span>Tidal</span>
           </h1>
-          <TabBar activePage={activePage} onChangePage={handlePageChange} />
+          <TabBar
+            activePage={activePage}
+            onChangePage={handlePageChange}
+            alertCount={alertsData?.needsActionCount || 0}
+          />
           <ThemeSwitch
             themePreference={themePreference}
             resolvedTheme={resolvedTheme}
@@ -2890,6 +3108,10 @@ export default function App() {
           initialStatus={initialLogsStatus}
           initialSearch={initialLogsQuery}
         />
+      ) : null}
+
+      {activePage === "alerts" ? (
+        <AlertsPage data={alertsData} loading={alertsLoading} error={alertsError} nowMs={nowMs} />
       ) : null}
 
       {activePage === "strategies" ? (

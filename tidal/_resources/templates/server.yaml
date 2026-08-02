@@ -18,6 +18,7 @@ txn_require_curve_quote: true
 max_batch_kick_size: 5
 batch_kick_delay_seconds: 5
 auction_factory_address: "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
+scan_stale_after_minutes: 90
 
 monitored_fee_burners:
   - address: "0xb911Fcce8D5AFCEc73E072653107260bb23C1eE8"
@@ -26,6 +27,9 @@ monitored_fee_burners:
 
 kick:
   default_profile: volatile
+
+  no_fill:
+    retry_delays_minutes: [720, 1440]
 
   profiles:
     volatile:

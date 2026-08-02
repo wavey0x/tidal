@@ -41,6 +41,7 @@ def post_kick_inspect(
             "blocked_live_count",
             "preview_failed_count",
             "ignored_count",
+            "no_fill_count",
             "cooldown_count",
             "deferred_same_auction_count",
             "limited_count",
@@ -70,6 +71,7 @@ async def post_kick_prepare(
         require_curve_quote=payload.require_curve_quote,
         txn_max_gas_limit=payload.txn_max_gas_limit,
         allow_killed_gauge=payload.allow_killed_gauge,
+        allow_no_fill_retry=payload.allow_no_fill_retry,
     )
     return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}
 

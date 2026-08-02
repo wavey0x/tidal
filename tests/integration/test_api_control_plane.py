@@ -963,7 +963,8 @@ def test_legacy_kick_action_without_tx_index_materializes_through_logs_kicks(tmp
     payload = logs_response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["total"] == 1
-    assert payload["data"]["kicks"][0]["status"] == "CONFIRMED"
+    # Client-reported receipt metadata does not substitute for canonical event decoding.
+    assert payload["data"]["kicks"][0]["status"] == "SUBMITTED"
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
     assert payload["data"]["kicks"][0]["wantSymbol"] == "USDC"
@@ -1308,7 +1309,8 @@ def test_settle_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Pat
     payload = logs_response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["total"] == 1
-    assert payload["data"]["kicks"][0]["status"] == "CONFIRMED"
+    # The shared reconciler finalizes this after the raw receipt is available from RPC.
+    assert payload["data"]["kicks"][0]["status"] == "SUBMITTED"
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["operationType"] == "resolve_auction"
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"

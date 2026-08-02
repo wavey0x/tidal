@@ -184,7 +184,9 @@ def _build_stub_planner(session, kick_tx_repo, preparer):
         run_id,
         batch=True,
         estimate_transactions=True,
+        allow_no_fill_retry=False,
     ):
+        del allow_no_fill_retry
         shortlist = build_shortlist(
             session,
             usd_threshold=100.0,
@@ -741,11 +743,12 @@ async def test_dry_run_planner_persists_resolve_and_kick_rows(session):
     assert len(rows) == 2
     assert rows[0]["operation_type"] == "kick"
     assert rows[0]["status"] == "DRY_RUN"
-    assert rows[0]["sell_amount"] == prepared_kick.sell_amount_str
+    assert rows[0]["sell_amount"] is None
+    assert rows[0]["requested_sell_amount"] == prepared_kick.sell_amount_str
     assert rows[1]["operation_type"] == "resolve_auction"
     assert rows[1]["status"] == "DRY_RUN"
     assert rows[1]["stuck_abort_reason"] == "inactive kicked lot with stranded inventory"
-    assert rows[1]["sell_amount"] == "123"
+    assert rows[1]["sell_amount"] is None
     assert rows[1]["price_usd"] is None
     assert rows[1]["usd_value"] is None
 

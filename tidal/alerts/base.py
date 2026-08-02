@@ -1,15 +1,31 @@
-"""Alert sink interfaces."""
+"""Destination-aware external alert transport types."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 
+@dataclass(frozen=True, slots=True)
+class AlertMessage:
+    delivery_key: str
+    occurrence_id: str
+    severity: str
+    title: str
+    summary: str
+    retry_at: str | None
+    links: tuple[str, ...]
+
+
 class AlertSink(Protocol):
-    async def send_critical(self, title: str, body: str) -> None:
-        """Send a critical alert to an external system."""
+    @property
+    def destination_codes(self) -> tuple[str, ...]: ...
+
+    async def send(self, destination_code: str, message: AlertMessage) -> None: ...
 
 
 class NullAlertSink:
-    async def send_critical(self, title: str, body: str) -> None:
-        return None
+    destination_codes: tuple[str, ...] = ()
+
+    async def send(self, destination_code: str, message: AlertMessage) -> None:
+        del destination_code, message

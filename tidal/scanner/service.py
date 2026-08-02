@@ -84,6 +84,9 @@ class ScannerService:
         auctionscan_service=None,
         auctionscan_enrichment_batch_size: int = 0,
         alert_sink: AlertSink,
+        operation_reconciler=None,
+        alert_service=None,
+        alert_dispatcher=None,
     ):
         del concurrency
         self.session = session
@@ -118,14 +121,11 @@ class ScannerService:
         self.auctionscan_service = auctionscan_service
         self.auctionscan_enrichment_batch_size = auctionscan_enrichment_batch_size
         self.alert_sink = alert_sink
+        self.operation_reconciler = operation_reconciler
+        self.alert_service = alert_service
+        self.alert_dispatcher = alert_dispatcher
 
     async def scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
-        _TOTAL_STEPS = 12
-
-        def _progress(step: int, label: str, detail: str = "") -> None:
-            if on_progress is not None:
-                on_progress(step, _TOTAL_STEPS, label, detail)
-
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
         self.scan_run_repository.create(
@@ -142,6 +142,46 @@ class ScannerService:
                 "error_summary": None,
             }
         )
+        self.session.commit()
+        try:
+            result = await self._run_scan(
+                run_id=run_id,
+                started_at=started_at,
+                on_progress=on_progress,
+            )
+        except Exception as exc:
+            self.session.rollback()
+            if self.scan_run_repository.status(run_id) == "RUNNING":
+                self.scan_run_repository.finalize(
+                    run_id,
+                    finished_at=utcnow_iso(),
+                    status="FAILED",
+                    vaults_seen=0,
+                    strategies_seen=0,
+                    pairs_seen=0,
+                    pairs_succeeded=0,
+                    pairs_failed=0,
+                    error_summary=f"scan aborted: {exc.__class__.__name__}",
+                )
+                self.session.commit()
+            await self._post_commit_alerts()
+            raise
+        await self._post_commit_alerts()
+        return result
+
+    async def _run_scan(
+        self,
+        *,
+        run_id: str,
+        started_at: str,
+        on_progress: ProgressCallback | None,
+    ) -> ScanRunResult:
+        del started_at
+        _TOTAL_STEPS = 12
+
+        def _progress(step: int, label: str, detail: str = "") -> None:
+            if on_progress is not None:
+                on_progress(step, _TOTAL_STEPS, label, detail)
 
         errors: list[ScanItemError] = []
         vaults_seen = 0
@@ -149,6 +189,17 @@ class ScannerService:
         pairs_seen = 0
         pairs_succeeded = 0
         pairs_failed = 0
+
+        if self.operation_reconciler is not None:
+            reconciliation_errors = await self.operation_reconciler.reconcile_all(timeout_seconds=2)
+            errors.extend(
+                ScanItemError(
+                    stage="OPERATION_RECONCILIATION",
+                    error_code=error.error_code,
+                    error_message=error.error_message,
+                )
+                for error in reconciliation_errors
+            )
 
         stage_a_stats = {
             "batch_count": 0,
@@ -213,26 +264,7 @@ class ScannerService:
         }
 
         _progress(1, "Discovering strategies")
-        try:
-            discovered, vaults_seen, stage_a_stats = await self.strategy_discovery_service.discover()
-        except Exception as exc:  # noqa: BLE001
-            status = "FAILED"
-            summary = f"discovery_failed: {exc}"
-            finished_at = utcnow_iso()
-            self.scan_run_repository.finalize(
-                run_id,
-                finished_at=finished_at,
-                status=status,
-                vaults_seen=0,
-                strategies_seen=0,
-                pairs_seen=0,
-                pairs_succeeded=0,
-                pairs_failed=0,
-                error_summary=summary,
-            )
-            self.session.commit()
-            await self.alert_sink.send_critical("scan failed", summary)
-            raise
+        discovered, vaults_seen, stage_a_stats = await self.strategy_discovery_service.discover()
 
         now_iso = utcnow_iso()
         vault_addresses = sorted(
@@ -767,14 +799,6 @@ class ScannerService:
         )
         self.session.commit()
 
-        if status == "FAILED":
-            await self.alert_sink.send_critical(
-                "scan failed",
-                f"run_id={run_id} pairs_seen={pairs_seen} pairs_failed={pairs_failed}",
-            )
-
-        await self._alert_repeated_errors(run_id, errors)
-
         multicall_subcalls_total = (
             stage_a_stats["subcalls_total"]
             + stage_b_stats["subcalls_total"]
@@ -1033,37 +1057,14 @@ class ScannerService:
 
         return stats
 
-    async def _alert_repeated_errors(self, run_id: str, errors: list[ScanItemError]) -> None:
-        if not errors:
+    async def _post_commit_alerts(self) -> None:
+        if self.alert_service is None or self.alert_dispatcher is None:
             return
-
-        latest_runs = self.scan_run_repository.latest_run_ids(3)
-        if len(latest_runs) < 3 or latest_runs[0] != run_id:
-            return
-
-        unique_keys = {
-            (err.source_address, err.token_address, err.stage, err.error_code)
-            for err in errors
-        }
-
-        for source_address, token_address, stage, error_code in unique_keys:
-            if all(
-                self.scan_item_error_repository.has_error_for_run(
-                    candidate_run_id,
-                    source_address=source_address,
-                    token_address=token_address,
-                    stage=stage,
-                    error_code=error_code,
-                )
-                for candidate_run_id in latest_runs
-            ):
-                await self.alert_sink.send_critical(
-                    "repeated scan item failure",
-                    (
-                        f"source={source_address} token={token_address} "
-                        f"stage={stage} code={error_code} repeated across 3 runs"
-                    ),
-                )
+        try:
+            evaluation = self.alert_service.evaluate()
+            await self.alert_dispatcher.dispatch(evaluation.transitions)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("post_commit_alert_evaluation_failed", error_type=exc.__class__.__name__)
 
     async def _hydrate_cached_names(
         self,

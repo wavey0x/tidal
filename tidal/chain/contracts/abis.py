@@ -154,6 +154,23 @@ FEE_BURNER_ABI = [
 
 AUCTION_ABI = [
     {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "from", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "available", "type": "uint256"},
+        ],
+        "name": "AuctionKicked",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "from", "type": "address"},
+        ],
+        "name": "AuctionSettled",
+        "type": "event",
+    },
+    {
         "inputs": [],
         "name": "want",
         "outputs": [{"internalType": "address", "name": "", "type": "address"}],
@@ -349,6 +366,43 @@ ERC20_ABI = [
 ]
 
 AUCTION_KICKER_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "source", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "auction", "type": "address"},
+            {"indexed": False, "internalType": "address", "name": "sellToken", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "sellAmount", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "startingPrice", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "stepDecayRateBps", "type": "uint256"},
+        ],
+        "name": "Kicked",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "auction", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "sellToken", "type": "address"},
+            {"indexed": False, "internalType": "uint8", "name": "path", "type": "uint8"},
+            {"indexed": False, "internalType": "address", "name": "receiver", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "recoveredBalance", "type": "uint256"},
+        ],
+        "name": "AuctionResolved",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "auction", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "sellToken", "type": "address"},
+            {"indexed": False, "internalType": "address", "name": "receiver", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "recoveredBalance", "type": "uint256"},
+        ],
+        "name": "AuctionSwept",
+        "type": "event",
+    },
     {
         "inputs": [
             {"internalType": "address", "name": "auction", "type": "address"},

@@ -45,6 +45,7 @@ class KickExecutor:
         confirm_fn=None,
         quote_spot_warning_threshold_pct: float = 2.0,
         logger_instance=None,
+        operation_reconciler=None,
     ) -> None:
         self.web3_client = web3_client
         self.signer = signer
@@ -59,6 +60,7 @@ class KickExecutor:
         self.confirm_fn = confirm_fn
         self.quote_spot_warning_threshold_pct = Decimal(str(quote_spot_warning_threshold_pct))
         self.logger = logger_instance or logger
+        self.operation_reconciler = operation_reconciler
 
     def _require_signer(self):
         if self.signer is None:
@@ -77,6 +79,7 @@ class KickExecutor:
         token_address: str | None = None,
         token_symbol: str | None = None,
         sell_amount: str | None = None,
+        requested_sell_amount: str | None = None,
         starting_price: str | None = None,
         minimum_price: str | None = None,
         minimum_quote: str | None = None,
@@ -111,6 +114,8 @@ class KickExecutor:
             row["error_message"] = error_message
         if sell_amount is not None:
             row["sell_amount"] = sell_amount
+        if requested_sell_amount is not None:
+            row["requested_sell_amount"] = requested_sell_amount
         if starting_price is not None:
             row["starting_price"] = starting_price
         if minimum_price is not None:
@@ -135,6 +140,13 @@ class KickExecutor:
             row["normalized_balance"] = normalized_balance
         if stuck_abort_reason is not None:
             row["stuck_abort_reason"] = stuck_abort_reason
+        if operation_type in {"resolve_auction", "sweep_auction"}:
+            round_kick = self.kick_tx_repository.latest_confirmed_unclosed_kick(
+                str(row["auction_address"]),
+                str(row["token_address"]),
+            )
+            if round_kick is not None:
+                row["round_kick_id"] = int(round_kick["id"])
         return self.kick_tx_repository.insert(row)
 
     def _fail(
@@ -211,7 +223,7 @@ class KickExecutor:
             utcnow_iso(),
             status=result.status,
             error_message=result.error_message or "candidate preparation failed",
-            sell_amount=result.sell_amount,
+            requested_sell_amount=result.sell_amount,
             starting_price=result.starting_price,
             minimum_price=result.minimum_price,
             minimum_quote=result.minimum_quote,
@@ -239,7 +251,7 @@ class KickExecutor:
     @staticmethod
     def _pk_audit_kwargs(prepared_kick: PreparedKick) -> dict[str, object]:
         return {
-            "sell_amount": prepared_kick.sell_amount_str,
+            "requested_sell_amount": prepared_kick.sell_amount_str,
             "starting_price": prepared_kick.starting_price_str,
             "minimum_price": prepared_kick.minimum_price_str,
             "minimum_quote": prepared_kick.minimum_quote_str,
@@ -257,8 +269,6 @@ class KickExecutor:
         return {
             "token_address": prepared_operation.sell_token,
             "token_symbol": prepared_operation.token_symbol,
-            "sell_amount": str(prepared_operation.balance_raw),
-            "normalized_balance": prepared_operation.normalized_balance,
             "stuck_abort_reason": prepared_operation.reason,
         }
 
@@ -543,14 +553,18 @@ class KickExecutor:
             )
 
         results = []
+        if self.operation_reconciler is not None:
+            await self.operation_reconciler.finalize_receipt(tx_hash, receipt)
         for index, prepared_kick in enumerate(prepared_kicks):
-            self.kick_tx_repository.update_status(
-                kick_tx_ids[index],
-                status=final_status.value,
-                gas_used=receipt_gas_used,
-                gas_price_gwei=effective_gwei,
-                block_number=receipt_block,
-            )
+            if self.operation_reconciler is None:
+                self.kick_tx_repository.update_status(
+                    kick_tx_ids[index],
+                    status=final_status.value,
+                    gas_used=receipt_gas_used,
+                    gas_price_gwei=effective_gwei,
+                    block_number=receipt_block,
+                )
+            persisted = self.kick_tx_repository.get(kick_tx_ids[index]) or {}
             results.append(
                 KickResult(
                     kick_tx_id=kick_tx_ids[index],
@@ -559,7 +573,11 @@ class KickExecutor:
                     gas_used=receipt_gas_used,
                     gas_price_gwei=effective_gwei,
                     block_number=receipt_block,
-                    sell_amount=prepared_kick.sell_amount_str,
+                    sell_amount=(
+                        str(persisted["sell_amount"])
+                        if persisted.get("sell_amount") is not None
+                        else None
+                    ),
                     starting_price=prepared_kick.starting_price_str,
                     minimum_price=prepared_kick.minimum_price_str,
                     minimum_quote=prepared_kick.minimum_quote_str,
@@ -742,13 +760,16 @@ class KickExecutor:
         effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
         final_status = KickStatus.CONFIRMED if receipt_status == 1 else KickStatus.REVERTED
 
-        self.kick_tx_repository.update_status(
-            kick_tx_id,
-            status=final_status.value,
-            gas_used=receipt_gas_used,
-            gas_price_gwei=effective_gwei,
-            block_number=receipt_block,
-        )
+        if self.operation_reconciler is not None:
+            await self.operation_reconciler.finalize_receipt(tx_hash, receipt)
+        else:
+            self.kick_tx_repository.update_status(
+                kick_tx_id,
+                status=final_status.value,
+                gas_used=receipt_gas_used,
+                gas_price_gwei=effective_gwei,
+                block_number=receipt_block,
+            )
 
         return KickResult(
             kick_tx_id=kick_tx_id,

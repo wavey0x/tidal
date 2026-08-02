@@ -26,6 +26,7 @@ from tidal.cli_options import (
     PasswordFileOption,
     SourceAddressOption,
     SourceTypeOption,
+    TokenAddressOption,
     VerboseOption,
 )
 from tidal.cli_renderers import emit_json, render_kick_inspect, render_kick_submission_summary, render_skip_panel
@@ -162,6 +163,8 @@ def _inspect_result_from_api(data: dict[str, object]) -> KickInspectResult:
         cooldown_skips=[KickInspectEntry(**entry) for entry in data["cooldown_skips"]],
         deferred_same_auction=[KickInspectEntry(**entry) for entry in data["deferred_same_auction"]],
         limited=[KickInspectEntry(**entry) for entry in data["limited"]],
+        no_fill_count=int(data.get("no_fill_count") or 0),
+        no_fill_skips=[KickInspectEntry(**entry) for entry in data.get("no_fill_skips", [])],
     )
 
 
@@ -187,10 +190,18 @@ def _candidate_review_queue(
     inspect_result: KickInspectResult,
     *,
     include_deferred_same_auction: bool,
+    include_exhausted_no_fill: bool = False,
 ) -> list[KickInspectEntry]:
     queue = list(inspect_result.ready)
     if include_deferred_same_auction:
         queue.extend(inspect_result.deferred_same_auction)
+    if include_exhausted_no_fill:
+        queue.extend(
+            candidate
+            for candidate in inspect_result.no_fill_skips
+            if candidate.state == "no_fill_block"
+            and str(candidate.detail or "").startswith("RETRY_EXHAUSTED")
+        )
     return queue
 
 
@@ -454,6 +465,7 @@ def kick_inspect(
     source_type: SourceTypeOption = None,
     source_address: SourceAddressOption = None,
     auction_address: AuctionAddressOption = None,
+    token_address: TokenAddressOption = None,
     limit: LimitOption = None,
     min_usd_value: MinUsdValueOption = None,
     show_all: bool = typer.Option(False, "--show-all", help="Show deferred and limited candidates."),
@@ -463,6 +475,7 @@ def kick_inspect(
         "sourceType": _normalize_source_type_filter(source_type),
         "sourceAddress": normalize_cli_address(source_address, param_hint="--source"),
         "auctionAddress": normalize_cli_address(auction_address, param_hint="--auction"),
+        "tokenAddress": normalize_cli_address(token_address, param_hint="--token"),
         "limit": limit,
         "minUsdValue": min_usd_value,
     }
@@ -495,6 +508,7 @@ def kick_run(
     source_type: SourceTypeOption = None,
     source_address: SourceAddressOption = None,
     auction_address: AuctionAddressOption = None,
+    token_address: TokenAddressOption = None,
     limit: LimitOption = None,
     min_usd_value: MinUsdValueOption = None,
     keystore: KeystoreOption = None,
@@ -516,6 +530,11 @@ def kick_run(
         "--allow-killed-gauge",
         help="Bypass killed Curve gauge guard for this manual run.",
     ),
+    allow_no_fill_retry: bool = typer.Option(
+        False,
+        "--allow-no-fill-retry",
+        help="Allow one retry after the no-fill budget for an exact auction/token pair.",
+    ),
 ) -> None:
     del verbose
     effective_no_confirmation = no_confirmation or headless
@@ -528,12 +547,24 @@ def kick_run(
     normalized_source_type = _normalize_source_type_filter(source_type)
     normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
     normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
+    normalized_token_address = normalize_cli_address(token_address, param_hint="--token")
+    if allow_no_fill_retry and (normalized_auction_address is None or normalized_token_address is None):
+        raise typer.BadParameter(
+            "--allow-no-fill-retry requires both --auction and --token",
+            param_hint="--allow-no-fill-retry",
+        )
+    if allow_no_fill_retry and headless:
+        raise typer.BadParameter(
+            "--allow-no-fill-retry cannot be used with --headless",
+            param_hint="--allow-no-fill-retry",
+        )
     if headless:
         _emit_headless_event(
             "kick.run.start",
             source_type=normalized_source_type,
             source=normalized_source_address,
             auction=normalized_auction_address,
+            token=normalized_token_address,
             limit=limit,
             min_usd_value=min_usd_value,
             max_base_fee_gwei=effective_base_fee_cap_gwei,
@@ -563,6 +594,7 @@ def kick_run(
         "sourceType": normalized_source_type,
         "sourceAddress": normalized_source_address,
         "auctionAddress": normalized_auction_address,
+        "tokenAddress": normalized_token_address,
         "limit": limit,
         "minUsdValue": min_usd_value,
         "sender": exec_ctx.sender,
@@ -593,6 +625,7 @@ def kick_run(
                     source_address=normalized_source_address,
                     auction_address=normalized_auction_address,
                 ),
+                include_exhausted_no_fill=allow_no_fill_retry,
             )
             prepare_feedback_emitted = False
             broadcast_feedback_emitted = False
@@ -614,6 +647,8 @@ def kick_run(
                         prepare_payload["requireCurveQuote"] = require_curve_quote
                     if allow_killed_gauge:
                         prepare_payload["allowKilledGauge"] = True
+                    if allow_no_fill_retry:
+                        prepare_payload["allowNoFillRetry"] = True
                     if headless:
                         prepare_response = client.prepare_kicks(prepare_payload)
                     else:

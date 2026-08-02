@@ -21,7 +21,11 @@ def _settings() -> SimpleNamespace:
         multicall_address="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         multicall_enabled=True,
         multicall_auction_batch_calls=100,
-        kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
+        kick_config=SimpleNamespace(
+            ignore_policy=object(),
+            cooldown_policy=object(),
+            no_fill_policy=SimpleNamespace(retry_delays_minutes=(720, 1440)),
+        ),
     )
 
 
@@ -124,6 +128,12 @@ class _FakeKickGuardStatusRepository:
         }
 
 
+class _FakeKickTxRepository:
+    def list_pair_operations(self, auction_address: str, token_address: str):
+        del auction_address, token_address
+        return []
+
+
 def _inspection(*previews: AuctionLotPreview) -> AuctionSettlementInspection:
     return AuctionSettlementInspection(
         auction_address="0x3333333333333333333333333333333333333333",
@@ -182,7 +192,7 @@ async def test_kick_planner_skips_persisted_killed_gauge_strategy(monkeypatch) -
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+            kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         kick_guard_status_repository=guard_repo,
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
@@ -234,7 +244,7 @@ async def test_kick_planner_allow_killed_gauge_bypasses_persisted_status(monkeyp
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         kick_guard_status_repository=guard_repo,
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
@@ -283,7 +293,7 @@ async def test_kick_planner_allows_missing_or_enabled_guard_status(monkeypatch) 
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         kick_guard_status_repository=guard_repo,
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
@@ -331,7 +341,7 @@ async def test_kick_planner_does_not_check_kick_guard_for_fee_burners(monkeypatc
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         kick_guard_status_repository=guard_repo,
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
@@ -380,7 +390,7 @@ async def test_kick_planner_prepares_resolve_operations_for_dirty_auction(monkey
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
@@ -444,7 +454,7 @@ async def test_kick_planner_skips_live_funded_auction_without_force(monkeypatch)
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
@@ -504,7 +514,7 @@ async def test_kick_planner_treats_inactive_kicked_empty_lot_as_non_blocking(mon
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
@@ -559,7 +569,7 @@ async def test_kick_planner_points_to_manual_sweep_when_resolve_estimate_hits_am
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
@@ -615,7 +625,7 @@ async def test_kick_planner_can_preview_without_sender_or_gas_estimation(monkeyp
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
         estimate_transaction_fn=estimate_transaction_fn,
@@ -684,7 +694,7 @@ async def test_kick_planner_falls_back_from_batch_to_individual_intents(monkeypa
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: sorted(candidates, key=lambda candidate: candidate.usd_value, reverse=True),
         estimate_transaction_fn=estimate_transaction_fn,
@@ -737,7 +747,7 @@ async def test_kick_planner_skips_single_kick_when_gas_estimate_exceeds_cap(monk
         settings=_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),
         estimate_transaction_fn=estimate_transaction_fn,

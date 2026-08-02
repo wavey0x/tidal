@@ -57,7 +57,11 @@ def _kick_settings() -> SimpleNamespace:
     return SimpleNamespace(
         txn_usd_threshold=100.0,
         txn_data_freshness_limit_seconds=1200,
-        kick_config=SimpleNamespace(ignore_policy=object(), cooldown_policy=object()),
+        kick_config=SimpleNamespace(
+            ignore_policy=object(),
+            cooldown_policy=object(),
+            no_fill_policy=SimpleNamespace(retry_delays_minutes=(720, 1440)),
+        ),
         txn_max_gas_limit=500000,
         auction_kicker_address="0x5555555555555555555555555555555555555555",
         chain_id=1,
@@ -104,6 +108,12 @@ class _FakeKickDeps:
         )
 
 
+class _FakeKickTxRepository:
+    def list_pair_operations(self, auction_address: str, token_address: str):
+        del auction_address, token_address
+        return []
+
+
 def _build_kick_planner(
     *,
     shortlist,
@@ -115,7 +125,7 @@ def _build_kick_planner(
         settings=_kick_settings(),
         preparer=deps,
         tx_builder=deps,
-        kick_tx_repository=object(),  # type: ignore[arg-type]
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
         web3_client=object(),
         shortlist_builder=lambda *args, **kwargs: shortlist,
         candidate_sorter=lambda candidates: list(candidates),

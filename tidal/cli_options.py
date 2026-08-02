@@ -112,6 +112,14 @@ AuctionAddressOption = Annotated[
     ),
 ]
 
+TokenAddressOption = Annotated[
+    str | None,
+    typer.Option(
+        "--token",
+        help="Filter to a specific sell token address.",
+    ),
+]
+
 LimitOption = Annotated[
     int | None,
     typer.Option(

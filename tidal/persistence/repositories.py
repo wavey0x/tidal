@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import asdict
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -603,6 +603,11 @@ class ScanRunRepository:
     def create(self, row: dict[str, object]) -> None:
         self.session.execute(insert(models.scan_runs).values(**row))
 
+    def status(self, run_id: str) -> str | None:
+        return self.session.execute(
+            select(models.scan_runs.c.status).where(models.scan_runs.c.run_id == run_id)
+        ).scalar_one_or_none()
+
     def finalize(
         self,
         run_id: str,
@@ -727,6 +732,12 @@ class KickTxRepository:
         self.session.commit()
         return result.lastrowid  # type: ignore[return-value]
 
+    def get(self, kick_tx_id: int) -> dict[str, object] | None:
+        row = self.session.execute(
+            select(models.kick_txs).where(models.kick_txs.c.id == kick_tx_id)
+        ).mappings().first()
+        return dict(row) if row is not None else None
+
     def find_by_run_and_identity(
         self,
         *,
@@ -776,6 +787,107 @@ class KickTxRepository:
         )
         self.session.commit()
 
+    def update_fields(self, kick_tx_id: int, **values: object) -> None:
+        self.session.execute(
+            models.kick_txs.update()
+            .where(models.kick_txs.c.id == kick_tx_id)
+            .values(**values)
+        )
+
+    def list_by_tx_hash(self, tx_hash: str) -> list[dict[str, object]]:
+        stmt = (
+            select(models.kick_txs)
+            .where(models.kick_txs.c.tx_hash == tx_hash)
+            .order_by(models.kick_txs.c.id.asc())
+        )
+        return [dict(row) for row in self.session.execute(stmt).mappings().all()]
+
+    def list_submitted(self) -> list[dict[str, object]]:
+        stmt = (
+            select(models.kick_txs)
+            .where(
+                models.kick_txs.c.status == "SUBMITTED",
+                models.kick_txs.c.tx_hash.is_not(None),
+            )
+            .order_by(models.kick_txs.c.created_at.asc(), models.kick_txs.c.id.asc())
+        )
+        return [dict(row) for row in self.session.execute(stmt).mappings().all()]
+
+    def list_confirmed_kicks(self) -> list[dict[str, object]]:
+        stmt = (
+            select(models.kick_txs)
+            .where(
+                models.kick_txs.c.operation_type == "kick",
+                models.kick_txs.c.status == "CONFIRMED",
+            )
+            .order_by(
+                models.kick_txs.c.auction_address.asc(),
+                models.kick_txs.c.token_address.asc(),
+                models.kick_txs.c.block_number.asc(),
+                models.kick_txs.c.transaction_index.asc(),
+                models.kick_txs.c.id.asc(),
+            )
+        )
+        return [dict(row) for row in self.session.execute(stmt).mappings().all()]
+
+    def find_exact_operation(
+        self,
+        *,
+        operation_type: str,
+        tx_hash: str,
+        auction_address: str,
+        token_address: str,
+    ) -> dict[str, object] | None:
+        row = self.session.execute(
+            select(models.kick_txs).where(
+                models.kick_txs.c.operation_type == operation_type,
+                models.kick_txs.c.tx_hash == tx_hash,
+                models.kick_txs.c.auction_address == auction_address,
+                models.kick_txs.c.token_address == token_address,
+            )
+        ).mappings().first()
+        return dict(row) if row is not None else None
+
+    def latest_confirmed_unclosed_kick(
+        self,
+        auction_address: str,
+        token_address: str,
+        *,
+        before_position: tuple[int, int] | None = None,
+    ) -> dict[str, object] | None:
+        rows = self.list_pair_operations(auction_address, token_address)
+        confirmed_closes = {
+            int(row["round_kick_id"])
+            for row in rows
+            if row.get("round_kick_id") is not None
+            and row.get("status") == "CONFIRMED"
+            and row.get("operation_type") in {"resolve_auction", "auction_settled"}
+        }
+        candidates: list[dict[str, object]] = []
+        for row in rows:
+            if row.get("operation_type") != "kick" or row.get("status") != "CONFIRMED":
+                continue
+            row_id = int(row["id"])
+            if row_id in confirmed_closes:
+                continue
+            if before_position is not None:
+                if row.get("block_number") is None or row.get("transaction_index") is None:
+                    continue
+                if (int(row["block_number"]), int(row["transaction_index"])) >= before_position:
+                    continue
+            candidates.append(row)
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda row: (
+                int(row.get("block_number") or -1),
+                int(row.get("transaction_index") or -1),
+                int(row["id"]),
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
     def last_kick_for_auction_token(self, auction_address: str, token_address: str) -> dict[str, object] | None:
         stmt = (
             select(models.kick_txs)
@@ -792,6 +904,20 @@ class KickTxRepository:
         if row is None:
             return None
         return dict(row)
+
+    def list_pair_operations(self, auction_address: str, token_address: str) -> list[dict[str, object]]:
+        stmt = (
+            select(models.kick_txs)
+            .where(
+                models.kick_txs.c.auction_address == auction_address,
+                models.kick_txs.c.token_address == token_address,
+                models.kick_txs.c.operation_type.in_(
+                    ("kick", "resolve_auction", "sweep_auction", "auction_settled")
+                ),
+            )
+            .order_by(models.kick_txs.c.created_at.asc(), models.kick_txs.c.id.asc())
+        )
+        return [dict(row) for row in self.session.execute(stmt).mappings().all()]
 
 
 class APIActionRepository:

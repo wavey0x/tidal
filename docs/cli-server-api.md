@@ -25,5 +25,6 @@ In production, it is normally placed behind a reverse proxy or TLS terminator.
 ## Operational Notes
 
 - Run `tidal-server db migrate` before starting the API.
-- If `RPC_URL` is present, the API can run its background receipt reconciliation loop for action audit rows that already have a known transaction hash.
+- The public Alerts endpoint is read-only. API-reported receipts use the same
+  finalizer as local execution, while the scanner performs the bounded backlog pass.
 - The API is the control plane for `tidal`, not the holder of private keys. Signing stays on the CLI client or the server operator host that explicitly broadcasts.

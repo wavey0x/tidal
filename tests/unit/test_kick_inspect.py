@@ -64,6 +64,7 @@ def _settings() -> SimpleNamespace:
         kick_config=SimpleNamespace(
             ignore_policy=SimpleNamespace(),
             cooldown_policy=SimpleNamespace(),
+            no_fill_policy=SimpleNamespace(retry_delays_minutes=(720, 1440)),
         ),
     )
 

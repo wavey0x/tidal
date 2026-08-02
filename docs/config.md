@@ -64,7 +64,8 @@ Run `tidal-server init-config` to scaffold the tracked server files under `confi
 - chain and contract wiring that should move with the repo
 - monitored fee burners
 - server-side transaction execution defaults
-- kick pricing, ignore rules, and cooldown policy
+- kick pricing, ignore rules, cooldown policy, and bounded no-fill retry policy
+- scanner staleness threshold for the public Alerts read model
 
 Server runtime secrets default to `~/.tidal/server/.env`. For repo-local development, you can also point `TIDAL_ENV_FILE=config/.env`.
 
@@ -127,9 +128,32 @@ kick:
     - auction: "0xAuction"
       token: "0xSellToken"
       minutes: 180
+
+  no_fill:
+    retry_delays_minutes: [720, 1440]
 ```
 
 `cooldown` applies to the `(auction, token)` pair, not the whole auction or source.
+`no_fill.retry_delays_minutes` is required, strictly increasing, and defines the
+complete automatic retry budget: 12 hours after the first confirmed no-fill and
+24 hours after the second. A third consecutive no-fill blocks automation.
+
+## Alerts And Telegram
+
+`scan_stale_after_minutes` defaults to `90` and is explicit in `config/server.yaml`.
+The public `/alerts` page uses it to identify a missing or stale successful scan.
+
+Telegram fan-out is optional. Leave all three values absent to use the null sink,
+or configure all three in the ignored server `.env`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ADMIN_ALERT_CHAT_ID=
+TELEGRAM_OPERATIONS_ALERT_CHAT_ID=
+```
+
+The scanner sends selected new alert transitions to both destinations. Secrets,
+chat IDs, and private destination labels do not belong in tracked YAML or source.
 
 ## `monitored_fee_burners`
 
@@ -168,6 +192,7 @@ Current defaults from `tidal/config.py` include:
 - `txn_quote_spot_warning_threshold_pct = 2`
 - `prepared_action_max_age_seconds = 300`
 - `cooldown_minutes = 60` in `config/server.yaml`
+- `scan_stale_after_minutes = 90`
 - `tidal_api_request_timeout_seconds = 30`
 
 `txn_base_fee_cap_gwei` defaults to 5 gwei in code. Add it to YAML or set `TXN_BASE_FEE_CAP_GWEI` only when intentionally overriding that cap.

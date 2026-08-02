@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
-from tidal.config import Settings
 from tidal.normalizers import normalize_address
 from tidal.persistence import models
-from tidal.persistence.db import Database
 from tidal.persistence.repositories import APIActionRepository, KickTxRepository
-from tidal.runtime import build_web3_client
 from tidal.time import utcnow_iso
 
 
@@ -217,44 +212,6 @@ def record_receipt(
     return _action_detail(row, repo.get_action_transactions(action_id))
 
 
-async def run_receipt_reconciler(settings: Settings, database: Database) -> None:
-    if not settings.rpc_url:
-        return
-    web3_client = build_web3_client(settings)
-    interval_seconds = max(settings.tidal_api_receipt_reconcile_interval_seconds, 5)
-    threshold_seconds = max(settings.tidal_api_receipt_reconcile_threshold_seconds, 0)
-    try:
-        while True:
-            cutoff = (datetime.now(timezone.utc) - timedelta(seconds=threshold_seconds)).isoformat()
-            with database.session() as session:
-                repo = APIActionRepository(session)
-                pending_rows = repo.pending_receipt_transactions(older_than=cutoff)
-                for row in pending_rows:
-                    tx_hash = row.get("tx_hash")
-                    if not tx_hash:
-                        continue
-                    try:
-                        receipt = await web3_client.get_transaction_receipt(str(tx_hash), timeout_seconds=2)
-                    except Exception:  # noqa: BLE001
-                        continue
-                    observed_at = utcnow_iso()
-                    effective_gas_price = receipt.get("effectiveGasPrice")
-                    gas_price_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
-                    record_receipt(
-                        session,
-                        str(row["action_id"]),
-                        tx_index=int(row["tx_index"]),
-                        receipt_status="CONFIRMED" if receipt.get("status") == 1 else "REVERTED",
-                        block_number=receipt.get("blockNumber"),
-                        gas_used=receipt.get("gasUsed"),
-                        gas_price_gwei=gas_price_gwei,
-                        observed_at=observed_at,
-                    )
-            await asyncio.sleep(interval_seconds)
-    except asyncio.CancelledError:
-        return
-
-
 def _calculate_action_status(transactions: list[dict[str, object]]) -> str:
     receipt_statuses = [row.get("receipt_status") for row in transactions]
     if any(status == "FAILED" for status in receipt_statuses):
@@ -313,7 +270,10 @@ def _sync_kick_log_rows(
                 ),
                 "token_address": operation["token_address"],
                 "auction_address": operation["auction_address"],
-                "sell_amount": operation["sell_amount"],
+                "sell_amount": None,
+                "requested_sell_amount": (
+                    operation["sell_amount"] if operation_type == "kick" else None
+                ),
                 "starting_price": operation["starting_price"],
                 "minimum_price": operation["minimum_price"],
                 "minimum_quote": operation["minimum_quote"],
@@ -334,12 +294,21 @@ def _sync_kick_log_rows(
                 "token_symbol": operation["token_symbol"],
                 "want_address": operation["want_address"],
                 "want_symbol": operation["want_symbol"],
-                "normalized_balance": operation["normalized_balance"] or operation["sell_amount"],
+                "normalized_balance": None,
                 "created_at": str(tx_row.get("broadcast_at") or observed_at),
             }
+            if operation_type in {"resolve_auction", "sweep_auction"}:
+                round_kick = repo.latest_confirmed_unclosed_kick(
+                    str(operation["auction_address"]),
+                    str(operation["token_address"]),
+                )
+                if round_kick is not None:
+                    row["round_kick_id"] = int(round_kick["id"])
             repo.insert(row)
             continue
 
+        if status != "SUBMITTED":
+            continue
         repo.update_status(
             int(existing["id"]),
             status=status,

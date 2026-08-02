@@ -13,6 +13,9 @@ def test_load_kick_config_reads_token_overrides(tmp_path):
         """
 default_profile: volatile
 
+no_fill:
+  retry_delays_minutes: [720, 1440]
+
 profiles:
   volatile:
     start_price_buffer_bps: 1000
@@ -48,6 +51,9 @@ def test_load_kick_config_defaults_to_empty_overrides_when_absent(tmp_path):
         """
 default_profile: volatile
 
+no_fill:
+  retry_delays_minutes: [720, 1440]
+
 profiles:
   volatile:
     start_price_buffer_bps: 1000
@@ -72,6 +78,9 @@ def test_load_kick_config_parses_profile_overrides(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+
+no_fill:
+  retry_delays_minutes: [720, 1440]
 
 profiles:
   volatile:
@@ -116,6 +125,9 @@ def test_load_kick_config_parses_ignore_and_cooldown_rules(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+
+no_fill:
+  retry_delays_minutes: [720, 1440]
 
 profiles:
   volatile:
@@ -175,6 +187,34 @@ auctions:
     )
 
     with pytest.raises(ValueError, match="profile_overrides"):
+        load_kick_config(kick_path)
+
+
+@pytest.mark.parametrize(
+    ("no_fill_yaml", "message"),
+    [
+        ("", "must define no_fill"),
+        ("no_fill:\n  retry_delays_minutes: []\n", "non-empty list"),
+        ("no_fill:\n  retry_delays_minutes: [720, 720]\n", "strictly increasing"),
+        ("no_fill:\n  retry_delays_minutes: [0, 1440]\n", "positive integer"),
+    ],
+)
+def test_load_kick_config_requires_strict_no_fill_schedule(tmp_path, no_fill_yaml, message):
+    kick_path = tmp_path / "kick.yaml"
+    kick_path.write_text(
+        (
+            "default_profile: volatile\n"
+            f"{no_fill_yaml}"
+            "profiles:\n"
+            "  volatile:\n"
+            "    start_price_buffer_bps: 1000\n"
+            "    min_price_buffer_bps: 500\n"
+            "    step_decay_rate_bps: 50\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
         load_kick_config(kick_path)
 
 

@@ -444,7 +444,8 @@ class AlertService:
             mapping: dict[tuple[object, ...], dict[str, object]] = {}
             for row in self.session.execute(
                 select(models.scan_item_errors).where(
-                    models.scan_item_errors.c.run_id == run["run_id"]
+                    models.scan_item_errors.c.run_id == run["run_id"],
+                    models.scan_item_errors.c.stage != "PRICE_READ",
                 )
             ).mappings():
                 identity = (

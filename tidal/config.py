@@ -16,10 +16,24 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import dotenv_values
-from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from tidal.paths import default_config_path, default_env_path, default_server_config_path, default_server_env_path, resolve_path, tidal_home
+from tidal.paths import (
+    default_config_path,
+    default_env_path,
+    default_server_config_path,
+    default_server_env_path,
+    resolve_path,
+    tidal_home,
+)
 from tidal.transaction_service.kick_policy import KickConfig, build_kick_config
 
 
@@ -99,17 +113,27 @@ class Settings(BaseSettings):
     price_retry_attempts: int = Field(default=3, alias="PRICE_RETRY_ATTEMPTS")
     price_concurrency: int = Field(default=10, alias="PRICE_CONCURRENCY")
     price_delay_seconds: float = Field(default=0.25, alias="PRICE_DELAY_SECONDS")
-    auctionscan_base_url: str = Field(default="https://auctionscan.info", alias="AUCTIONSCAN_BASE_URL")
+    auctionscan_base_url: str = Field(
+        default="https://auctionscan.info", alias="AUCTIONSCAN_BASE_URL"
+    )
     auctionscan_api_base_url: str = Field(
         default="https://auctionscan.info/api",
         alias="AUCTIONSCAN_API_BASE_URL",
     )
-    auctionscan_recheck_seconds: int = Field(default=90, alias="AUCTIONSCAN_RECHECK_SECONDS")
-    auctionscan_enrichment_batch_size: int = Field(default=10, alias="AUCTIONSCAN_ENRICHMENT_BATCH_SIZE")
-    scan_stale_after_minutes: int = Field(default=90, gt=0, alias="SCAN_STALE_AFTER_MINUTES")
+    auctionscan_recheck_seconds: int = Field(
+        default=90, alias="AUCTIONSCAN_RECHECK_SECONDS"
+    )
+    auctionscan_enrichment_batch_size: int = Field(
+        default=10, alias="AUCTIONSCAN_ENRICHMENT_BATCH_SIZE"
+    )
+    scan_stale_after_minutes: int = Field(
+        default=90, gt=0, alias="SCAN_STALE_AFTER_MINUTES"
+    )
 
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
-    telegram_admin_alert_chat_id: str | None = Field(default=None, alias="TELEGRAM_ADMIN_ALERT_CHAT_ID")
+    telegram_admin_alert_chat_id: str | None = Field(
+        default=None, alias="TELEGRAM_ADMIN_ALERT_CHAT_ID"
+    )
     telegram_operations_alert_chat_id: str | None = Field(
         default=None,
         alias="TELEGRAM_OPERATIONS_ALERT_CHAT_ID",
@@ -123,7 +147,9 @@ class Settings(BaseSettings):
     txn_base_fee_cap_gwei: float = Field(default=5.0, alias="TXN_BASE_FEE_CAP_GWEI")
     txn_max_priority_fee_gwei: int = Field(default=2, alias="TXN_MAX_PRIORITY_FEE_GWEI")
     txn_max_gas_limit: int = Field(default=500000, alias="TXN_MAX_GAS_LIMIT")
-    txn_start_price_buffer_bps: int = Field(default=1000, alias="TXN_START_PRICE_BUFFER_BPS")
+    txn_start_price_buffer_bps: int = Field(
+        default=1000, alias="TXN_START_PRICE_BUFFER_BPS"
+    )
     txn_min_price_buffer_bps: int = Field(default=500, alias="TXN_MIN_PRICE_BUFFER_BPS")
     txn_quote_spot_warning_threshold_pct: float = Field(
         default=2.0,
@@ -139,9 +165,13 @@ class Settings(BaseSettings):
             "TXN_MAX_DATA_AGE_SECONDS",
         ),
     )
-    prepared_action_max_age_seconds: int = Field(default=300, alias="PREPARED_ACTION_MAX_AGE_SECONDS")
+    prepared_action_max_age_seconds: int = Field(
+        default=300, alias="PREPARED_ACTION_MAX_AGE_SECONDS"
+    )
     txn_keystore_path: str | None = Field(default=None, alias="TXN_KEYSTORE_PATH")
-    txn_keystore_passphrase: str | None = Field(default=None, alias="TXN_KEYSTORE_PASSPHRASE")
+    txn_keystore_passphrase: str | None = Field(
+        default=None, alias="TXN_KEYSTORE_PASSPHRASE"
+    )
 
     txn_require_curve_quote: bool = Field(default=True, alias="TXN_REQUIRE_CURVE_QUOTE")
 
@@ -151,11 +181,18 @@ class Settings(BaseSettings):
         default_factory=list,
         alias="MONITORED_FEE_BURNERS",
     )
-    tidal_api_base_url: str | None = Field(default="https://api.tidal.wavey.info", alias="TIDAL_API_BASE_URL")
+    tidal_api_base_url: str | None = Field(
+        default="https://api.tidal.wavey.info", alias="TIDAL_API_BASE_URL"
+    )
+    tidal_ui_base_url: str = Field(
+        default="https://tidal.wavey.info", alias="TIDAL_UI_BASE_URL"
+    )
     tidal_api_key: str | None = Field(default=None, alias="TIDAL_API_KEY")
     tidal_api_host: str = Field(default="0.0.0.0", alias="TIDAL_API_HOST")
     tidal_api_port: int = Field(default=8787, alias="TIDAL_API_PORT")
-    tidal_api_request_timeout_seconds: int = Field(default=30, alias="TIDAL_API_REQUEST_TIMEOUT_SECONDS")
+    tidal_api_request_timeout_seconds: int = Field(
+        default=30, alias="TIDAL_API_REQUEST_TIMEOUT_SECONDS"
+    )
     tidal_api_receipt_reconcile_interval_seconds: int = Field(
         default=30,
         alias="TIDAL_API_RECEIPT_RECONCILE_INTERVAL_SECONDS",
@@ -270,7 +307,9 @@ def _resolve_explicit_file_path(path: str | Path, *, label: str) -> Path:
     return resolved
 
 
-def _resolve_explicit_or_env_config_path(config_path: Path | None = None) -> Path | None:
+def _resolve_explicit_or_env_config_path(
+    config_path: Path | None = None,
+) -> Path | None:
     if config_path is not None:
         return _resolve_explicit_file_path(config_path, label="Config file")
 
@@ -291,7 +330,9 @@ def _resolve_server_config_path(config_path: Path | None = None) -> Path:
         return default_path
 
     hint = default_path if default_path is not None else Path("config/server.yaml")
-    raise FileNotFoundError(f"Server config file not found. Pass --config or create {hint}.")
+    raise FileNotFoundError(
+        f"Server config file not found. Pass --config or create {hint}."
+    )
 
 
 def _resolve_env_path(
@@ -344,7 +385,9 @@ def load_settings(
         config_data = _load_yaml_config(resolved_config_path)
     kick_raw = config_data.pop("kick", None)
     if mode == "server" and not isinstance(kick_raw, dict):
-        raise ValueError(f"Server config must define a 'kick' mapping: {resolved_config_path}")
+        raise ValueError(
+            f"Server config must define a 'kick' mapping: {resolved_config_path}"
+        )
 
     env_data: dict[str, Any] = {}
     if resolved_env_path.is_file():

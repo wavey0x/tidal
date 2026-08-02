@@ -5,6 +5,7 @@
 
 # API client defaults.
 tidal_api_base_url: https://api.tidal.wavey.info
+tidal_ui_base_url: https://tidal.wavey.info
 tidal_api_request_timeout_seconds: 30
 
 # Local execution defaults used for review and local sending.

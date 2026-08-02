@@ -271,6 +271,38 @@ def test_repeated_item_identity_includes_source_type(session) -> None:
     assert continued_item.occurrence_id == first_occurrence_id
 
 
+def test_repeated_price_failures_remain_in_logs_without_becoming_alerts(
+    session,
+) -> None:
+    for index in range(3):
+        run_id = f"scan-price-{index}"
+        at = NOW + timedelta(minutes=index)
+        _add_successful_scan(session, run_id, at=at)
+        session.execute(
+            insert(models.scan_item_errors).values(
+                run_id=run_id,
+                token_address=TOKEN,
+                stage="PRICE_READ",
+                error_code="token_price_lookup_failed",
+                error_message=f"provider failure {index}",
+                created_at=at.isoformat(),
+            )
+        )
+        session.commit()
+
+    evaluation = AlertService(session=session, settings=_settings()).evaluate(
+        now=NOW + timedelta(minutes=4)
+    )
+
+    assert not any(
+        item.kind == "scan_item_repeated_failure" for item in evaluation.items
+    )
+    assert not any(
+        message.delivery_key.startswith("scan_item_repeated:")
+        for message in evaluation.transitions
+    )
+
+
 def test_ignored_and_inactive_pairs_are_suppressed(session) -> None:
     _add_successful_scan(session)
     _add_no_fill(session, 1, 0)
@@ -375,6 +407,7 @@ async def test_telegram_message_is_compact_escaped_and_disables_previews(
         bot_token="secret-token",
         admin_alert_chat_id="admin-chat",
         operations_alert_chat_id="operations-chat",
+        alerts_url="https://tidal.wavey.info/alerts",
     )
     message = AlertMessage(
         "key",
@@ -395,8 +428,9 @@ async def test_telegram_message_is_compact_escaped_and_disables_previews(
     assert captured["payload"] == {
         "chat_id": "admin-chat",
         "text": (
-            "<b>[WARNING] Auction &lt;review&gt;</b>\n"
+            "<b>[TIDAL WARNING] Auction &lt;review&gt;</b>\n"
             "Evidence is ambiguous &amp; automation is paused.\n\n"
+            '<a href="https://tidal.wavey.info/alerts">Tidal Alerts</a> · '
             '<a href="https://etherscan.io/tx/0xabc">Etherscan</a> · '
             '<a href="https://auctionscan.info/auction/1/0xabc">AuctionScan</a>'
         ),

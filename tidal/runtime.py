@@ -156,7 +156,9 @@ def build_scanner_service(
     if auto_settle or auto_enable_tokens:
         resolved_keystore_path = settings.resolved_txn_keystore_path
         if resolved_keystore_path is None or not settings.txn_keystore_passphrase:
-            raise ValueError("TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for transaction commands")
+            raise ValueError(
+                "TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for transaction commands"
+            )
         signer = TransactionSigner(
             str(resolved_keystore_path),
             settings.txn_keystore_passphrase,
@@ -264,6 +266,7 @@ def build_alert_sink(settings: Settings):  # noqa: ANN201
         bot_token=str(settings.telegram_bot_token),
         admin_alert_chat_id=str(settings.telegram_admin_alert_chat_id),
         operations_alert_chat_id=str(settings.telegram_operations_alert_chat_id),
+        alerts_url=f"{settings.tidal_ui_base_url.rstrip('/')}/alerts",
     )
 
 

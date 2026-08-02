@@ -31,6 +31,7 @@ class TelegramAlertSink:
         bot_token: str,
         admin_alert_chat_id: str,
         operations_alert_chat_id: str,
+        alerts_url: str,
         timeout_seconds: float = 10.0,
     ) -> None:
         self._bot_token = bot_token
@@ -38,23 +39,26 @@ class TelegramAlertSink:
             "admin_alerts": admin_alert_chat_id,
             "operations_alerts": operations_alert_chat_id,
         }
+        self._alerts_url = alerts_url
         self._timeout_seconds = timeout_seconds
 
     async def send(self, destination_code: str, message: AlertMessage) -> None:
         chat_id = self._chat_ids.get(destination_code)
         if chat_id is None:
             raise ValueError("unknown alert destination")
-        heading = escape(f"[{message.severity.upper()}] {message.title}")
+        heading = escape(f"[TIDAL {message.severity.upper()}] {message.title}")
         lines = [f"<b>{heading}</b>", escape(message.summary)]
         if message.retry_at:
             lines.append(f"<b>Retry:</b> {escape(message.retry_at)}")
         links = [
-            f'<a href="{escape(link, quote=True)}">{label}</a>'
-            for link in message.links
-            if (label := _link_label(link)) is not None
+            f'<a href="{escape(self._alerts_url, quote=True)}">Tidal Alerts</a>',
+            *(
+                f'<a href="{escape(link, quote=True)}">{label}</a>'
+                for link in message.links
+                if (label := _link_label(link)) is not None
+            ),
         ]
-        if links:
-            lines.extend(("", " · ".join(links)))
+        lines.extend(("", " · ".join(links)))
         url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
         try:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:

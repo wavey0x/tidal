@@ -2428,7 +2428,6 @@ function AlertsPage({ data, loading, error, nowMs }) {
     <section className="alerts-page" aria-live="polite">
       <div className="alerts-heading">
         <div><h2>Alerts</h2><p>Canonical issues that affect auction automation and scanner health.</p></div>
-        {data?.evaluatedAt ? <span>Evaluated {formatRelativeTimestamp(data.evaluatedAt, nowMs)}</span> : null}
       </div>
       {loading && !data ? <p className="muted">Loading alerts…</p> : null}
       {error ? <p className="error">{error}</p> : null}

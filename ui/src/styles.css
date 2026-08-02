@@ -55,11 +55,6 @@
   color: var(--text-secondary);
 }
 
-.alerts-heading > span {
-  color: var(--text-faint);
-  white-space: nowrap;
-}
-
 .alert-section {
   display: grid;
   gap: 8px;
@@ -270,10 +265,6 @@
   .alert-card-header {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .alerts-heading > span {
-    white-space: normal;
   }
 
   .alert-evidence-list > div {

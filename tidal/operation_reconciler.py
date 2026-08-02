@@ -251,9 +251,13 @@ class OperationReconciler:
                     values["normalized_balance"] = self._normalized(
                         token, event.recovered_amount
                     )
-                    round_kick_id = self._round_kick_id(row, auction, token, position)
+                    round_kick_id = (
+                        None
+                        if event.path == 0
+                        else self._round_kick_id(row, auction, token, position)
+                    )
                     values["round_kick_id"] = round_kick_id
-                    if round_kick_id is None:
+                    if event.path != 0 and round_kick_id is None:
                         values["error_message"] = (
                             "confirmed resolve could not be linked to a kick"
                         )

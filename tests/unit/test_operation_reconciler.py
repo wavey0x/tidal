@@ -368,6 +368,27 @@ def test_noop_resolution_does_not_mark_kick_closed(session) -> None:
     assert open_kick["id"] == kick_id
 
 
+@pytest.mark.asyncio
+async def test_noop_resolution_does_not_require_a_round_link(session) -> None:
+    repo = KickTxRepository(session)
+    repo.insert(_row(operation_type="resolve_auction", tx_hash="0xnoop"))
+    reconciler = OperationReconciler(
+        session=session,
+        web3_client=_web3(),
+        auction_kicker_address=KICKER,
+        decode_receipt_fn=lambda receipt, auctions: DecodedReceipt(
+            resolves=(DecodedResolve(AUCTION, TOKEN, 0, 0),),
+        ),
+    )
+
+    error_code = await reconciler.finalize_receipt("0xnoop", _receipt())
+
+    row = repo.list_by_tx_hash("0xnoop")[0]
+    assert error_code is None
+    assert row["round_kick_id"] is None
+    assert row["error_message"] is None
+
+
 def test_foreign_key_enforcement_rejects_invalid_round_link(session) -> None:
     with pytest.raises(IntegrityError):
         KickTxRepository(session).insert(

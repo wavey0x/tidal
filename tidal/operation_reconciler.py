@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Sequence
+from typing import Callable, Collection, Sequence
 
 import structlog
 from eth_utils import to_checksum_address
@@ -82,11 +82,16 @@ class OperationReconciler:
         self.decode_receipt_fn = decode_receipt_fn or self._decode_receipt
 
     async def reconcile_submitted(
-        self, *, timeout_seconds: int = 2
+        self,
+        *,
+        timeout_seconds: int = 2,
+        tx_hashes: Collection[str] | None = None,
     ) -> list[ReconciliationError]:
         grouped: dict[str, list[dict[str, object]]] = {}
         for row in self.kick_repo.list_submitted():
-            grouped.setdefault(str(row["tx_hash"]), []).append(row)
+            tx_hash = str(row["tx_hash"])
+            if tx_hashes is None or tx_hash in tx_hashes:
+                grouped.setdefault(tx_hash, []).append(row)
 
         errors: list[ReconciliationError] = []
         for tx_hash in grouped:
@@ -323,17 +328,23 @@ class OperationReconciler:
         return reconciliation_error
 
     async def discover_direct_settlements(
-        self, *, timeout_seconds: int = 2
+        self,
+        *,
+        timeout_seconds: int = 2,
+        pairs: Collection[tuple[str, str]] | None = None,
     ) -> list[ReconciliationError]:
         """Persist missing AuctionSettled closes for confirmed round openings."""
 
         kicks = self.kick_repo.list_confirmed_kicks()
         by_pair: dict[tuple[str, str], list[dict[str, object]]] = {}
+        pair_filter = set(pairs) if pairs is not None else None
         for kick in kicks:
             pair = (
                 normalize_address(str(kick["auction_address"])),
                 normalize_address(str(kick["token_address"])),
             )
+            if pair_filter is not None and pair not in pair_filter:
+                continue
             by_pair.setdefault(pair, []).append(kick)
 
         errors: list[ReconciliationError] = []
@@ -511,8 +522,14 @@ class OperationReconciler:
     def _decode_receipt(
         self, receipt: dict[str, object], auctions: Sequence[str]
     ) -> DecodedReceipt:
+        receipt_destination = receipt.get("to")
+        kicker_address = (
+            normalize_address(str(receipt_destination))
+            if receipt_destination is not None
+            else self.auction_kicker_address
+        )
         kicker = self.web3_client.contract(
-            to_checksum_address(self.auction_kicker_address),
+            to_checksum_address(kicker_address),
             AUCTION_KICKER_ABI,
         )
         kicked_logs = kicker.events.Kicked().process_receipt(receipt, errors=DISCARD)

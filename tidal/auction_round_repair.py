@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import structlog
 from eth_utils import to_checksum_address
 
+from tidal.automation_scope import pair_in_automation_scope
 from tidal.auction_rounds import RoundOutcome, classify_pair_operations
 from tidal.chain.contracts.abis import AUCTION_ABI
 from tidal.normalizers import normalize_address
@@ -23,6 +24,7 @@ class RepairPairAudit:
     outcome: str
     reason_code: str | None
     live_on_chain: bool | None
+    in_scope: bool
     passed: bool
 
 
@@ -53,14 +55,28 @@ class AuctionRoundRepair:
     async def run(self, *, apply: bool) -> RepairReport:
         errors: list[ReconciliationError] = []
         if apply:
-            errors.extend(await self.reconciler.reconcile_submitted(timeout_seconds=2))
+            scoped_pairs = self._in_scope_pairs()
+            scoped_tx_hashes = {
+                str(row["tx_hash"])
+                for auction_address, token_address in scoped_pairs
+                for row in self.repo.list_pair_operations(
+                    auction_address, token_address
+                )
+                if row.get("tx_hash")
+            }
+            errors.extend(
+                await self.reconciler.reconcile_submitted(
+                    timeout_seconds=2,
+                    tx_hashes=scoped_tx_hashes,
+                )
+            )
             tx_hashes = sorted(
                 {
                     str(row["tx_hash"])
-                    for kick in self.repo.list_confirmed_kicks()
+                    for auction_address, token_address in scoped_pairs
                     for row in self.repo.list_pair_operations(
-                        str(kick["auction_address"]),
-                        str(kick["token_address"]),
+                        auction_address,
+                        token_address,
                     )
                     if row.get("status") == "CONFIRMED"
                     and row.get("operation_type")
@@ -96,24 +112,57 @@ class AuctionRoundRepair:
                             "confirmed receipt reconciliation failed",
                         )
                     )
-            self._repair_links()
+            self._repair_links(scoped_pairs)
             errors.extend(
-                await self.reconciler.discover_direct_settlements(timeout_seconds=2)
+                await self.reconciler.discover_direct_settlements(
+                    timeout_seconds=2,
+                    pairs=scoped_pairs,
+                )
             )
-            self._repair_links()
+            self._repair_links(scoped_pairs)
         pairs = await self._audit_pairs()
         return RepairReport(pairs=tuple(pairs), reconciliation_errors=tuple(errors))
 
-    def _repair_links(self) -> None:
-        seen: set[tuple[str, str]] = set()
-        for kick in self.repo.list_confirmed_kicks():
-            seen.add(
+    def _in_scope_pairs(self) -> set[tuple[str, str]]:
+        output: set[tuple[str, str]] = set()
+        for auction_address, token_address in self._pair_keys():
+            rows = self.repo.list_pair_operations(auction_address, token_address)
+            latest_kick = next(
                 (
-                    normalize_address(str(kick["auction_address"])),
-                    normalize_address(str(kick["token_address"])),
-                )
+                    row
+                    for row in reversed(rows)
+                    if row.get("operation_type") == "kick"
+                    and row.get("status") in {"CONFIRMED", "SUBMITTED"}
+                ),
+                None,
             )
-        for auction_address, token_address in sorted(seen):
+            if latest_kick is not None and pair_in_automation_scope(
+                self.session,
+                self.settings.kick_config.ignore_policy,
+                latest_kick,
+            ):
+                output.add((auction_address, token_address))
+        return output
+
+    def _pair_keys(self) -> set[tuple[str, str]]:
+        kicks = [
+            *self.repo.list_confirmed_kicks(),
+            *(
+                row
+                for row in self.repo.list_submitted()
+                if row.get("operation_type") == "kick"
+            ),
+        ]
+        return {
+            (
+                normalize_address(str(kick["auction_address"])),
+                normalize_address(str(kick["token_address"])),
+            )
+            for kick in kicks
+        }
+
+    def _repair_links(self, pairs: set[tuple[str, str]]) -> None:
+        for auction_address, token_address in sorted(pairs):
             for row in self.repo.list_pair_operations(auction_address, token_address):
                 if (
                     row.get("status") != "CONFIRMED"
@@ -145,25 +194,32 @@ class AuctionRoundRepair:
                     self.session.commit()
 
     async def _audit_pairs(self) -> list[RepairPairAudit]:
-        pairs = sorted(
-            {
-                (
-                    normalize_address(str(kick["auction_address"])),
-                    normalize_address(str(kick["token_address"])),
-                )
-                for kick in self.repo.list_confirmed_kicks()
-            }
-        )
+        pairs = sorted(self._pair_keys())
         output: list[RepairPairAudit] = []
         for auction_address, token_address in pairs:
             rows = self.repo.list_pair_operations(auction_address, token_address)
             sequence = classify_pair_operations(rows)
             latest = sequence.latest
-            unresolved_submitted = any(
-                row.get("status") == "SUBMITTED" and row.get("tx_hash") for row in rows
+            latest_kick = next(
+                (
+                    row
+                    for row in reversed(rows)
+                    if row.get("operation_type") == "kick"
+                    and row.get("status") in {"CONFIRMED", "SUBMITTED"}
+                ),
+                None,
+            )
+            in_scope = latest_kick is not None and pair_in_automation_scope(
+                self.session,
+                self.settings.kick_config.ignore_policy,
+                latest_kick,
             )
             live = None
-            if latest is not None and latest.outcome == RoundOutcome.INCOMPLETE:
+            if (
+                in_scope
+                and latest is not None
+                and latest.outcome == RoundOutcome.INCOMPLETE
+            ):
                 try:
                     contract = self.web3_client.contract(
                         to_checksum_address(auction_address),
@@ -179,13 +235,12 @@ class AuctionRoundRepair:
             if latest is None:
                 outcome = "NO_HISTORY"
                 reason = None
-                passed = not unresolved_submitted
+                passed = not in_scope
             else:
                 outcome = latest.outcome.value
                 reason = latest.reason_code
-                passed = (
-                    not unresolved_submitted
-                    and latest.outcome != RoundOutcome.UNKNOWN
+                passed = not in_scope or (
+                    latest.outcome != RoundOutcome.UNKNOWN
                     and (latest.outcome != RoundOutcome.INCOMPLETE or live is True)
                 )
             output.append(
@@ -195,6 +250,7 @@ class AuctionRoundRepair:
                     outcome=outcome,
                     reason_code=reason,
                     live_on_chain=live,
+                    in_scope=in_scope,
                     passed=passed,
                 )
             )

@@ -45,7 +45,9 @@ def init_config(
         dir_okay=True,
         help="Directory to write tracked server config scaffolds into.",
     ),
-    force: bool = typer.Option(False, "--force", help="Overwrite existing template files."),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite existing template files."
+    ),
 ) -> None:
     config_dir = dest.expanduser().resolve()
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -53,8 +55,12 @@ def init_config(
     server_path = config_dir / "server.yaml"
     env_example_path = config_dir / ".env.example"
 
-    server_status = _write_template(server_path, read_template_text("server.yaml"), force=force)
-    env_status = _write_template(env_example_path, read_template_text("server.env.example"), force=force)
+    server_status = _write_template(
+        server_path, read_template_text("server.yaml"), force=force
+    )
+    env_status = _write_template(
+        env_example_path, read_template_text("server.env.example"), force=force
+    )
 
     typer.echo(f"Server config:   {server_path} ({server_status})")
     typer.echo(f"Env example:     {env_example_path} ({env_status})")
@@ -72,7 +78,11 @@ def db_migrate(config: ConfigOption = None) -> None:
 @db_app.command("repair-auction-rounds")
 def db_repair_auction_rounds(
     config: ConfigOption = None,
-    apply: bool = typer.Option(False, "--apply", help="Apply deterministic receipt and round-link repairs."),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Repair receipts and round links for current automation scope.",
+    ),
 ) -> None:
     import asyncio
 
@@ -96,13 +106,22 @@ def db_repair_auction_rounds(
     report = asyncio.run(_run())
     for pair in report.pairs:
         live_suffix = " live" if pair.live_on_chain is True else ""
+        audit_status = (
+            "OUT_OF_SCOPE"
+            if not pair.in_scope
+            else "OK"
+            if pair.passed
+            else "UNRESOLVED"
+        )
         typer.echo(
             f"{pair.auction_address} {pair.token_address} "
             f"{pair.outcome} {pair.reason_code or '-'}{live_suffix} "
-            f"{'OK' if pair.passed else 'UNRESOLVED'}"
+            f"{audit_status}"
         )
     if report.reconciliation_errors:
-        typer.echo(f"{len(report.reconciliation_errors)} reconciliation error(s)", err=True)
+        typer.echo(
+            f"{len(report.reconciliation_errors)} reconciliation error(s)", err=True
+        )
     if not report.passed:
         raise typer.Exit(code=1)
     typer.echo("auction round audit passed")

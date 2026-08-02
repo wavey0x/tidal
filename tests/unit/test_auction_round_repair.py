@@ -11,6 +11,7 @@ from tidal.operation_reconciler import DecodedKick, DecodedReceipt, DecodedResol
 from tidal.persistence import models
 from tidal.persistence.db import Database
 from tidal.persistence.repositories import KickTxRepository
+from tidal.transaction_service.kick_policy import IgnorePolicy
 
 
 AUCTION = "0x00000000000000000000000000000000000000a1"
@@ -25,6 +26,18 @@ def session(tmp_path):
     database = Database(f"sqlite:///{tmp_path / 'repair.db'}")
     models.metadata.create_all(database.engine)
     session = database.session()
+    session.execute(
+        models.strategies.insert().values(
+            address=SOURCE,
+            chain_id=1,
+            vault_address="0xvault",
+            active=1,
+            auction_address=AUCTION,
+            first_seen_at=MINED_AT,
+            last_seen_at=MINED_AT,
+        )
+    )
+    session.commit()
     try:
         yield session
     finally:
@@ -51,7 +64,16 @@ def _row(operation_type: str, tx_hash: str, *, created_at: str, **values):
 def _repair(session, web3):
     return AuctionRoundRepair(
         session=session,
-        settings=SimpleNamespace(auction_kicker_address=KICKER),
+        settings=SimpleNamespace(
+            auction_kicker_address=KICKER,
+            kick_config=SimpleNamespace(
+                ignore_policy=IgnorePolicy(
+                    frozenset(),
+                    frozenset(),
+                    frozenset(),
+                )
+            ),
+        ),
         web3_client=web3,
     )
 
@@ -158,3 +180,72 @@ async def test_repair_apply_is_idempotent_and_following_check_passes(session) ->
     assert second_rows[0]["sell_amount"] == "100"
     assert second_rows[1]["sell_amount"] == "0"
     assert second_rows[1]["round_kick_id"] == second_rows[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_repair_check_skips_inactive_historical_pair(session) -> None:
+    repo = KickTxRepository(session)
+    repo.insert(
+        _row(
+            "kick",
+            "0xkick",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="90",
+            block_number=100,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    session.execute(
+        models.strategies.update()
+        .where(models.strategies.c.address == SOURCE)
+        .values(active=0)
+    )
+    session.commit()
+
+    report = await _repair(session, SimpleNamespace()).run(apply=False)
+
+    assert report.passed is True
+    assert report.pairs[0].in_scope is False
+    assert report.pairs[0].outcome == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_old_submitted_row_does_not_block_later_productive_reset(session) -> None:
+    repo = KickTxRepository(session)
+    repo.insert(_row("kick", "0xold", created_at="2026-08-02T10:00:00+00:00"))
+    kick_id = repo.insert(
+        _row(
+            "kick",
+            "0xnew",
+            created_at="2026-08-02T12:00:00+00:00",
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=100,
+            transaction_index=0,
+            mined_at="2026-08-02T12:00:00+00:00",
+        )
+    )
+    repo.insert(
+        _row(
+            "resolve_auction",
+            "0xresolve",
+            created_at="2026-08-02T13:00:00+00:00",
+            status="CONFIRMED",
+            sell_amount="50",
+            round_kick_id=kick_id,
+            resolution_path=1,
+            block_number=101,
+            transaction_index=0,
+            mined_at="2026-08-02T13:00:00+00:00",
+        )
+    )
+
+    report = await _repair(session, SimpleNamespace()).run(apply=False)
+
+    assert report.passed is True
+    assert report.pairs[0].in_scope is True
+    assert report.pairs[0].outcome == "PRODUCTIVE"

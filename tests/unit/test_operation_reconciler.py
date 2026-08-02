@@ -25,6 +25,7 @@ AUCTION = "0x00000000000000000000000000000000000000a1"
 TOKEN = "0x00000000000000000000000000000000000000b1"
 SOURCE = "0x00000000000000000000000000000000000000c1"
 KICKER = "0x00000000000000000000000000000000000000d1"
+HISTORICAL_KICKER = "0x00000000000000000000000000000000000000d2"
 MINED_AT = datetime.fromtimestamp(1_754_131_200, tz=timezone.utc).isoformat()
 
 
@@ -285,3 +286,34 @@ def test_foreign_key_enforcement_rejects_invalid_round_link(session) -> None:
             )
         )
     session.rollback()
+
+
+def test_receipt_destination_selects_the_historical_kicker_contract(session) -> None:
+    captured_addresses: list[str] = []
+
+    class EmptyEvent:
+        def process_receipt(self, receipt, *, errors):  # noqa: ANN001
+            del receipt, errors
+            return []
+
+    class KickerEvents:
+        Kicked = AuctionResolved = AuctionSwept = EmptyEvent
+
+    web3 = _web3()
+
+    def contract(address, abi):  # noqa: ANN001
+        del abi
+        captured_addresses.append(address.lower())
+        return SimpleNamespace(events=KickerEvents())
+
+    web3.contract = contract
+    reconciler = OperationReconciler(
+        session=session,
+        web3_client=web3,
+        auction_kicker_address=KICKER,
+    )
+
+    decoded = reconciler._decode_receipt({"to": HISTORICAL_KICKER, "logs": []}, ())
+
+    assert decoded == DecodedReceipt()
+    assert captured_addresses == [HISTORICAL_KICKER]

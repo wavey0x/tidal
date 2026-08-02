@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 
 from tidal.alerts.base import AlertMessage
+from tidal.automation_scope import pair_in_automation_scope
 from tidal.auction_rounds import NoFillGuard, NoFillReason, RoundOutcome
 from tidal.normalizers import normalize_address
 from tidal.persistence import models
@@ -345,37 +346,10 @@ class AlertService:
         )
 
     def _pair_in_scope(self, kick: dict[str, object]) -> bool:
-        source_type = str(kick.get("source_type") or "")
-        source_address = str(
-            kick.get("source_address") or kick.get("strategy_address") or ""
-        )
-        if not source_address:
-            return False
-        if (
-            self.settings.kick_config.ignore_policy.match(
-                source_address=source_address,
-                auction_address=str(kick["auction_address"]),
-                token_address=str(kick["token_address"]),
-            )
-            is not None
-        ):
-            return False
-        table = models.strategies if source_type == "strategy" else models.fee_burners
-        row = (
-            self.session.execute(
-                select(table.c.active, table.c.auction_address).where(
-                    table.c.address == source_address
-                )
-            )
-            .mappings()
-            .first()
-        )
-        return bool(
-            row is not None
-            and int(row["active"]) == 1
-            and row["auction_address"]
-            and normalize_address(str(row["auction_address"]))
-            == normalize_address(str(kick["auction_address"]))
+        return pair_in_automation_scope(
+            self.session,
+            self.settings.kick_config.ignore_policy,
+            kick,
         )
 
     def _scan_unhealthy(

@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 
 from tidal.alerts.base import AlertMessage
-from tidal.automation_scope import pair_in_automation_scope
+from tidal.automation_scope import current_automation_pairs, pair_in_automation_scope
 from tidal.auction_rounds import NoFillGuard, NoFillReason, RoundOutcome
 from tidal.normalizers import normalize_address
 from tidal.persistence import models
@@ -144,6 +144,7 @@ class AlertService:
         )
         items: list[AlertItem] = []
         transitions: list[AlertMessage] = []
+        current_pairs = current_automation_pairs(self.session, self.settings)
         for auction_address, token_address in pairs:
             rows = self.kick_repo.list_pair_operations(auction_address, token_address)
             latest_kick = next(
@@ -155,7 +156,11 @@ class AlertService:
                 ),
                 None,
             )
-            if latest_kick is None or not self._pair_in_scope(latest_kick):
+            if latest_kick is None or not pair_in_automation_scope(
+                self.session,
+                current_pairs,
+                latest_kick,
+            ):
                 continue
             decision = guard.decide(
                 auction_address=auction_address,
@@ -343,13 +348,6 @@ class AlertService:
                 ),
                 **({"command": next_command} if next_command else {}),
             },
-        )
-
-    def _pair_in_scope(self, kick: dict[str, object]) -> bool:
-        return pair_in_automation_scope(
-            self.session,
-            self.settings.kick_config.ignore_policy,
-            kick,
         )
 
     def _scan_unhealthy(

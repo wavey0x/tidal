@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import structlog
 from eth_utils import to_checksum_address
 
-from tidal.automation_scope import pair_in_automation_scope
+from tidal.automation_scope import current_automation_pairs, pair_in_automation_scope
 from tidal.auction_rounds import RoundOutcome, classify_pair_operations
 from tidal.chain.contracts.abis import AUCTION_ABI
 from tidal.normalizers import normalize_address
@@ -125,6 +125,7 @@ class AuctionRoundRepair:
 
     def _in_scope_pairs(self) -> set[tuple[str, str]]:
         output: set[tuple[str, str]] = set()
+        current_pairs = current_automation_pairs(self.session, self.settings)
         for auction_address, token_address in self._pair_keys():
             rows = self.repo.list_pair_operations(auction_address, token_address)
             latest_kick = next(
@@ -138,7 +139,7 @@ class AuctionRoundRepair:
             )
             if latest_kick is not None and pair_in_automation_scope(
                 self.session,
-                self.settings.kick_config.ignore_policy,
+                current_pairs,
                 latest_kick,
             ):
                 output.add((auction_address, token_address))
@@ -195,6 +196,7 @@ class AuctionRoundRepair:
 
     async def _audit_pairs(self) -> list[RepairPairAudit]:
         pairs = sorted(self._pair_keys())
+        current_pairs = current_automation_pairs(self.session, self.settings)
         output: list[RepairPairAudit] = []
         for auction_address, token_address in pairs:
             rows = self.repo.list_pair_operations(auction_address, token_address)
@@ -211,7 +213,7 @@ class AuctionRoundRepair:
             )
             in_scope = latest_kick is not None and pair_in_automation_scope(
                 self.session,
-                self.settings.kick_config.ignore_policy,
+                current_pairs,
                 latest_kick,
             )
             live = None

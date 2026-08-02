@@ -33,8 +33,31 @@ def session(tmp_path):
             vault_address="0xvault",
             active=1,
             auction_address=AUCTION,
+            want_address="0x00000000000000000000000000000000000000e1",
             first_seen_at=MINED_AT,
             last_seen_at=MINED_AT,
+        )
+    )
+    session.execute(
+        models.tokens.insert().values(
+            address=TOKEN,
+            chain_id=1,
+            decimals=18,
+            price_usd="1",
+            price_status="SUCCESS",
+            price_fetched_at=MINED_AT,
+            first_seen_at=MINED_AT,
+            last_seen_at=MINED_AT,
+        )
+    )
+    session.execute(
+        models.strategy_token_balances_latest.insert().values(
+            strategy_address=SOURCE,
+            token_address=TOKEN,
+            raw_balance="100",
+            normalized_balance="100",
+            block_number=100,
+            scanned_at=MINED_AT,
         )
     )
     session.commit()
@@ -66,6 +89,8 @@ def _repair(session, web3):
         session=session,
         settings=SimpleNamespace(
             auction_kicker_address=KICKER,
+            txn_usd_threshold=1,
+            txn_data_freshness_limit_seconds=999_999_999,
             kick_config=SimpleNamespace(
                 ignore_policy=IgnorePolicy(
                     frozenset(),
@@ -183,7 +208,9 @@ async def test_repair_apply_is_idempotent_and_following_check_passes(session) ->
 
 
 @pytest.mark.asyncio
-async def test_repair_check_skips_inactive_historical_pair(session) -> None:
+async def test_repair_check_skips_historical_pair_without_current_candidate(
+    session,
+) -> None:
     repo = KickTxRepository(session)
     repo.insert(
         _row(
@@ -199,9 +226,12 @@ async def test_repair_check_skips_inactive_historical_pair(session) -> None:
         )
     )
     session.execute(
-        models.strategies.update()
-        .where(models.strategies.c.address == SOURCE)
-        .values(active=0)
+        models.strategy_token_balances_latest.update()
+        .where(
+            models.strategy_token_balances_latest.c.strategy_address == SOURCE,
+            models.strategy_token_balances_latest.c.token_address == TOKEN,
+        )
+        .values(raw_balance="0", normalized_balance="0")
     )
     session.commit()
 

@@ -36,8 +36,31 @@ def session(tmp_path):
             vault_address="0xvault",
             active=1,
             auction_address=AUCTION,
+            want_address="0x00000000000000000000000000000000000000e1",
             first_seen_at=NOW.isoformat(),
             last_seen_at=NOW.isoformat(),
+        )
+    )
+    session.execute(
+        insert(models.tokens).values(
+            address=TOKEN,
+            chain_id=1,
+            decimals=18,
+            price_usd="1",
+            price_status="SUCCESS",
+            price_fetched_at=NOW.isoformat(),
+            first_seen_at=NOW.isoformat(),
+            last_seen_at=NOW.isoformat(),
+        )
+    )
+    session.execute(
+        insert(models.strategy_token_balances_latest).values(
+            strategy_address=SOURCE,
+            token_address=TOKEN,
+            raw_balance="100",
+            normalized_balance="100",
+            block_number=100,
+            scanned_at=NOW.isoformat(),
         )
     )
     session.commit()
@@ -52,6 +75,8 @@ def _settings(*, stale_minutes: int = 90):
     return SimpleNamespace(
         chain_id=1,
         scan_stale_after_minutes=stale_minutes,
+        txn_usd_threshold=1,
+        txn_data_freshness_limit_seconds=86_400,
         kick_config=SimpleNamespace(
             no_fill_policy=SimpleNamespace(retry_delays_minutes=(720, 1440)),
             ignore_policy=IgnorePolicy(frozenset(), frozenset(), frozenset()),

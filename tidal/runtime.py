@@ -156,9 +156,7 @@ def build_scanner_service(
     if auto_settle or auto_enable_tokens:
         resolved_keystore_path = settings.resolved_txn_keystore_path
         if resolved_keystore_path is None or not settings.txn_keystore_passphrase:
-            raise ValueError(
-                "TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for transaction commands"
-            )
+            raise ValueError("TXN_KEYSTORE_PATH and TXN_KEYSTORE_PASSPHRASE are required for transaction commands")
         signer = TransactionSigner(
             str(resolved_keystore_path),
             settings.txn_keystore_passphrase,

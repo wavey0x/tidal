@@ -106,7 +106,7 @@ class AlertService:
         repeated_items, repeated_transitions = self._repeated_scan_failures()
         items.extend(repeated_items)
         transitions.extend(repeated_transitions)
-        severity_rank = {"critical": 0, "warning": 1, "info": 2}
+        severity_rank = {"critical": 0, "high": 1, "warning": 2, "info": 3}
         items.sort(
             key=lambda item: (
                 0 if item.status == "needs_action" else 1,
@@ -202,7 +202,7 @@ class AlertService:
                     occurrence_id=occurrence_id,
                     latest_kick=latest_kick,
                     decision=decision,
-                    severity="critical",
+                    severity="high",
                     status="needs_action",
                     title="Auction retry budget exhausted",
                     summary=f"{decision.consecutive_no_fills} consecutive no-fill rounds paused automation.",

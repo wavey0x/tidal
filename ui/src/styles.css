@@ -75,6 +75,7 @@
 }
 
 .alert-card.alert-critical { border-left-color: var(--error); }
+.alert-card.alert-high { border-left-color: var(--error); }
 .alert-card.alert-warning { border-left-color: var(--warning); }
 .alert-card.alert-info { border-left-color: var(--text-secondary); }
 

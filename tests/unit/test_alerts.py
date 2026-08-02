@@ -173,7 +173,7 @@ def test_no_fill_backoff_and_exhaustion_share_occurrence(session) -> None:
     )
     terminal = next(item for item in exhausted.items if item.kind == "auction_retry")
     assert terminal.status == "needs_action"
-    assert terminal.severity == "critical"
+    assert terminal.severity == "high"
     assert terminal.occurrence_id == watching.occurrence_id
     assert terminal.opened_at == (NOW + timedelta(hours=41)).isoformat()
     assert terminal.updated_at == terminal.opened_at

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    CheckConstraint,
     Column,
+    ForeignKey,
     Index,
     Integer,
     MetaData,
@@ -251,7 +253,29 @@ kick_txs = Table(
     Column("auctionscan_round_id", Integer, nullable=True),
     Column("auctionscan_last_checked_at", String, nullable=True),
     Column("auctionscan_matched_at", String, nullable=True),
+    Column("round_kick_id", Integer, ForeignKey("kick_txs.id"), nullable=True),
+    Column("resolution_path", Integer, nullable=True),
+    Column("mined_at", String, nullable=True),
+    Column("transaction_index", Integer, nullable=True),
+    Column("requested_sell_amount", Text, nullable=True),
     Column("created_at", String, nullable=False),
+)
+
+alert_deliveries = Table(
+    "alert_deliveries",
+    metadata,
+    Column("delivery_key", String, nullable=False),
+    Column("destination", String, nullable=False),
+    Column("occurrence_id", String, nullable=False),
+    Column("attempt_count", Integer, nullable=False, server_default="0"),
+    Column("last_attempt_at", String, nullable=True),
+    Column("sent_at", String, nullable=True),
+    Column("last_error", Text, nullable=True),
+    CheckConstraint(
+        "destination IN ('admin_alerts', 'operations_alerts')",
+        name="ck_alert_deliveries_destination",
+    ),
+    PrimaryKeyConstraint("delivery_key", "destination"),
 )
 
 api_actions = Table(
@@ -311,6 +335,15 @@ Index("ix_kick_txs_auction_token_created", kick_txs.c.auction_address, kick_txs.
 Index("ix_kick_txs_run_created", kick_txs.c.run_id, kick_txs.c.created_at.desc())
 Index("ix_kick_txs_source_token_created", kick_txs.c.source_address, kick_txs.c.token_address, kick_txs.c.created_at.desc())
 Index("ix_kick_txs_strategy_token_created", kick_txs.c.strategy_address, kick_txs.c.token_address, kick_txs.c.created_at.desc())
+Index("ix_kick_txs_round_kick_id", kick_txs.c.round_kick_id)
+Index(
+    "ix_kick_txs_auction_token_chain_position",
+    kick_txs.c.auction_address,
+    kick_txs.c.token_address,
+    kick_txs.c.block_number,
+    kick_txs.c.transaction_index,
+)
+Index("ix_alert_deliveries_occurrence_id", alert_deliveries.c.occurrence_id)
 Index("ix_api_actions_status_created", api_actions.c.status, api_actions.c.created_at.desc())
 Index("ix_api_actions_operator_created", api_actions.c.operator_id, api_actions.c.created_at.desc())
 Index("ix_api_action_transactions_action_tx_index", api_action_transactions.c.action_id, api_action_transactions.c.tx_index, unique=True)

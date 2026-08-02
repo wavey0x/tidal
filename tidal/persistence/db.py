@@ -36,6 +36,7 @@ class Database:
 
         cursor = dbapi_connection.cursor()
         try:
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
             cursor.execute("PRAGMA synchronous=NORMAL")

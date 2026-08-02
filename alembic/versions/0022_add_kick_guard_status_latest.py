@@ -1,7 +1,7 @@
 """add latest kick guard status table
 
 Revision ID: 0022_add_kick_guard_status_latest
-Revises: 0021_add_kick_log_listing_indexes
+Revises: 0021_add_auction_token_kick_index
 Create Date: 2026-05-12 10:45:00.000000
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "0022_add_kick_guard_status_latest"
-down_revision = "0021_add_kick_log_listing_indexes"
+down_revision = "0021_add_auction_token_kick_index"
 branch_labels = None
 depends_on = None
 

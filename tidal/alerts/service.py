@@ -285,14 +285,13 @@ class AlertService:
             )
         no_fill_rounds = sequence.no_fill_rounds
         if no_fill_rounds:
-            oldest_no_fill = no_fill_rounds[-1]
             newest_no_fill = no_fill_rounds[0]
             opened = (
-                oldest_no_fill.close_at
-                or oldest_no_fill.kick_at
+                newest_no_fill.close_at
+                or newest_no_fill.kick_at
                 or datetime.now(timezone.utc)
             )
-            updated = newest_no_fill.close_at or newest_no_fill.kick_at or opened
+            updated = opened
         else:
             latest_round = sequence.latest
             opened = (

@@ -2359,64 +2359,63 @@ function AlertRoundTimeline({ rounds = [] }) {
 function AlertCard({ item, nowMs }) {
   const sourceLabel = item.scope?.sourceType === "fee_burner" ? "Fee burner" : "Strategy";
   const retryLabel = item.retryAt
-    ? `${new Date(item.retryAt).getTime() <= nowMs ? "Eligible now" : formatRelativeTimestamp(item.retryAt, nowMs)} · ${formatUtcTimestamp(item.retryAt)}`
+    ? new Date(item.retryAt).getTime() <= nowMs
+      ? "Retry eligible"
+      : `Retry ${formatRelativeTimestamp(item.retryAt, nowMs)}`
     : null;
   return (
     <article className={`alert-card alert-${item.severity}`}>
       <div className="alert-card-header">
-        <div>
-          <div className="alert-kicker">{item.severity} · {item.status.replaceAll("_", " ")}</div>
+        <div className="alert-title">
+          <div className="alert-kicker">{item.severity}</div>
           <h3>{item.title}</h3>
         </div>
-        <span className="alert-age">
-          <span>{formatRelativeTimestamp(item.openedAt, nowMs)}</span>
-          <span>{formatUtcTimestamp(item.openedAt)}</span>
-        </span>
+        <time className="alert-age" dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>
+          {formatRelativeTimestamp(item.openedAt, nowMs)}
+        </time>
       </div>
       <p>{item.summary}</p>
-      {item.scope?.sourceAddress ? (
-        <EntityIdentity primary={sourceLabel} address={item.scope.sourceAddress} />
-      ) : null}
       <div className="alert-addresses">
+        {item.scope?.sourceAddress ? (
+          <div><span>{sourceLabel}</span><AddressLinkCopy address={item.scope.sourceAddress} /></div>
+        ) : null}
         {item.scope?.auctionAddress ? (
           <div><span>Auction</span><AddressLinkCopy address={item.scope.auctionAddress} /></div>
         ) : null}
         {item.scope?.tokenAddress ? (
           <div><span>Token</span><AddressLinkCopy address={item.scope.tokenAddress} /></div>
         ) : null}
+        {retryLabel ? <div className="alert-retry" title={formatUtcTimestamp(item.retryAt)}>{retryLabel}</div> : null}
       </div>
-      {retryLabel ? <div className="alert-retry"><strong>Retry</strong> {retryLabel}</div> : null}
-      <div className="alert-next-action">
-        <strong>Next</strong>
-        <span>{item.nextAction?.instruction}</span>
+      <div className="alert-actions">
+        <div className="alert-links">
+          {item.links?.logs ? <a href={item.links.logs}>Tidal Logs</a> : null}
+          {item.links?.etherscan ? <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">Etherscan</a> : null}
+          {item.links?.auctionScan ? <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">AuctionScan</a> : null}
+        </div>
         {item.nextAction?.command ? (
-          <span className="alert-command mono">
-            {item.nextAction.command}
+          <span className="alert-command" title={item.nextAction.command}>
+            Copy retry
             <CopyIconButton
               valueToCopy={item.nextAction.command}
-              title="Copy command"
+              title="Copy scoped retry command"
               ariaLabel="Copy scoped retry command"
             />
           </span>
         ) : null}
+        <details className="alert-details">
+          <summary>Evidence</summary>
+          {item.kind === "auction_retry" ? (
+            <AlertRoundTimeline rounds={item.evidence?.rounds || []} />
+          ) : (
+            <dl className="alert-evidence-list">
+              {Object.entries(item.evidence || {}).map(([key, value]) => (
+                <div key={key}><dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt><dd className="mono">{Array.isArray(value) ? value.join(", ") : String(value ?? "—")}</dd></div>
+              ))}
+            </dl>
+          )}
+        </details>
       </div>
-      <div className="alert-links">
-        {item.links?.logs ? <a href={item.links.logs}>Tidal Logs</a> : null}
-        {item.links?.etherscan ? <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">Etherscan</a> : null}
-        {item.links?.auctionScan ? <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">AuctionScan</a> : null}
-      </div>
-      <details className="alert-details">
-        <summary>Evidence</summary>
-        {item.kind === "auction_retry" ? (
-          <AlertRoundTimeline rounds={item.evidence?.rounds || []} />
-        ) : (
-          <dl className="alert-evidence-list">
-            {Object.entries(item.evidence || {}).map(([key, value]) => (
-              <div key={key}><dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt><dd className="mono">{Array.isArray(value) ? value.join(", ") : String(value ?? "—")}</dd></div>
-            ))}
-          </dl>
-        )}
-      </details>
     </article>
   );
 }

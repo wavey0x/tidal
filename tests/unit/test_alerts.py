@@ -175,6 +175,8 @@ def test_no_fill_backoff_and_exhaustion_share_occurrence(session) -> None:
     assert terminal.status == "needs_action"
     assert terminal.severity == "critical"
     assert terminal.occurrence_id == watching.occurrence_id
+    assert terminal.opened_at == (NOW + timedelta(hours=41)).isoformat()
+    assert terminal.updated_at == terminal.opened_at
     assert terminal.next_action["command"].endswith("--allow-no-fill-retry")
     assert any(
         message.delivery_key == "auction_retry_exhausted:5"

@@ -60,6 +60,7 @@ class AuctionRoundRepair:
         errors: list[ReconciliationError] = []
         if apply:
             scoped_pairs = self._in_scope_pairs()
+            self._repair_links(scoped_pairs)
             scoped_tx_hashes = {
                 str(row["tx_hash"])
                 for auction_address, token_address in scoped_pairs

@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+from html import escape
+from urllib.parse import urlparse
+
 import httpx
 
 from tidal.alerts.base import AlertMessage
+
+
+def _link_label(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    host = parsed.netloc.lower()
+    if host == "etherscan.io" or host.endswith(".etherscan.io"):
+        return "Etherscan"
+    if host == "auctionscan.info" or host.endswith(".auctionscan.info"):
+        return "AuctionScan"
+    return "Details"
 
 
 class TelegramAlertSink:
@@ -29,19 +44,28 @@ class TelegramAlertSink:
         chat_id = self._chat_ids.get(destination_code)
         if chat_id is None:
             raise ValueError("unknown alert destination")
-        lines = [
-            f"[{message.severity.upper()}] {message.title}",
-            message.summary,
-        ]
+        heading = escape(f"[{message.severity.upper()}] {message.title}")
+        lines = [f"<b>{heading}</b>", escape(message.summary)]
         if message.retry_at:
-            lines.append(f"Retry at: {message.retry_at}")
-        lines.extend(message.links)
+            lines.append(f"<b>Retry:</b> {escape(message.retry_at)}")
+        links = [
+            f'<a href="{escape(link, quote=True)}">{label}</a>'
+            for link in message.links
+            if (label := _link_label(link)) is not None
+        ]
+        if links:
+            lines.extend(("", " · ".join(links)))
         url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
         try:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
                 response = await client.post(
                     url,
-                    json={"chat_id": chat_id, "text": "\n".join(lines)},
+                    json={
+                        "chat_id": chat_id,
+                        "text": "\n".join(lines),
+                        "parse_mode": "HTML",
+                        "link_preview_options": {"is_disabled": True},
+                    },
                 )
                 response.raise_for_status()
         except Exception as exc:  # noqa: BLE001

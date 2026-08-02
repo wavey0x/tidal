@@ -10,6 +10,7 @@ from sqlalchemy import insert, select
 from tidal.alerts.base import AlertMessage
 from tidal.alerts.dispatcher import AlertDispatcher
 from tidal.alerts.service import AlertService
+from tidal.alerts.telegram import TelegramAlertSink
 from tidal.api.app import create_app
 from tidal.config import Settings
 from tidal.persistence import models
@@ -342,6 +343,66 @@ def test_telegram_configuration_is_all_or_none() -> None:
     assert build_alert_sink(Settings()).destination_codes == ()
     with pytest.raises(ValueError):
         Settings(TELEGRAM_BOT_TOKEN="token")
+
+
+@pytest.mark.asyncio
+async def test_telegram_message_is_compact_escaped_and_disables_previews(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class Client:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:  # noqa: ANN002
+            del args
+
+        async def post(self, url: str, *, json: dict[str, object]):
+            captured["url"] = url
+            captured["payload"] = json
+            return Response()
+
+    monkeypatch.setattr("tidal.alerts.telegram.httpx.AsyncClient", Client)
+    sink = TelegramAlertSink(
+        bot_token="secret-token",
+        admin_alert_chat_id="admin-chat",
+        operations_alert_chat_id="operations-chat",
+    )
+    message = AlertMessage(
+        "key",
+        "occurrence",
+        "warning",
+        "Auction <review>",
+        "Evidence is ambiguous & automation is paused.",
+        None,
+        (
+            "/logs?kick_id=1",
+            "https://etherscan.io/tx/0xabc",
+            "https://auctionscan.info/auction/1/0xabc",
+        ),
+    )
+
+    await sink.send("admin_alerts", message)
+
+    assert captured["payload"] == {
+        "chat_id": "admin-chat",
+        "text": (
+            "<b>[WARNING] Auction &lt;review&gt;</b>\n"
+            "Evidence is ambiguous &amp; automation is paused.\n\n"
+            '<a href="https://etherscan.io/tx/0xabc">Etherscan</a> · '
+            '<a href="https://auctionscan.info/auction/1/0xabc">AuctionScan</a>'
+        ),
+        "parse_mode": "HTML",
+        "link_preview_options": {"is_disabled": True},
+    }
 
 
 def test_alerts_endpoint_is_public_and_read_only(tmp_path) -> None:

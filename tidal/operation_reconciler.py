@@ -359,13 +359,14 @@ class OperationReconciler:
                 and row.get("status") == "CONFIRMED"
                 and row.get("operation_type") in {"resolve_auction", "auction_settled"}
             }
+            # Older gaps cannot affect the current guard and stay historical.
             positioned = [
                 kick
                 for kick in pair_kicks
                 if kick.get("block_number") is not None
                 and kick.get("transaction_index") is not None
-            ]
-            for index, kick in enumerate(positioned):
+            ][-1:]
+            for kick in positioned:
                 kick_id = int(kick["id"])
                 if kick_id in closed_ids:
                     continue
@@ -373,22 +374,13 @@ class OperationReconciler:
                     int(kick["block_number"]),
                     int(kick["transaction_index"]),
                 )
-                next_position = None
-                if index + 1 < len(positioned):
-                    next_kick = positioned[index + 1]
-                    next_position = (
-                        int(next_kick["block_number"]),
-                        int(next_kick["transaction_index"]),
-                    )
                 try:
                     contract = self.web3_client.contract(
                         to_checksum_address(auction_address), AUCTION_ABI
                     )
                     logs = await contract.events.AuctionSettled().get_logs(
                         from_block=kick_position[0],
-                        to_block=next_position[0]
-                        if next_position is not None
-                        else "latest",
+                        to_block="latest",
                         argument_filters={"from": to_checksum_address(token_address)},
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -408,9 +400,7 @@ class OperationReconciler:
 
                 for log in logs:
                     position = (int(log["blockNumber"]), int(log["transactionIndex"]))
-                    if position <= kick_position or (
-                        next_position is not None and position >= next_position
-                    ):
+                    if position <= kick_position:
                         continue
                     tx_hash_value = log["transactionHash"]
                     tx_hash = (

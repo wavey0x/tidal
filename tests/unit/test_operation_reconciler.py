@@ -276,6 +276,64 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
     assert settlements[0]["sell_amount"] == "0"
 
 
+@pytest.mark.asyncio
+async def test_direct_settlement_discovery_ignores_older_unclosed_rounds(
+    session,
+) -> None:
+    repo = KickTxRepository(session)
+    repo.insert(
+        _row(
+            operation_type="kick",
+            tx_hash="0xold",
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=100,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+    latest_kick_id = repo.insert(
+        _row(
+            operation_type="kick",
+            tx_hash="0xlatest",
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=200,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+    repo.insert(
+        _row(
+            operation_type="resolve_auction",
+            tx_hash="0xresolve",
+            status="CONFIRMED",
+            sell_amount="50",
+            resolution_path=1,
+            round_kick_id=latest_kick_id,
+            block_number=201,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+    web3 = _web3()
+
+    def unexpected_contract(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        pytest.fail("historical round should not trigger an event lookup")
+
+    web3.contract = unexpected_contract
+    reconciler = OperationReconciler(
+        session=session,
+        web3_client=web3,
+        auction_kicker_address=KICKER,
+    )
+
+    assert await reconciler.discover_direct_settlements() == []
+
+
 def test_foreign_key_enforcement_rejects_invalid_round_link(session) -> None:
     with pytest.raises(IntegrityError):
         KickTxRepository(session).insert(

@@ -6,6 +6,7 @@ from tidal.alerts.base import NullAlertSink
 from tidal.alerts.dispatcher import AlertDispatcher
 from tidal.alerts.service import AlertService
 from tidal.alerts.telegram import TelegramAlertSink
+from tidal.automation_scope import current_automation_pairs
 from tidal.auctionscan import AuctionScanService
 from tidal.chain.contracts.fee_burner import FeeBurnerReader
 from tidal.chain.contracts.erc20 import ERC20Reader
@@ -240,6 +241,12 @@ def build_scanner_service(
         auctionscan_enrichment_batch_size=settings.auctionscan_enrichment_batch_size,
         alert_sink=alert_sink,
         operation_reconciler=operation_reconciler,
+        operation_reconciliation_pairs_fn=lambda: frozenset(
+            (auction_address, token_address)
+            for _, _, auction_address, token_address in current_automation_pairs(
+                session, settings
+            )
+        ),
         alert_service=AlertService(session=session, settings=settings),
         alert_dispatcher=AlertDispatcher(session=session, sink=alert_sink),
     )

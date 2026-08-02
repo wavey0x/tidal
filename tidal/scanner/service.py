@@ -85,6 +85,7 @@ class ScannerService:
         auctionscan_enrichment_batch_size: int = 0,
         alert_sink: AlertSink,
         operation_reconciler=None,
+        operation_reconciliation_pairs_fn=None,
         alert_service=None,
         alert_dispatcher=None,
     ):
@@ -122,6 +123,7 @@ class ScannerService:
         self.auctionscan_enrichment_batch_size = auctionscan_enrichment_batch_size
         self.alert_sink = alert_sink
         self.operation_reconciler = operation_reconciler
+        self.operation_reconciliation_pairs_fn = operation_reconciliation_pairs_fn
         self.alert_service = alert_service
         self.alert_dispatcher = alert_dispatcher
 
@@ -190,8 +192,7 @@ class ScannerService:
         pairs_succeeded = 0
         pairs_failed = 0
 
-        if self.operation_reconciler is not None:
-            reconciliation_errors = await self.operation_reconciler.reconcile_all(timeout_seconds=2)
+        def add_reconciliation_errors(reconciliation_errors) -> None:  # noqa: ANN001
             errors.extend(
                 ScanItemError(
                     stage="OPERATION_RECONCILIATION",
@@ -199,6 +200,11 @@ class ScannerService:
                     error_message=error.error_message,
                 )
                 for error in reconciliation_errors
+            )
+
+        if self.operation_reconciler is not None:
+            add_reconciliation_errors(
+                await self.operation_reconciler.reconcile_submitted(timeout_seconds=2)
             )
 
         stage_a_stats = {
@@ -768,6 +774,19 @@ class ScannerService:
         )
         errors.extend(price_errors)
         _progress(11, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens, {price_tokens_skipped} skipped")
+
+        if self.operation_reconciler is not None:
+            reconciliation_pairs = (
+                self.operation_reconciliation_pairs_fn()
+                if self.operation_reconciliation_pairs_fn is not None
+                else None
+            )
+            add_reconciliation_errors(
+                await self.operation_reconciler.discover_direct_settlements(
+                    timeout_seconds=2,
+                    pairs=reconciliation_pairs,
+                )
+            )
 
         _progress(12, "Enriching AuctionScan")
         stage_j_stats = await self._enrich_auctionscan_rounds(errors=errors)

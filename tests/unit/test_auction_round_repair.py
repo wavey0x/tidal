@@ -279,3 +279,81 @@ async def test_old_submitted_row_does_not_block_later_productive_reset(session) 
     assert report.passed is True
     assert report.pairs[0].in_scope is True
     assert report.pairs[0].outcome == "PRODUCTIVE"
+
+
+def test_repair_recomputes_round_links_in_chain_order(session) -> None:
+    repo = KickTxRepository(session)
+    old_kick_id = repo.insert(
+        _row(
+            "kick",
+            "0xold-kick",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=100,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    old_close_id = repo.insert(
+        _row(
+            "resolve_auction",
+            "0xold-close",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            sell_amount="100",
+            resolution_path=5,
+            block_number=101,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    latest_kick_id = repo.insert(
+        _row(
+            "kick",
+            "0xlatest-kick",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=200,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    latest_close_id = repo.insert(
+        _row(
+            "resolve_auction",
+            "0xlatest-close",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            sell_amount="50",
+            resolution_path=5,
+            round_kick_id=old_kick_id,
+            block_number=201,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    no_op_id = repo.insert(
+        _row(
+            "resolve_auction",
+            "0xnoop",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            sell_amount="0",
+            resolution_path=0,
+            round_kick_id=latest_kick_id,
+            block_number=201,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+
+    _repair(session, SimpleNamespace())._repair_links({(AUCTION, TOKEN)})
+
+    rows = {int(row["id"]): row for row in repo.list_pair_operations(AUCTION, TOKEN)}
+    assert rows[old_close_id]["round_kick_id"] == old_kick_id
+    assert rows[latest_close_id]["round_kick_id"] == latest_kick_id
+    assert rows[no_op_id]["round_kick_id"] is None

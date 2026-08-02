@@ -10,6 +10,7 @@ import structlog
 from eth_utils import to_checksum_address
 from web3.logs import DISCARD
 
+from tidal.auction_rounds import operation_closes_round
 from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_KICKER_ABI
 from tidal.normalizers import normalize_address, to_decimal_string
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
@@ -357,7 +358,7 @@ class OperationReconciler:
                 for row in rows
                 if row.get("round_kick_id") is not None
                 and row.get("status") == "CONFIRMED"
-                and row.get("operation_type") in {"resolve_auction", "auction_settled"}
+                and operation_closes_round(row)
             }
             # Older gaps cannot affect the current guard and stay historical.
             positioned = [

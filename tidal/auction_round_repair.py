@@ -8,7 +8,11 @@ import structlog
 from eth_utils import to_checksum_address
 
 from tidal.automation_scope import current_automation_pairs, pair_in_automation_scope
-from tidal.auction_rounds import RoundOutcome, classify_pair_operations
+from tidal.auction_rounds import (
+    RoundOutcome,
+    classify_pair_operations,
+    operation_closes_round,
+)
 from tidal.chain.contracts.abis import AUCTION_ABI
 from tidal.normalizers import normalize_address
 from tidal.operation_reconciler import OperationReconciler, ReconciliationError
@@ -164,35 +168,43 @@ class AuctionRoundRepair:
 
     def _repair_links(self, pairs: set[tuple[str, str]]) -> None:
         for auction_address, token_address in sorted(pairs):
-            for row in self.repo.list_pair_operations(auction_address, token_address):
-                if (
-                    row.get("status") != "CONFIRMED"
-                    or row.get("round_kick_id") is not None
-                ):
+            rows = [
+                row
+                for row in self.repo.list_pair_operations(
+                    auction_address, token_address
+                )
+                if row.get("status") == "CONFIRMED"
+                and row.get("block_number") is not None
+                and row.get("transaction_index") is not None
+            ]
+            rows.sort(
+                key=lambda row: (
+                    int(row["block_number"]),
+                    int(row["transaction_index"]),
+                    int(row["id"]),
+                )
+            )
+            open_kick_id: int | None = None
+            changed = False
+            for row in rows:
+                if row.get("operation_type") == "kick":
+                    open_kick_id = int(row["id"])
                     continue
                 if row.get("operation_type") not in {
                     "resolve_auction",
                     "sweep_auction",
+                    "auction_settled",
                 }:
                     continue
-                if (
-                    row.get("block_number") is None
-                    or row.get("transaction_index") is None
-                ):
-                    continue
-                kick = self.repo.latest_confirmed_unclosed_kick(
-                    auction_address,
-                    token_address,
-                    before_position=(
-                        int(row["block_number"]),
-                        int(row["transaction_index"]),
-                    ),
-                )
-                if kick is not None:
-                    self.repo.update_fields(
-                        int(row["id"]), round_kick_id=int(kick["id"])
-                    )
-                    self.session.commit()
+                existing = row.get("round_kick_id")
+                existing_id = int(existing) if existing is not None else None
+                if existing_id != open_kick_id:
+                    self.repo.update_fields(int(row["id"]), round_kick_id=open_kick_id)
+                    changed = True
+                if open_kick_id is not None and operation_closes_round(row):
+                    open_kick_id = None
+            if changed:
+                self.session.commit()
 
     async def _audit_pairs(self) -> list[RepairPairAudit]:
         pairs = sorted(self._pair_keys())

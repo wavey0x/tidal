@@ -10,11 +10,14 @@ from sqlalchemy import and_, delete, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from tidal.auction_rounds import operation_closes_round
 from tidal.persistence import models
 from tidal.types import BalanceResult, ScanItemError, TokenLogoState, TokenMetadata
 
 
-def _auction_details_for_table(session: Session, table, addresses: list[str]) -> list[dict[str, str | None]]:
+def _auction_details_for_table(
+    session: Session, table, addresses: list[str]
+) -> list[dict[str, str | None]]:
     if not addresses:
         return []
     stmt = select(
@@ -44,7 +47,9 @@ class StrategyRepository:
                 set_={
                     "chain_id": row["chain_id"],
                     "vault_address": row["vault_address"],
-                    "name": row["name"] if row.get("name") is not None else models.strategies.c.name,
+                    "name": row["name"]
+                    if row.get("name") is not None
+                    else models.strategies.c.name,
                     "adapter": row.get("adapter", "yearn_curve_strategy"),
                     "active": row.get("active", 1),
                     "last_seen_at": row["last_seen_at"],
@@ -85,14 +90,18 @@ class StrategyRepository:
             if strategy_to_want is not None:
                 values["want_address"] = strategy_to_want.get(strategy_address)
             if strategy_to_auction_version is not None:
-                values["auction_version"] = strategy_to_auction_version.get(strategy_address)
+                values["auction_version"] = strategy_to_auction_version.get(
+                    strategy_address
+                )
             self.session.execute(
                 update(models.strategies)
                 .where(models.strategies.c.address == strategy_address)
                 .values(**values)
             )
 
-    def mark_auction_refresh_failed(self, addresses: list[str], *, updated_at: str, error_message: str) -> None:
+    def mark_auction_refresh_failed(
+        self, addresses: list[str], *, updated_at: str, error_message: str
+    ) -> None:
         if not addresses:
             return
         self.session.execute(
@@ -104,19 +113,20 @@ class StrategyRepository:
             )
         )
 
-    def auction_mapping_for_addresses(self, addresses: list[str]) -> dict[str, str | None]:
+    def auction_mapping_for_addresses(
+        self, addresses: list[str]
+    ) -> dict[str, str | None]:
         if not addresses:
             return {}
         stmt = select(
             models.strategies.c.address,
             models.strategies.c.auction_address,
         ).where(models.strategies.c.address.in_(addresses))
-        return {
-            row.address: row.auction_address
-            for row in self.session.execute(stmt)
-        }
+        return {row.address: row.auction_address for row in self.session.execute(stmt)}
 
-    def auction_details_for_addresses(self, addresses: list[str]) -> list[dict[str, str | None]]:
+    def auction_details_for_addresses(
+        self, addresses: list[str]
+    ) -> list[dict[str, str | None]]:
         return _auction_details_for_table(self.session, models.strategies, addresses)
 
 
@@ -131,9 +141,13 @@ class FeeBurnerRepository:
                 index_elements=[models.fee_burners.c.address],
                 set_={
                     "chain_id": row["chain_id"],
-                    "name": row["name"] if row.get("name") is not None else models.fee_burners.c.name,
+                    "name": row["name"]
+                    if row.get("name") is not None
+                    else models.fee_burners.c.name,
                     "active": row.get("active", 1),
-                    "want_address": row.get("want_address", models.fee_burners.c.want_address),
+                    "want_address": row.get(
+                        "want_address", models.fee_burners.c.want_address
+                    ),
                     "last_seen_at": row["last_seen_at"],
                 },
             )
@@ -156,14 +170,18 @@ class FeeBurnerRepository:
             if fee_burner_to_want is not None:
                 values["want_address"] = fee_burner_to_want.get(fee_burner_address)
             if fee_burner_to_auction_version is not None:
-                values["auction_version"] = fee_burner_to_auction_version.get(fee_burner_address)
+                values["auction_version"] = fee_burner_to_auction_version.get(
+                    fee_burner_address
+                )
             self.session.execute(
                 update(models.fee_burners)
                 .where(models.fee_burners.c.address == fee_burner_address)
                 .values(**values)
             )
 
-    def mark_auction_refresh_failed(self, address_to_error: dict[str, str], *, updated_at: str) -> None:
+    def mark_auction_refresh_failed(
+        self, address_to_error: dict[str, str], *, updated_at: str
+    ) -> None:
         for address, error_message in address_to_error.items():
             self.session.execute(
                 update(models.fee_burners)
@@ -175,9 +193,10 @@ class FeeBurnerRepository:
                 )
             )
 
-    def auction_details_for_addresses(self, addresses: list[str]) -> list[dict[str, str | None]]:
+    def auction_details_for_addresses(
+        self, addresses: list[str]
+    ) -> list[dict[str, str | None]]:
         return _auction_details_for_table(self.session, models.fee_burners, addresses)
-    
 
 
 class VaultRepository:
@@ -191,8 +210,12 @@ class VaultRepository:
                 index_elements=[models.vaults.c.address],
                 set_={
                     "chain_id": row["chain_id"],
-                    "name": row["name"] if row.get("name") is not None else models.vaults.c.name,
-                    "symbol": row["symbol"] if row.get("symbol") is not None else models.vaults.c.symbol,
+                    "name": row["name"]
+                    if row.get("name") is not None
+                    else models.vaults.c.name,
+                    "symbol": row["symbol"]
+                    if row.get("symbol") is not None
+                    else models.vaults.c.symbol,
                     "active": row.get("active", 1),
                     "last_seen_at": row["last_seen_at"],
                 },
@@ -248,12 +271,16 @@ class VaultRepository:
                 .limit(1)
             ).first()
             if has_strategy is None:
-                self.session.execute(delete(models.vaults).where(models.vaults.c.address == address))
+                self.session.execute(
+                    delete(models.vaults).where(models.vaults.c.address == address)
+                )
 
     def delete_strategy_address_rows_without_children(self) -> None:
         strategy_addresses = [
             row[0]
-            for row in self.session.execute(select(models.strategies.c.address.distinct())).all()
+            for row in self.session.execute(
+                select(models.strategies.c.address.distinct())
+            ).all()
         ]
         self.delete_addresses_if_orphaned(strategy_addresses)
 
@@ -342,15 +369,12 @@ class TokenRepository:
         )
 
     def get_logo_state(self, address: str) -> TokenLogoState | None:
-        stmt = (
-            select(
-                models.tokens.c.address,
-                models.tokens.c.logo_url,
-                models.tokens.c.logo_status,
-                models.tokens.c.logo_validated_at,
-            )
-            .where(models.tokens.c.address == address)
-        )
+        stmt = select(
+            models.tokens.c.address,
+            models.tokens.c.logo_url,
+            models.tokens.c.logo_status,
+            models.tokens.c.logo_validated_at,
+        ).where(models.tokens.c.address == address)
         row = self.session.execute(stmt).mappings().first()
         if row is None:
             return None
@@ -373,7 +397,9 @@ class StrategyTokenRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def upsert(self, strategy_address: str, token_address: str, source: str, now_iso: str) -> None:
+    def upsert(
+        self, strategy_address: str, token_address: str, source: str, now_iso: str
+    ) -> None:
         stmt = insert(models.strategy_tokens).values(
             strategy_address=strategy_address,
             token_address=token_address,
@@ -383,7 +409,10 @@ class StrategyTokenRepository:
             last_seen_at=now_iso,
         )
         stmt = stmt.on_conflict_do_update(
-            index_elements=[models.strategy_tokens.c.strategy_address, models.strategy_tokens.c.token_address],
+            index_elements=[
+                models.strategy_tokens.c.strategy_address,
+                models.strategy_tokens.c.token_address,
+            ],
             set_={
                 "source": source,
                 "active": 1,
@@ -397,7 +426,9 @@ class FeeBurnerTokenRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def upsert(self, fee_burner_address: str, token_address: str, source: str, now_iso: str) -> None:
+    def upsert(
+        self, fee_burner_address: str, token_address: str, source: str, now_iso: str
+    ) -> None:
         stmt = insert(models.fee_burner_tokens).values(
             fee_burner_address=fee_burner_address,
             token_address=token_address,
@@ -407,7 +438,10 @@ class FeeBurnerTokenRepository:
             last_seen_at=now_iso,
         )
         stmt = stmt.on_conflict_do_update(
-            index_elements=[models.fee_burner_tokens.c.fee_burner_address, models.fee_burner_tokens.c.token_address],
+            index_elements=[
+                models.fee_burner_tokens.c.fee_burner_address,
+                models.fee_burner_tokens.c.token_address,
+            ],
             set_={
                 "source": source,
                 "active": 1,
@@ -477,7 +511,9 @@ class AuctionEnabledTokenRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def mark_tokens_enabled(self, auction_address: str, token_addresses: Iterable[str], now_iso: str) -> None:
+    def mark_tokens_enabled(
+        self, auction_address: str, token_addresses: Iterable[str], now_iso: str
+    ) -> None:
         for token_address in sorted(set(token_addresses)):
             stmt = insert(models.auction_enabled_tokens_latest).values(
                 auction_address=auction_address,
@@ -498,11 +534,16 @@ class AuctionEnabledTokenRepository:
             )
             self.session.execute(stmt)
 
-    def refresh_for_auction(self, auction_address: str, token_addresses: Iterable[str], now_iso: str) -> None:
+    def refresh_for_auction(
+        self, auction_address: str, token_addresses: Iterable[str], now_iso: str
+    ) -> None:
         normalized_tokens = sorted(set(token_addresses))
         self.session.execute(
             update(models.auction_enabled_tokens_latest)
-            .where(models.auction_enabled_tokens_latest.c.auction_address == auction_address)
+            .where(
+                models.auction_enabled_tokens_latest.c.auction_address
+                == auction_address
+            )
             .values(active=0)
         )
 
@@ -582,7 +623,9 @@ class KickGuardStatusRepository:
             )
             self.session.execute(stmt)
 
-    def get_many(self, source_type: str, source_addresses: Iterable[str]) -> dict[str, dict[str, object]]:
+    def get_many(
+        self, source_type: str, source_addresses: Iterable[str]
+    ) -> dict[str, dict[str, object]]:
         addresses = sorted(set(source_addresses))
         if not addresses:
             return {}
@@ -650,14 +693,18 @@ class ScanItemErrorRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def add_many(self, run_id: str, errors: Iterable[ScanItemError], created_at: str) -> None:
+    def add_many(
+        self, run_id: str, errors: Iterable[ScanItemError], created_at: str
+    ) -> None:
         for error in errors:
             self.session.execute(
                 insert(models.scan_item_errors).values(
                     run_id=run_id,
                     source_type=error.source_type,
                     source_address=error.source_address,
-                    strategy_address=error.source_address if error.source_type == "strategy" else None,
+                    strategy_address=error.source_address
+                    if error.source_type == "strategy"
+                    else None,
                     token_address=error.token_address,
                     stage=error.stage,
                     error_code=error.error_code,
@@ -733,9 +780,13 @@ class KickTxRepository:
         return result.lastrowid  # type: ignore[return-value]
 
     def get(self, kick_tx_id: int) -> dict[str, object] | None:
-        row = self.session.execute(
-            select(models.kick_txs).where(models.kick_txs.c.id == kick_tx_id)
-        ).mappings().first()
+        row = (
+            self.session.execute(
+                select(models.kick_txs).where(models.kick_txs.c.id == kick_tx_id)
+            )
+            .mappings()
+            .first()
+        )
         return dict(row) if row is not None else None
 
     def find_by_run_and_identity(
@@ -746,14 +797,18 @@ class KickTxRepository:
         auction_address: str,
         token_address: str,
     ) -> dict[str, object] | None:
-        row = self.session.execute(
-            select(models.kick_txs).where(
-                models.kick_txs.c.run_id == run_id,
-                models.kick_txs.c.operation_type == operation_type,
-                models.kick_txs.c.auction_address == auction_address,
-                models.kick_txs.c.token_address == token_address,
+        row = (
+            self.session.execute(
+                select(models.kick_txs).where(
+                    models.kick_txs.c.run_id == run_id,
+                    models.kick_txs.c.operation_type == operation_type,
+                    models.kick_txs.c.auction_address == auction_address,
+                    models.kick_txs.c.token_address == token_address,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return dict(row)
@@ -838,14 +893,18 @@ class KickTxRepository:
         auction_address: str,
         token_address: str,
     ) -> dict[str, object] | None:
-        row = self.session.execute(
-            select(models.kick_txs).where(
-                models.kick_txs.c.operation_type == operation_type,
-                models.kick_txs.c.tx_hash == tx_hash,
-                models.kick_txs.c.auction_address == auction_address,
-                models.kick_txs.c.token_address == token_address,
+        row = (
+            self.session.execute(
+                select(models.kick_txs).where(
+                    models.kick_txs.c.operation_type == operation_type,
+                    models.kick_txs.c.tx_hash == tx_hash,
+                    models.kick_txs.c.auction_address == auction_address,
+                    models.kick_txs.c.token_address == token_address,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         return dict(row) if row is not None else None
 
     def latest_confirmed_unclosed_kick(
@@ -861,7 +920,7 @@ class KickTxRepository:
             for row in rows
             if row.get("round_kick_id") is not None
             and row.get("status") == "CONFIRMED"
-            and row.get("operation_type") in {"resolve_auction", "auction_settled"}
+            and operation_closes_round(row)
         }
         candidates: list[dict[str, object]] = []
         for row in rows:
@@ -871,9 +930,15 @@ class KickTxRepository:
             if row_id in confirmed_closes:
                 continue
             if before_position is not None:
-                if row.get("block_number") is None or row.get("transaction_index") is None:
+                if (
+                    row.get("block_number") is None
+                    or row.get("transaction_index") is None
+                ):
                     continue
-                if (int(row["block_number"]), int(row["transaction_index"])) >= before_position:
+                if (
+                    int(row["block_number"]),
+                    int(row["transaction_index"]),
+                ) >= before_position:
                     continue
             candidates.append(row)
         if not candidates:
@@ -888,7 +953,9 @@ class KickTxRepository:
         )
         return candidates[0]
 
-    def last_kick_for_auction_token(self, auction_address: str, token_address: str) -> dict[str, object] | None:
+    def last_kick_for_auction_token(
+        self, auction_address: str, token_address: str
+    ) -> dict[str, object] | None:
         stmt = (
             select(models.kick_txs)
             .where(
@@ -905,7 +972,9 @@ class KickTxRepository:
             return None
         return dict(row)
 
-    def list_pair_operations(self, auction_address: str, token_address: str) -> list[dict[str, object]]:
+    def list_pair_operations(
+        self, auction_address: str, token_address: str
+    ) -> list[dict[str, object]]:
         stmt = (
             select(models.kick_txs)
             .where(
@@ -944,7 +1013,12 @@ class APIActionRepository:
         status: str | None = None,
         action_type: str | None = None,
     ) -> list[dict[str, object]]:
-        stmt = select(models.api_actions).order_by(models.api_actions.c.created_at.desc()).limit(limit).offset(offset)
+        stmt = (
+            select(models.api_actions)
+            .order_by(models.api_actions.c.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         if operator_id is not None:
             stmt = stmt.where(models.api_actions.c.operator_id == operator_id)
         if status is not None:
@@ -954,9 +1028,15 @@ class APIActionRepository:
         return [dict(row) for row in self.session.execute(stmt).mappings().all()]
 
     def get_action(self, action_id: str) -> dict[str, object] | None:
-        row = self.session.execute(
-            select(models.api_actions).where(models.api_actions.c.action_id == action_id)
-        ).mappings().first()
+        row = (
+            self.session.execute(
+                select(models.api_actions).where(
+                    models.api_actions.c.action_id == action_id
+                )
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return dict(row)
@@ -969,13 +1049,19 @@ class APIActionRepository:
         )
         return [dict(row) for row in self.session.execute(stmt).mappings().all()]
 
-    def get_action_transaction(self, action_id: str, *, tx_index: int) -> dict[str, object] | None:
-        row = self.session.execute(
-            select(models.api_action_transactions).where(
-                models.api_action_transactions.c.action_id == action_id,
-                models.api_action_transactions.c.tx_index == tx_index,
+    def get_action_transaction(
+        self, action_id: str, *, tx_index: int
+    ) -> dict[str, object] | None:
+        row = (
+            self.session.execute(
+                select(models.api_action_transactions).where(
+                    models.api_action_transactions.c.action_id == action_id,
+                    models.api_action_transactions.c.tx_index == tx_index,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return dict(row)
@@ -1054,7 +1140,9 @@ class APIActionRepository:
         )
         self.session.commit()
 
-    def pending_receipt_transactions(self, *, older_than: str) -> list[dict[str, object]]:
+    def pending_receipt_transactions(
+        self, *, older_than: str
+    ) -> list[dict[str, object]]:
         stmt = (
             select(models.api_action_transactions)
             .where(

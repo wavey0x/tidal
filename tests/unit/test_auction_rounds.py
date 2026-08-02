@@ -65,14 +65,19 @@ def kick(
 
 
 def resolve(
-    row_id: int = 2, *, recovered: str = "100", kick_id: int = 1, hour: int = 1
+    row_id: int = 2,
+    *,
+    recovered: str = "100",
+    kick_id: int = 1,
+    hour: int = 1,
+    path: int = 1,
 ) -> dict[str, object]:
     return row(
         row_id,
         "resolve_auction",
         sell_amount=recovered,
         round_kick_id=kick_id,
-        resolution_path=1,
+        resolution_path=path,
         hour=hour,
     )
 
@@ -128,6 +133,34 @@ def test_manual_sweep_then_zero_resolve_sums_recovery() -> None:
     evidence = classify_round(kick(), [sweep, close])
     assert evidence.outcome == RoundOutcome.PRODUCTIVE
     assert evidence.recovered_amount == 40
+
+
+def test_non_closing_resolution_paths_do_not_create_false_ambiguity() -> None:
+    no_op_then_close = classify_round(
+        kick(),
+        [
+            resolve(2, recovered="0", path=0),
+            resolve(3, recovered="0", path=5, hour=2),
+        ],
+    )
+    assert no_op_then_close.outcome == RoundOutcome.PRODUCTIVE
+    assert no_op_then_close.close_id == 3
+
+    sweep_then_reset = classify_round(
+        kick(),
+        [
+            resolve(2, recovered="40", path=2),
+            resolve(3, recovered="0", path=4, hour=2),
+        ],
+    )
+    assert sweep_then_reset.outcome == RoundOutcome.PRODUCTIVE
+    assert sweep_then_reset.recovered_amount == 40
+
+
+def test_unknown_resolution_path_fails_closed() -> None:
+    evidence = classify_round(kick(), [resolve(path=6)])
+    assert evidence.outcome == RoundOutcome.UNKNOWN
+    assert evidence.reason_code == "INVALID_RESOLUTION_PATH"
 
 
 @pytest.mark.parametrize(

@@ -334,6 +334,40 @@ async def test_direct_settlement_discovery_ignores_older_unclosed_rounds(
     assert await reconciler.discover_direct_settlements() == []
 
 
+def test_noop_resolution_does_not_mark_kick_closed(session) -> None:
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(
+        _row(
+            operation_type="kick",
+            tx_hash="0xkick",
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=100,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    repo.insert(
+        _row(
+            operation_type="resolve_auction",
+            tx_hash="0xnoop",
+            status="CONFIRMED",
+            sell_amount="0",
+            resolution_path=0,
+            round_kick_id=kick_id,
+            block_number=101,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+
+    open_kick = repo.latest_confirmed_unclosed_kick(AUCTION, TOKEN)
+
+    assert open_kick is not None
+    assert open_kick["id"] == kick_id
+
+
 def test_foreign_key_enforcement_rejects_invalid_round_link(session) -> None:
     with pytest.raises(IntegrityError):
         KickTxRepository(session).insert(

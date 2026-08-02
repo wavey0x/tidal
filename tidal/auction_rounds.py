@@ -11,6 +11,7 @@ from tidal.normalizers import normalize_address
 
 
 ROUND_CLOSING_PATHS = frozenset({1, 3, 4, 5})
+ROUND_RESOLUTION_PATHS = frozenset(range(6))
 
 
 class RoundOutcome(str, Enum):
@@ -138,6 +139,18 @@ def _same_pair(left: Mapping[str, object], right: Mapping[str, object]) -> bool:
         return False
 
 
+def operation_closes_round(row: Mapping[str, object]) -> bool:
+    operation_type = _text(row, "operation_type")
+    if operation_type == "auction_settled":
+        return True
+    if operation_type != "resolve_auction":
+        return False
+    try:
+        return int(row.get("resolution_path")) in ROUND_CLOSING_PATHS
+    except (TypeError, ValueError):
+        return False
+
+
 def _unknown(
     kick: Mapping[str, object], reason: str, **kwargs: object
 ) -> RoundEvidence:
@@ -242,6 +255,7 @@ def classify_round(
         row for row in confirmed if _text(row, "operation_type") == "auction_settled"
     ]
 
+    resolved_paths: list[tuple[Mapping[str, object], int]] = []
     for row in resolves:
         try:
             path = int(row.get("resolution_path"))
@@ -252,17 +266,19 @@ def classify_round(
                 requested_amount=requested,
                 placed_amount=placed,
             )
-        if path not in ROUND_CLOSING_PATHS:
+        if path not in ROUND_RESOLUTION_PATHS:
             return _unknown(
                 kick,
                 "INVALID_RESOLUTION_PATH",
                 requested_amount=requested,
                 placed_amount=placed,
             )
+        resolved_paths.append((row, path))
 
     recovered = 0
     recovery_ids: list[int] = []
-    for row in sweeps:
+    non_closing_recoveries = [row for row, path in resolved_paths if path == 2]
+    for row in [*sweeps, *non_closing_recoveries]:
         amount = _raw_amount(row, "sell_amount")
         if amount is None:
             return _unknown(
@@ -274,7 +290,10 @@ def classify_round(
         recovered += amount
         recovery_ids.append(int(row["id"]))
 
-    closes = [*resolves, *settlements]
+    closes = [
+        *(row for row, path in resolved_paths if path in ROUND_CLOSING_PATHS),
+        *settlements,
+    ]
     if len(closes) == 0:
         return _incomplete(
             kick,
@@ -375,6 +394,9 @@ def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSeque
         if _text(row, "status") in {"CONFIRMED", "SUBMITTED"}
         and _text(row, "operation_type") in {"resolve_auction", "auction_settled"}
         and row.get("round_kick_id") is None
+        and (
+            _text(row, "status") == "SUBMITTED" or operation_closes_round(row)
+        )
     ]
 
     def has_unlinked_close(kick_index: int) -> bool:

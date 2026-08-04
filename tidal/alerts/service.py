@@ -234,7 +234,6 @@ class AlertService:
                 next_command=None,
             )
             items.append(item)
-            transitions.append(self._message(item, f"retry_backoff:{latest.kick_id}"))
         return items, transitions
 
     def _auction_item(

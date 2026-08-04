@@ -152,8 +152,11 @@ TELEGRAM_ADMIN_ALERT_CHAT_ID=
 TELEGRAM_OPERATIONS_ALERT_CHAT_ID=
 ```
 
-The scanner sends selected new alert transitions to both destinations. Secrets,
-chat IDs, and private destination labels do not belong in tracked YAML or source.
+The scanner sends selected new alert transitions to both destinations. Scheduled
+retry watches remain visible on the Alerts page without Telegram fan-out. A
+notification is sent only when the automatic retry budget is exhausted after the
+second retry also confirms as a no-fill. Secrets, chat IDs, and private
+destination labels do not belong in tracked YAML or source.
 
 ## `monitored_fee_burners`
 

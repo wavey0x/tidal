@@ -152,7 +152,15 @@ def _add_successful_scan(
     session.commit()
 
 
-def test_no_fill_backoff_and_exhaustion_share_occurrence(session) -> None:
+def test_no_fill_backoff_and_exhaustion_share_occurrence(session, monkeypatch) -> None:
+    class EvaluationDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            return NOW if tz is not None else NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr(
+        "tidal.transaction_service.evaluator.datetime", EvaluationDateTime
+    )
     _add_successful_scan(session)
     _add_no_fill(session, 1, 0)
     first = AlertService(
@@ -162,11 +170,19 @@ def test_no_fill_backoff_and_exhaustion_share_occurrence(session) -> None:
     assert watching.status == "watching"
     assert watching.retry_at == (NOW + timedelta(hours=13)).isoformat()
     assert first.needs_action_count == 0
-    assert [transition.delivery_key for transition in first.transitions] == [
-        "retry_backoff:1"
-    ]
+    assert not first.transitions
 
     _add_no_fill(session, 3, 14)
+    second = AlertService(
+        session=session, settings=_settings(stale_minutes=180)
+    ).evaluate(now=NOW + timedelta(hours=16))
+    second_watching = next(
+        item for item in second.items if item.kind == "auction_retry"
+    )
+    assert second_watching.status == "watching"
+    assert second_watching.retry_at == (NOW + timedelta(hours=39)).isoformat()
+    assert not second.transitions
+
     _add_no_fill(session, 5, 40)
     exhausted = AlertService(session=session, settings=_settings()).evaluate(
         now=NOW + timedelta(days=3)

@@ -107,9 +107,18 @@
 }
 
 .alert-age {
+  display: grid;
+  gap: 1px;
   color: var(--text-secondary);
   font-weight: 600;
+  text-align: right;
   white-space: nowrap;
+}
+
+.alert-age time + time {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .alert-addresses {
@@ -265,6 +274,10 @@
   .alert-card-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .alert-age {
+    text-align: left;
   }
 
   .alert-evidence-list > div {

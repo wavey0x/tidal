@@ -2356,7 +2356,7 @@ function AlertRoundTimeline({ rounds = [] }) {
   );
 }
 
-function AlertCard({ item, nowMs }) {
+function AlertCard({ item, nowMs, lastObservedAt }) {
   const sourceLabel = item.scope?.sourceType === "fee_burner" ? "Fee burner" : "Strategy";
   const retryLabel = item.retryAt
     ? new Date(item.retryAt).getTime() <= nowMs
@@ -2370,9 +2370,16 @@ function AlertCard({ item, nowMs }) {
           <div className="alert-kicker">{item.severity}</div>
           <h3>{item.title}</h3>
         </div>
-        <time className="alert-age" dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>
-          {formatRelativeTimestamp(item.openedAt, nowMs)}
-        </time>
+        <div className="alert-age">
+          <time dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>
+            Opened {formatRelativeTimestamp(item.openedAt, nowMs)}
+          </time>
+          {item.status === "needs_action" && lastObservedAt ? (
+            <time dateTime={lastObservedAt} title={formatUtcTimestamp(lastObservedAt)}>
+              Still active {formatRelativeTimestamp(lastObservedAt, nowMs)}
+            </time>
+          ) : null}
+        </div>
       </div>
       <p>{item.summary}</p>
       <div className="alert-addresses">
@@ -2440,10 +2447,10 @@ function AlertsPage({ data, loading, error, nowMs }) {
         </div>
       ) : null}
       {needsAction.length ? (
-        <section className="alert-section"><h2>Needs action</h2>{needsAction.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} />)}</section>
+        <section className="alert-section"><h2>Needs action</h2>{needsAction.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.latestSuccessfulScanAt} />)}</section>
       ) : null}
       {watching.length ? (
-        <section className="alert-section"><h2>Watching</h2>{watching.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} />)}</section>
+        <section className="alert-section"><h2>Watching</h2>{watching.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.latestSuccessfulScanAt} />)}</section>
       ) : null}
     </section>
   );

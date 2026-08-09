@@ -220,7 +220,10 @@ class AuctionSettlementService:
             )
             candidate.token_symbol = token_metadata.symbol
         except Exception:  # noqa: BLE001
+            self.kick_tx_repository.session.rollback()
             candidate.token_symbol = None
+        else:
+            self.kick_tx_repository.session.commit()
 
         if candidate.source.want_address:
             try:
@@ -230,7 +233,10 @@ class AuctionSettlementService:
                 )
                 candidate.want_symbol = want_metadata.symbol
             except Exception:  # noqa: BLE001
+                self.kick_tx_repository.session.rollback()
                 candidate.want_symbol = None
+            else:
+                self.kick_tx_repository.session.commit()
 
     async def _resolve_candidate(
         self,

@@ -20,7 +20,7 @@ from tidal.scanner.auction_token_enabler import (
     AuctionTokenEnablementStats,
 )
 from tidal.time import utcnow, utcnow_iso
-from tidal.types import BalancePair, BalanceResult, ScanItemError, ScanRunResult
+from tidal.types import BalancePair, BalanceResult, ScanItemError, ScanRunResult, TokenMetadata
 
 # (step_number, total_steps, stage_label, detail_string)
 ProgressCallback = Callable[[int, int, str, str], None]
@@ -35,6 +35,14 @@ class _Pair:
     token_address: str
     decimals: int
     token_symbol: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class _PairSpec:
+    source_type: str
+    source_address: str
+    token_address: str
+    token_source: str
 
 
 def determine_scan_status(*, pairs_seen: int, pairs_failed: int) -> str:
@@ -206,6 +214,7 @@ class ScannerService:
             add_reconciliation_errors(
                 await self.operation_reconciler.reconcile_submitted(timeout_seconds=2)
             )
+            self._commit_stage()
 
         stage_a_stats = {
             "batch_count": 0,
@@ -328,6 +337,7 @@ class ScannerService:
         fee_burner_addresses = sorted(fee_burner_to_want)
         if fee_burner_rows:
             self.fee_burner_repository.upsert_many(fee_burner_rows)
+        self._commit_stage()
 
         auction_updated_at = utcnow_iso()
         _progress(2, "Mapping strategy auctions")
@@ -368,6 +378,7 @@ class ScannerService:
             stage_e_stats["strategies_unmapped"] = max(0, len(set(strategy_addresses)) - mapped_count)
             stage_e_stats["source"] = "cache"
         _progress(2, "Mapping strategy auctions", f"{stage_e_stats['strategies_mapped']} mapped, {stage_e_stats['strategies_unmapped']} unmapped")
+        self._commit_stage()
 
         _progress(3, "Mapping fee burners")
         if fee_burner_to_want:
@@ -422,6 +433,7 @@ class ScannerService:
                 stage_f_stats["fee_burners_unmapped"] = len(fee_burner_addresses)
                 stage_f_stats["source"] = "cache"
         _progress(3, "Mapping fee burners", f"{stage_f_stats['fee_burners_mapped']} mapped, {stage_f_stats['fee_burners_unmapped']} unmapped")
+        self._commit_stage()
 
         strategy_auction_rows = self.strategy_repository.auction_details_for_addresses(strategy_addresses)
         fee_burner_auction_rows = self.fee_burner_repository.auction_details_for_addresses(fee_burner_addresses)
@@ -430,6 +442,7 @@ class ScannerService:
             fee_burner_auction_rows=fee_burner_auction_rows,
             errors=errors,
         )
+        self._commit_stage()
 
         _progress(4, "Checking kick guards")
         stage_k_stats = await self._refresh_kick_guard_status(strategy_auction_rows)
@@ -442,6 +455,7 @@ class ScannerService:
                 f"{stage_k_stats['sources_unknown']} unknown"
             ),
         )
+        self._commit_stage()
 
         auction_addresses = sorted(
             {
@@ -516,6 +530,7 @@ class ScannerService:
                 stage_g_stats["auctions_failed"] = len(auction_addresses)
                 stage_g_stats["source"] = "cache"
         _progress(5, "Reading auction enabled tokens", f"{stage_g_stats['auctions_succeeded']} scanned, {stage_g_stats['auctions_failed']} unknown")
+        self._commit_stage()
 
         _progress(6, "Settling stale auctions")
         if self.auction_settler is not None:
@@ -549,10 +564,12 @@ class ScannerService:
                 f"{stage_h_stats['eligible_tokens']} eligible"
             ),
         )
+        self._commit_stage()
 
         _progress(7, "Hydrating names")
         await self._hydrate_cached_names(vault_addresses=vault_addresses, strategy_addresses=strategy_addresses, errors=errors)
         _progress(7, "Hydrating names", "done")
+        self._commit_stage()
 
         _progress(8, "Resolving tokens")
         try:
@@ -578,7 +595,7 @@ class ScannerService:
         )
         errors.extend(fee_burner_token_errors)
 
-        pairs: list[_Pair] = []
+        pair_specs: list[_PairSpec] = []
         for item in discovered:
             strategy_address = normalize_address(item.strategy_address)
             token_set = {
@@ -587,33 +604,12 @@ class ScannerService:
             }
             for token_address in token_set:
                 token_source = "CORE" if token_address in CORE_REWARD_TOKENS else "REWARDS_TOKENS"
-                self.strategy_token_repository.upsert(strategy_address, token_address, token_source, now_iso)
-                try:
-                    metadata = await self.token_metadata_service.get_or_fetch(
-                        token_address,
-                        is_core_reward=(token_address in CORE_REWARD_TOKENS),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(
-                        ScanItemError(
-                            stage="METADATA",
-                            error_code="token_metadata_failed",
-                            error_message=str(exc),
-                            source_type="strategy",
-                            source_address=strategy_address,
-                            token_address=token_address,
-                        )
-                    )
-                    pairs_failed += 1
-                    continue
-
-                pairs.append(
-                    _Pair(
+                pair_specs.append(
+                    _PairSpec(
                         source_type="strategy",
                         source_address=strategy_address,
                         token_address=token_address,
-                        decimals=metadata.decimals,
-                        token_symbol=metadata.symbol,
+                        token_source=token_source,
                     )
                 )
 
@@ -623,43 +619,74 @@ class ScannerService:
                 for token in fee_burner_tokens_by_address.get(fee_burner_address, set())
             }
             for token_address in token_set:
-                self.fee_burner_token_repository.upsert(
-                    fee_burner_address,
-                    token_address,
-                    "trade_handler_approval",
-                    now_iso,
-                )
-                try:
-                    metadata = await self.token_metadata_service.get_or_fetch(
-                        token_address,
-                        is_core_reward=(token_address in CORE_REWARD_TOKENS),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(
-                        ScanItemError(
-                            stage="METADATA",
-                            error_code="token_metadata_failed",
-                            error_message=str(exc),
-                            source_type="fee_burner",
-                            source_address=fee_burner_address,
-                            token_address=token_address,
-                        )
-                    )
-                    pairs_failed += 1
-                    continue
-
-                pairs.append(
-                    _Pair(
+                pair_specs.append(
+                    _PairSpec(
                         source_type="fee_burner",
                         source_address=fee_burner_address,
                         token_address=token_address,
-                        decimals=metadata.decimals,
-                        token_symbol=metadata.symbol,
+                        token_source="trade_handler_approval",
                     )
                 )
 
+        metadata_by_token: dict[str, TokenMetadata] = {}
+        metadata_errors: dict[str, str] = {}
+        for token_address in sorted({spec.token_address for spec in pair_specs}):
+            try:
+                metadata_by_token[token_address] = await self.token_metadata_service.get_or_fetch(
+                    token_address,
+                    is_core_reward=(token_address in CORE_REWARD_TOKENS),
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.session.rollback()
+                metadata_errors[token_address] = str(exc)
+            else:
+                self._commit_stage()
+
+        pairs: list[_Pair] = []
+        for spec in pair_specs:
+            if spec.source_type == "strategy":
+                self.strategy_token_repository.upsert(
+                    spec.source_address,
+                    spec.token_address,
+                    spec.token_source,
+                    now_iso,
+                )
+            else:
+                self.fee_burner_token_repository.upsert(
+                    spec.source_address,
+                    spec.token_address,
+                    spec.token_source,
+                    now_iso,
+                )
+
+            metadata = metadata_by_token.get(spec.token_address)
+            if metadata is None:
+                errors.append(
+                    ScanItemError(
+                        stage="METADATA",
+                        error_code="token_metadata_failed",
+                        error_message=metadata_errors.get(spec.token_address, "token metadata unavailable"),
+                        source_type=spec.source_type,
+                        source_address=spec.source_address,
+                        token_address=spec.token_address,
+                    )
+                )
+                pairs_failed += 1
+                continue
+
+            pairs.append(
+                _Pair(
+                    source_type=spec.source_type,
+                    source_address=spec.source_address,
+                    token_address=spec.token_address,
+                    decimals=metadata.decimals,
+                    token_symbol=metadata.symbol,
+                )
+            )
+
         pairs_seen = len(pairs)
         _progress(8, "Resolving tokens", f"{pairs_seen} pairs")
+        self._commit_stage()
         block_number = await self.web3_client.get_block_number()
         scanned_at = utcnow()
         enable_sources_by_key: dict[tuple[str, str], AuctionEnableSource] = {}
@@ -737,6 +764,7 @@ class ScannerService:
             pairs_succeeded += 1
 
         _progress(9, "Reading balances", f"{pairs_succeeded} succeeded, {pairs_failed} failed")
+        self._commit_stage()
 
         _progress(10, "Enabling auction tokens")
         if self.auction_token_enabler is not None:
@@ -755,6 +783,7 @@ class ScannerService:
                 f"{stage_i_stats['eligible_tokens']} eligible"
             ),
         )
+        self._commit_stage()
 
         price_token_map = {
             pair.token_address: pair.decimals
@@ -774,6 +803,7 @@ class ScannerService:
         )
         errors.extend(price_errors)
         _progress(11, "Refreshing prices", f"{stage_d_stats['tokens_succeeded']}/{stage_d_stats['tokens_seen']} tokens, {price_tokens_skipped} skipped")
+        self._commit_stage()
 
         if self.operation_reconciler is not None:
             reconciliation_pairs = (
@@ -787,6 +817,7 @@ class ScannerService:
                     pairs=reconciliation_pairs,
                 )
             )
+            self._commit_stage()
 
         _progress(12, "Enriching AuctionScan")
         stage_j_stats = await self._enrich_auctionscan_rounds(errors=errors)
@@ -911,6 +942,11 @@ class ScannerService:
             pairs_failed=pairs_failed,
         )
 
+    def _commit_stage(self) -> None:
+        """Finish scanner writes before the next external I/O stage."""
+
+        self.session.commit()
+
     async def _hydrate_auction_want_metadata(
         self,
         *,
@@ -936,6 +972,7 @@ class ScannerService:
                         is_core_reward=(want_address in CORE_REWARD_TOKENS),
                     )
                 except Exception as exc:  # noqa: BLE001
+                    self.session.rollback()
                     errors.append(
                         ScanItemError(
                             stage="METADATA",
@@ -946,6 +983,8 @@ class ScannerService:
                             token_address=want_address,
                         )
                     )
+                else:
+                    self._commit_stage()
 
     async def _refresh_kick_guard_status(self, strategy_auction_rows: list[dict[str, str | None]]) -> dict[str, int]:
         stats = {
@@ -1093,6 +1132,11 @@ class ScannerService:
         errors: list[ScanItemError],
     ) -> None:
         missing_vault_names = self.vault_repository.addresses_missing_name(vault_addresses)
+        missing_vault_symbols = self.vault_repository.addresses_missing_symbol(vault_addresses)
+        missing_strategy_names = self.strategy_repository.addresses_missing_name(strategy_addresses)
+        self._commit_stage()
+
+        vault_names: dict[str, str] = {}
         for vault_address in missing_vault_names:
             try:
                 vault_name = await self.name_reader.read_vault_name(vault_address)
@@ -1106,9 +1150,9 @@ class ScannerService:
                 )
                 continue
             if vault_name:
-                self.vault_repository.set_name(vault_address, vault_name)
+                vault_names[vault_address] = vault_name
 
-        missing_vault_symbols = self.vault_repository.addresses_missing_symbol(vault_addresses)
+        vault_symbols: dict[str, str] = {}
         for vault_address in missing_vault_symbols:
             try:
                 vault_symbol = await self.name_reader.read_vault_symbol(vault_address)
@@ -1122,8 +1166,9 @@ class ScannerService:
                 )
                 continue
             if vault_symbol:
-                self.vault_repository.set_symbol(vault_address, vault_symbol)
+                vault_symbols[vault_address] = vault_symbol
 
+        deposit_limits: dict[str, str] = {}
         for vault_address in vault_addresses:
             try:
                 deposit_limit = await self.name_reader.read_vault_deposit_limit(vault_address)
@@ -1137,9 +1182,9 @@ class ScannerService:
                 )
                 continue
             if deposit_limit is not None:
-                self.vault_repository.set_deposit_limit(vault_address, deposit_limit)
+                deposit_limits[vault_address] = deposit_limit
 
-        missing_strategy_names = self.strategy_repository.addresses_missing_name(strategy_addresses)
+        strategy_names: dict[str, str] = {}
         for strategy_address in missing_strategy_names:
             try:
                 strategy_name = await self.name_reader.read_strategy_name(strategy_address)
@@ -1155,4 +1200,13 @@ class ScannerService:
                 )
                 continue
             if strategy_name:
-                self.strategy_repository.set_name(strategy_address, strategy_name)
+                strategy_names[strategy_address] = strategy_name
+
+        for vault_address, vault_name in vault_names.items():
+            self.vault_repository.set_name(vault_address, vault_name)
+        for vault_address, vault_symbol in vault_symbols.items():
+            self.vault_repository.set_symbol(vault_address, vault_symbol)
+        for vault_address, deposit_limit in deposit_limits.items():
+            self.vault_repository.set_deposit_limit(vault_address, deposit_limit)
+        for strategy_address, strategy_name in strategy_names.items():
+            self.strategy_repository.set_name(strategy_address, strategy_name)

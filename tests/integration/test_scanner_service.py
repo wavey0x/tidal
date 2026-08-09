@@ -1,5 +1,7 @@
+from pathlib import Path
+
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from tidal.alerts.base import NullAlertSink
@@ -10,6 +12,7 @@ from tidal.persistence import models
 from tidal.persistence.repositories import (
     AuctionEnabledTokenRepository,
     AuctionEnabledTokenScanRepository,
+    APIActionRepository,
     BalanceRepository,
     FeeBurnerRepository,
     FeeBurnerTokenBalanceRepository,
@@ -161,6 +164,44 @@ class FakeTokenPriceRefreshService:
         del run_id
         self.calls += 1
         self.last_tokens = list(tokens)
+        return (
+            {
+                "tokens_seen": len(tokens),
+                "tokens_succeeded": len(tokens),
+                "tokens_not_found": 0,
+                "tokens_failed": 0,
+            },
+            [],
+        )
+
+
+class ActionAuditProbePriceService:
+    def __init__(self, engine) -> None:  # noqa: ANN001
+        self.engine = engine
+
+    async def refresh_many(self, *, run_id: str, tokens):  # noqa: ANN001, ANN201
+        del run_id
+        tokens = list(tokens)
+        now = "2026-08-09T00:00:00+00:00"
+        with Session(self.engine) as action_session:
+            APIActionRepository(action_session).create(
+                action_row={
+                    "action_id": "concurrent-action",
+                    "action_type": "kick",
+                    "status": "PREPARED",
+                    "operator_id": "contention-test",
+                    "sender": None,
+                    "resource_address": None,
+                    "auction_address": None,
+                    "source_address": None,
+                    "token_address": None,
+                    "request_json": "{}",
+                    "preview_json": "{}",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                transaction_rows=[],
+            )
         return (
             {
                 "tokens_seen": len(tokens),
@@ -426,6 +467,81 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
         assert enabled_scan_rows[0]["auction_address"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert enabled_scan_rows[0]["status"] == "SUCCESS"
         assert enabled_scan_rows[0]["block_number"] == 20202020
+
+
+@pytest.mark.asyncio
+async def test_scanner_releases_sqlite_writer_before_price_refresh(tmp_path: Path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'contention.db'}",
+        connect_args={"timeout": 0.1},
+        future=True,
+    )
+
+    @event.listens_for(engine, "connect")
+    def configure_sqlite(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=100")
+        finally:
+            cursor.close()
+
+    models.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        scanner = ScannerService(
+            session=session,
+            chain_id=1,
+            concurrency=5,
+            multicall_enabled=True,
+            web3_client=FakeWeb3Client(),
+            strategy_auction_mapper=FakeStrategyAuctionMapper(),
+            strategy_discovery_service=FakeDiscoveryService(),
+            reward_token_resolver=FakeRewardTokenResolver(),
+            token_metadata_service=TokenMetadataService(
+                chain_id=1,
+                token_repository=TokenRepository(session),
+                erc20_reader=FakeERC20Reader(),
+            ),
+            token_price_refresh_service=ActionAuditProbePriceService(engine),
+            balance_reader=FakeBalanceReader(),
+            auction_settler=None,
+            auction_token_enabler=None,
+            monitored_fee_burners=[],
+            fee_burner_token_resolver=FakeFeeBurnerTokenResolver(),
+            name_reader=FakeNameReader(),
+            vault_repository=VaultRepository(session),
+            strategy_repository=StrategyRepository(session),
+            fee_burner_repository=FeeBurnerRepository(session),
+            strategy_token_repository=StrategyTokenRepository(session),
+            fee_burner_token_repository=FeeBurnerTokenRepository(session),
+            balance_repository=BalanceRepository(session),
+            fee_burner_balance_repository=FeeBurnerTokenBalanceRepository(session),
+            auction_state_reader=FakeAuctionStateReader(
+                values_by_auction={
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+                        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                    ]
+                }
+            ),
+            auction_enabled_token_repository=AuctionEnabledTokenRepository(session),
+            auction_enabled_token_scan_repository=AuctionEnabledTokenScanRepository(session),
+            scan_run_repository=ScanRunRepository(session),
+            scan_item_error_repository=ScanItemErrorRepository(session),
+            auctionscan_service=None,
+            auctionscan_enrichment_batch_size=0,
+            alert_sink=NullAlertSink(),
+        )
+
+        result = await scanner.scan_once()
+        assert result.status == "SUCCESS"
+
+    with Session(engine) as verification_session:
+        assert verification_session.execute(
+            select(models.api_actions.c.action_id).where(
+                models.api_actions.c.action_id == "concurrent-action"
+            )
+        ).scalar_one() == "concurrent-action"
 
 
 @pytest.mark.asyncio

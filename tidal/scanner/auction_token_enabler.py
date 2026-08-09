@@ -515,6 +515,7 @@ class AuctionTokenEnablementService:
                 [candidate.token_address for candidate in batch],
                 utcnow_iso(),
             )
+            self.kick_tx_repository.session.commit()
             logger.info(
                 "auction_token_enablement_confirmed",
                 tx_hash=tx_hash,

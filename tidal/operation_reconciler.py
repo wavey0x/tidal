@@ -20,6 +20,7 @@ from tidal.normalizers import normalize_address, to_decimal_string
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
 
 logger = structlog.get_logger(__name__)
+SETTLEMENT_LOG_BLOCK_SPAN = 50_000
 
 
 def _event_signature(event_abi: Mapping[str, object]) -> str:
@@ -365,6 +366,7 @@ class OperationReconciler:
         errors: list[ReconciliationError] = []
         receipt_cache: dict[str, dict[str, object]] = {}
         block_cache: dict[int, dict[str, object]] = {}
+        latest_block: int | None = None
         for (auction_address, token_address), pair_kicks in by_pair.items():
             rows = self.kick_repo.list_pair_operations(auction_address, token_address)
             closed_ids = {
@@ -393,11 +395,25 @@ class OperationReconciler:
                     contract = self.web3_client.contract(
                         to_checksum_address(auction_address), AUCTION_ABI
                     )
-                    logs = await contract.events.AuctionSettled().get_logs(
-                        from_block=kick_position[0],
-                        to_block="latest",
-                        argument_filters={"from": to_checksum_address(token_address)},
-                    )
+                    if latest_block is None:
+                        latest_block = await self.web3_client.get_block_number()
+                    logs = []
+                    chunk_start = kick_position[0]
+                    while chunk_start <= latest_block:
+                        chunk_end = min(
+                            chunk_start + SETTLEMENT_LOG_BLOCK_SPAN - 1,
+                            latest_block,
+                        )
+                        logs = await contract.events.AuctionSettled().get_logs(
+                            from_block=chunk_start,
+                            to_block=chunk_end,
+                            argument_filters={
+                                "from": to_checksum_address(token_address)
+                            },
+                        )
+                        if logs:
+                            break
+                        chunk_start = chunk_end + 1
                 except Exception as exc:  # noqa: BLE001
                     errors.append(
                         ReconciliationError(

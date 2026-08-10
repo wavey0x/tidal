@@ -71,7 +71,11 @@ def _row(*, operation_type: str, tx_hash: str, status: str = "SUBMITTED", **valu
     }
 
 
-def _web3(receipts: dict[str, dict[str, object]] | None = None):
+def _web3(
+    receipts: dict[str, dict[str, object]] | None = None,
+    *,
+    latest_block: int = 101,
+):
     receipts = receipts or {}
 
     async def get_receipt(tx_hash: str, *, timeout_seconds: int):
@@ -81,6 +85,7 @@ def _web3(receipts: dict[str, dict[str, object]] | None = None):
     return SimpleNamespace(
         get_transaction_receipt=AsyncMock(side_effect=get_receipt),
         get_block=AsyncMock(return_value={"timestamp": 1_754_131_200}),
+        get_block_number=AsyncMock(return_value=latest_block),
     )
 
 
@@ -126,18 +131,25 @@ def _event_log(
 class _SettlementEvent:
     def __init__(self, logs):
         self.logs = logs
+        self.ranges = []
 
     async def get_logs(self, **kwargs):  # noqa: ANN003
         assert kwargs["argument_filters"]["from"].lower() == TOKEN
-        return self.logs
+        block_range = (kwargs["from_block"], kwargs["to_block"])
+        self.ranges.append(block_range)
+        return [
+            log
+            for log in self.logs
+            if block_range[0] <= log["blockNumber"] <= block_range[1]
+        ]
 
 
 class _SettlementEvents:
     def __init__(self, logs):
-        self.logs = logs
+        self.event = _SettlementEvent(logs)
 
     def AuctionSettled(self):
-        return _SettlementEvent(self.logs)
+        return self.event
 
 
 @pytest.mark.asyncio
@@ -283,11 +295,21 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
             mined_at=MINED_AT,
         )
     )
-    web3 = _web3({"0xsettle": _receipt(block=101, transaction_index=3)})
+    web3 = _web3(
+        {"0xsettle": _receipt(block=100_050, transaction_index=3)},
+        latest_block=150_000,
+    )
+    settlement_events = _SettlementEvents(
+        [
+            {
+                "blockNumber": 100_050,
+                "transactionIndex": 3,
+                "transactionHash": "0xsettle",
+            }
+        ]
+    )
     web3.contract = lambda address, abi: SimpleNamespace(  # noqa: ARG005
-        events=_SettlementEvents(
-            [{"blockNumber": 101, "transactionIndex": 3, "transactionHash": "0xsettle"}]
-        )
+        events=settlement_events
     )
     reconciler = OperationReconciler(
         session=session,
@@ -305,6 +327,7 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
     assert len(settlements) == 1
     assert settlements[0]["round_kick_id"] == kick_id
     assert settlements[0]["sell_amount"] == "0"
+    assert settlement_events.event.ranges == [(100, 50_099), (50_100, 100_099)]
 
 
 @pytest.mark.asyncio

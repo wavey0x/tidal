@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Collection, Sequence
+from typing import Callable, Collection, Mapping, Sequence, cast
 
 import structlog
 from eth_utils import to_checksum_address
@@ -14,13 +14,18 @@ from tidal.auction_rounds import operation_closes_round
 from tidal.chain.contracts.abis import (
     AUCTION_ABI,
     AUCTION_KICKER_ABI,
-    AUCTION_KICKER_KICKED_EVENT_SIGNATURES,
-    AUCTION_KICKER_LEGACY_KICKED_EVENT_ABIS,
+    AUCTION_KICKER_KICKED_EVENT_ABIS,
 )
 from tidal.normalizers import normalize_address, to_decimal_string
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
 
 logger = structlog.get_logger(__name__)
+
+
+def _event_signature(event_abi: Mapping[str, object]) -> str:
+    inputs = cast(Sequence[Mapping[str, object]], event_abi["inputs"])
+    parameter_types = ",".join(str(item["type"]) for item in inputs)
+    return f"{event_abi['name']}({parameter_types})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,14 +535,14 @@ class OperationReconciler:
         )
         kicker = self.web3_client.contract(
             to_checksum_address(kicker_address),
-            [*AUCTION_KICKER_ABI, *AUCTION_KICKER_LEGACY_KICKED_EVENT_ABIS],
+            [*AUCTION_KICKER_ABI, *AUCTION_KICKER_KICKED_EVENT_ABIS[1:]],
         )
         kicked_logs = [
             log
-            for signature in AUCTION_KICKER_KICKED_EVENT_SIGNATURES
-            for log in kicker.get_event_by_signature(signature)().process_receipt(
-                receipt, errors=DISCARD
-            )
+            for event_abi in AUCTION_KICKER_KICKED_EVENT_ABIS
+            for log in kicker.get_event_by_signature(
+                _event_signature(event_abi)
+            )().process_receipt(receipt, errors=DISCARD)
         ]
         resolved_logs = kicker.events.AuctionResolved().process_receipt(
             receipt, errors=DISCARD

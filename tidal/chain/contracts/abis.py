@@ -365,14 +365,22 @@ ERC20_ABI = [
     },
 ]
 
-AUCTION_KICKER_KICKED_EVENT_SIGNATURES = (
-    "Kicked(address,address,address,uint256,uint256,uint256,uint256)",
-    "Kicked(address,address,address,uint256,uint256,uint256,uint256,address)",
-    "Kicked(address,address,address,uint256,uint256,uint256)",
-    "Kicked(address,address,address,uint256,uint256)",
-)
-
-AUCTION_KICKER_LEGACY_KICKED_EVENT_ABIS = [
+# Receipt replay covers the current event and both layouts in retained history.
+AUCTION_KICKER_KICKED_EVENT_ABIS = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "source", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "auction", "type": "address"},
+            {"indexed": False, "internalType": "address", "name": "sellToken", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "sellAmount", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "startingPrice", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "stepDecayRateBps", "type": "uint256"},
+        ],
+        "name": "Kicked",
+        "type": "event",
+    },
     {
         "anonymous": False,
         "inputs": [
@@ -401,35 +409,10 @@ AUCTION_KICKER_LEGACY_KICKED_EVENT_ABIS = [
         "name": "Kicked",
         "type": "event",
     },
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "internalType": "address", "name": "source", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "auction", "type": "address"},
-            {"indexed": False, "internalType": "address", "name": "sellToken", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "sellAmount", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "startingPrice", "type": "uint256"},
-        ],
-        "name": "Kicked",
-        "type": "event",
-    },
 ]
 
 AUCTION_KICKER_ABI = [
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "internalType": "address", "name": "source", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "auction", "type": "address"},
-            {"indexed": False, "internalType": "address", "name": "sellToken", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "sellAmount", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "startingPrice", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "minimumPrice", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "stepDecayRateBps", "type": "uint256"},
-        ],
-        "name": "Kicked",
-        "type": "event",
-    },
+    AUCTION_KICKER_KICKED_EVENT_ABIS[0],
     {
         "anonymous": False,
         "inputs": [

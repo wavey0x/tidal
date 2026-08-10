@@ -450,11 +450,6 @@ def test_foreign_key_enforcement_rejects_invalid_round_link(session) -> None:
             ("address", "uint256", "uint256", "uint256"),
             (TOKEN, 100, 601, 200),
         ),
-        (
-            "Kicked(address,address,address,uint256,uint256)",
-            ("address", "uint256", "uint256"),
-            (TOKEN, 100, 601),
-        ),
     ],
 )
 def test_kicked_event_versions_restore_requested_and_placed_amounts(

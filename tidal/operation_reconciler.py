@@ -11,7 +11,12 @@ from eth_utils import to_checksum_address
 from web3.logs import DISCARD
 
 from tidal.auction_rounds import operation_closes_round
-from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_KICKER_ABI
+from tidal.chain.contracts.abis import (
+    AUCTION_ABI,
+    AUCTION_KICKER_ABI,
+    AUCTION_KICKER_KICKED_EVENT_SIGNATURES,
+    AUCTION_KICKER_LEGACY_KICKED_EVENT_ABIS,
+)
 from tidal.normalizers import normalize_address, to_decimal_string
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
 
@@ -525,9 +530,15 @@ class OperationReconciler:
         )
         kicker = self.web3_client.contract(
             to_checksum_address(kicker_address),
-            AUCTION_KICKER_ABI,
+            [*AUCTION_KICKER_ABI, *AUCTION_KICKER_LEGACY_KICKED_EVENT_ABIS],
         )
-        kicked_logs = kicker.events.Kicked().process_receipt(receipt, errors=DISCARD)
+        kicked_logs = [
+            log
+            for signature in AUCTION_KICKER_KICKED_EVENT_SIGNATURES
+            for log in kicker.get_event_by_signature(signature)().process_receipt(
+                receipt, errors=DISCARD
+            )
+        ]
         resolved_logs = kicker.events.AuctionResolved().process_receipt(
             receipt, errors=DISCARD
         )

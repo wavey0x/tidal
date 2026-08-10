@@ -5,8 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from eth_abi import encode
+from hexbytes import HexBytes
 from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError
+from web3 import Web3
 
 from tidal.operation_reconciler import (
     DecodedKick,
@@ -89,6 +92,34 @@ def _receipt(*, block: int = 100, transaction_index: int = 2):
         "gasUsed": 123_456,
         "effectiveGasPrice": 2_000_000_000,
         "logs": [],
+    }
+
+
+def _event_log(
+    *,
+    address: str,
+    signature: str,
+    indexed_addresses: tuple[str, ...],
+    data_types: tuple[str, ...],
+    data_values: tuple[object, ...],
+    log_index: int,
+) -> dict[str, object]:
+    return {
+        "address": address,
+        "topics": [
+            Web3.keccak(text=signature),
+            *(
+                HexBytes(b"\0" * 12 + bytes.fromhex(indexed[2:]))
+                for indexed in indexed_addresses
+            ),
+        ],
+        "data": HexBytes(encode(data_types, data_values)),
+        "blockNumber": 100,
+        "transactionHash": HexBytes(b"\x11" * 32),
+        "transactionIndex": 2,
+        "blockHash": HexBytes(b"\x22" * 32),
+        "logIndex": log_index,
+        "removed": False,
     }
 
 
@@ -401,6 +432,74 @@ def test_foreign_key_enforcement_rejects_invalid_round_link(session) -> None:
     session.rollback()
 
 
+@pytest.mark.parametrize(
+    ("signature", "data_types", "data_values"),
+    [
+        (
+            "Kicked(address,address,address,uint256,uint256,uint256,uint256)",
+            ("address", "uint256", "uint256", "uint256", "uint256"),
+            (TOKEN, 100, 601, 200, 25),
+        ),
+        (
+            "Kicked(address,address,address,uint256,uint256,uint256,uint256,address)",
+            ("address", "uint256", "uint256", "uint256", "uint256", "address"),
+            (TOKEN, 100, 601, 200, 25, KICKER),
+        ),
+        (
+            "Kicked(address,address,address,uint256,uint256,uint256)",
+            ("address", "uint256", "uint256", "uint256"),
+            (TOKEN, 100, 601, 200),
+        ),
+        (
+            "Kicked(address,address,address,uint256,uint256)",
+            ("address", "uint256", "uint256"),
+            (TOKEN, 100, 601),
+        ),
+    ],
+)
+def test_kicked_event_versions_restore_requested_and_placed_amounts(
+    session,
+    signature: str,
+    data_types: tuple[str, ...],
+    data_values: tuple[object, ...],
+) -> None:
+    web3 = _web3()
+    decoder_web3 = Web3()
+    web3.contract = lambda address, abi: decoder_web3.eth.contract(
+        address=address, abi=abi
+    )
+    reconciler = OperationReconciler(
+        session=session,
+        web3_client=web3,
+        auction_kicker_address=KICKER,
+    )
+    receipt = {
+        "to": HISTORICAL_KICKER,
+        "logs": [
+            _event_log(
+                address=HISTORICAL_KICKER,
+                signature=signature,
+                indexed_addresses=(SOURCE, AUCTION),
+                data_types=data_types,
+                data_values=data_values,
+                log_index=0,
+            ),
+            _event_log(
+                address=AUCTION,
+                signature="AuctionKicked(address,uint256)",
+                indexed_addresses=(TOKEN,),
+                data_types=("uint256",),
+                data_values=(100,),
+                log_index=1,
+            ),
+        ],
+    }
+
+    decoded = reconciler._decode_receipt(receipt, (AUCTION,))
+
+    assert decoded.kicks == (DecodedKick(SOURCE, AUCTION, TOKEN, 100, 100),)
+
+
 def test_receipt_destination_selects_the_historical_kicker_contract(session) -> None:
     captured_addresses: list[str] = []
 
@@ -410,14 +509,22 @@ def test_receipt_destination_selects_the_historical_kicker_contract(session) -> 
             return []
 
     class KickerEvents:
-        Kicked = AuctionResolved = AuctionSwept = EmptyEvent
+        AuctionResolved = AuctionSwept = EmptyEvent
+
+    class KickerContract:
+        events = KickerEvents()
+
+        @staticmethod
+        def get_event_by_signature(signature):  # noqa: ANN001
+            del signature
+            return EmptyEvent
 
     web3 = _web3()
 
     def contract(address, abi):  # noqa: ANN001
         del abi
         captured_addresses.append(address.lower())
-        return SimpleNamespace(events=KickerEvents())
+        return KickerContract()
 
     web3.contract = contract
     reconciler = OperationReconciler(

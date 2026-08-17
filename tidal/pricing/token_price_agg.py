@@ -23,7 +23,6 @@ logger = structlog.get_logger(__name__)
 class TokenPriceQuote:
     price_usd: Decimal | None
     quote_amount_in_raw: int
-    logo_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -189,13 +188,12 @@ class TokenPriceAggProvider:
         client = await self._client()
         payload = await self._get_with_retries(client, path, params)
 
-        logo_url = self._extract_logo_url(payload)
         try:
             price_usd = self._extract_price_usd(payload)
         except TokenPriceNotFoundError:
             price_usd = None
 
-        return TokenPriceQuote(price_usd=price_usd, quote_amount_in_raw=1, logo_url=logo_url)
+        return TokenPriceQuote(price_usd=price_usd, quote_amount_in_raw=1)
 
     async def _get_with_retries(
         self,
@@ -289,22 +287,6 @@ class TokenPriceAggProvider:
         if price_usd < 0:
             raise ValueError("negative usd quote")
         return price_usd
-
-    def _extract_logo_url(self, payload: Any) -> str | None:
-        if not isinstance(payload, dict):
-            return None
-
-        token = payload.get("token")
-        if not isinstance(token, dict):
-            return None
-
-        logo_url = token.get("logo_url")
-        if logo_url is None:
-            return None
-
-        normalized = str(logo_url).strip()
-        return normalized or None
-
 
 def _is_retryable_price_error(exc: BaseException) -> bool:
     status_code = _http_status_code(exc)

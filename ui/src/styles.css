@@ -1026,8 +1026,13 @@ tbody tr:hover td {
 }
 
 .token-logo-placeholder {
+  display: inline-block;
   width: var(--token-icon-size);
   height: var(--token-icon-size);
+  border: 1px solid var(--divider-strong);
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: var(--divider-subtle);
 }
 
 .token-symbol-wrap {

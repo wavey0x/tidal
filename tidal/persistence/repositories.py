@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from tidal.auction_rounds import operation_closes_round
 from tidal.persistence import models
-from tidal.types import BalanceResult, ScanItemError, TokenLogoState, TokenMetadata
+from tidal.types import BalanceResult, ScanItemError, TokenMetadata
 
 
 def _auction_details_for_table(
@@ -367,31 +367,6 @@ class TokenRepository:
                 price_error_message=error_message,
             )
         )
-
-    def get_logo_state(self, address: str) -> TokenLogoState | None:
-        stmt = select(
-            models.tokens.c.address,
-            models.tokens.c.logo_url,
-            models.tokens.c.logo_status,
-            models.tokens.c.logo_validated_at,
-        ).where(models.tokens.c.address == address)
-        row = self.session.execute(stmt).mappings().first()
-        if row is None:
-            return None
-        return TokenLogoState(
-            address=row["address"],
-            logo_url=row["logo_url"],
-            logo_status=row["logo_status"],
-            logo_validated_at=row["logo_validated_at"],
-        )
-
-    def set_logo_url(self, *, address: str, logo_url: str | None) -> None:
-        self.session.execute(
-            update(models.tokens)
-            .where(models.tokens.c.address == address)
-            .values(logo_url=logo_url)
-        )
-
 
 class StrategyTokenRepository:
     def __init__(self, session: Session):

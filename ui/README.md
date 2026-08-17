@@ -9,7 +9,7 @@ React dashboard for the monorepo Tidal control-plane API.
 - A shared `Kick Log` tab keyed by source
 - Token filter + address/symbol search
 - Balances formatted to 2 decimals
-- Token logos rendered directly from validated `tokenLogoUrl` values in the dashboard payload
+- Token logos loaded lazily from first-party `tokenLogoUrl` resources, with a bundled placeholder for unavailable images
 
 ## Run locally
 

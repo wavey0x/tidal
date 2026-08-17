@@ -79,11 +79,6 @@ tokens = Table(
     Column("price_fetched_at", String, nullable=True),
     Column("price_run_id", String, nullable=True),
     Column("price_error_message", Text, nullable=True),
-    Column("logo_url", Text, nullable=True),
-    Column("logo_source", String, nullable=True),
-    Column("logo_status", String, nullable=True),
-    Column("logo_validated_at", String, nullable=True),
-    Column("logo_error_message", Text, nullable=True),
     Column("first_seen_at", String, nullable=False),
     Column("last_seen_at", String, nullable=False),
 )

@@ -25,7 +25,6 @@ class _PriceRefreshResult:
     status: str
     price_usd: str | None
     error_message: str | None
-    logo_url: str | None
     preserve_price_usd: bool = False
 
 
@@ -105,13 +104,12 @@ class TokenPriceRefreshService:
                     quote = await self.price_provider.quote_usd(token.address, token.decimals)
                 except httpx.HTTPStatusError as exc:
                     if exc.response is not None and exc.response.status_code == 404:
-                        return _PriceRefreshResult(token.address, "NOT_FOUND", None, str(exc), None)
+                        return _PriceRefreshResult(token.address, "NOT_FOUND", None, str(exc))
                     return _PriceRefreshResult(
                         token.address,
                         "FAILED",
                         None,
                         str(exc),
-                        None,
                         preserve_price_usd=_is_transient_price_error(exc),
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -120,13 +118,12 @@ class TokenPriceRefreshService:
                         "FAILED",
                         None,
                         str(exc),
-                        None,
                         preserve_price_usd=_is_transient_price_error(exc),
                     )
 
                 status = "SUCCESS" if quote.price_usd is not None else "NOT_FOUND"
                 price_usd = str(quote.price_usd) if quote.price_usd is not None else None
-                return _PriceRefreshResult(token.address, status, price_usd, None, quote.logo_url)
+                return _PriceRefreshResult(token.address, status, price_usd, None)
 
         results = await asyncio.gather(*[_refresh_token(token) for token in unique_tokens])
 
@@ -155,12 +152,6 @@ class TokenPriceRefreshService:
                         run_id=run_id,
                         error_message=result.error_message,
                     )
-                if result.error_message is None:
-                    self.token_repository.set_logo_url(
-                        address=original_address,
-                        logo_url=result.logo_url,
-                    )
-
             if result.status == "SUCCESS":
                 stats["tokens_succeeded"] += len(original_addresses)
                 continue

@@ -147,7 +147,7 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
 
     assert quote.price_usd == Decimal("4.2")
     assert quote.quote_amount_in_raw == 1
-    assert quote.logo_url == "https://assets.example/logo.png"
+    assert not hasattr(quote, "logo_url")
     assert captured["base_url"] == "https://prices.wavey.info"
     assert captured["path"] == "/v1/price"
     assert captured["params"] == {
@@ -180,7 +180,7 @@ async def test_quote_usd_sends_authorization_bearer_when_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_quote_usd_returns_logo_url_when_price_not_found() -> None:
+async def test_quote_usd_ignores_logo_metadata_when_price_not_found() -> None:
     provider = _provider()
 
     async def fake_get_price(client, path, params):  # noqa: ANN001
@@ -205,7 +205,7 @@ async def test_quote_usd_returns_logo_url_when_price_not_found() -> None:
     quote = await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
 
     assert quote.price_usd is None
-    assert quote.logo_url == "https://assets.example/logo.png"
+    assert not hasattr(quote, "logo_url")
 
 
 @pytest.mark.asyncio
@@ -224,7 +224,6 @@ async def test_quote_usd_treats_http_404_payload_without_summary_as_not_found() 
     quote = await provider.quote_usd("0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", 18)
 
     assert quote.price_usd is None
-    assert quote.logo_url is None
 
 
 @pytest.mark.asyncio

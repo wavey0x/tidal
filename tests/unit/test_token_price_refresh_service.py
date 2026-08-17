@@ -15,9 +15,8 @@ from tidal.pricing.token_price_agg import TokenPriceQuote
 class FakePriceProvider:
     source_name = "token_price_agg_usd_price"
 
-    def __init__(self, prices: dict[str, Decimal | None], logo_urls: dict[str, str | None] | None = None):
+    def __init__(self, prices: dict[str, Decimal | None]):
         self.prices = prices
-        self.logo_urls = logo_urls or {}
         self.calls: list[tuple[str, int]] = []
 
     async def quote_usd(self, token_address: str, token_decimals: int) -> TokenPriceQuote:
@@ -25,7 +24,6 @@ class FakePriceProvider:
         return TokenPriceQuote(
             price_usd=self.prices[token_address],
             quote_amount_in_raw=1,
-            logo_url=self.logo_urls.get(token_address),
         )
 
 
@@ -44,7 +42,6 @@ class RaisingPriceProvider:
 class FakeTokenRepository:
     def __init__(self) -> None:
         self.updates: list[dict[str, str | None]] = []
-        self.logo_updates: list[dict[str, str | None]] = []
         self.failure_updates: list[dict[str, str | None]] = []
 
     def set_latest_price(
@@ -91,15 +88,6 @@ class FakeTokenRepository:
             }
         )
 
-    def set_logo_url(self, *, address: str, logo_url: str | None) -> None:
-        self.logo_updates.append(
-            {
-                "address": address,
-                "logo_url": logo_url,
-            }
-        )
-
-
 def _http_error(status_code: int) -> httpx.HTTPStatusError:
     request = httpx.Request("GET", f"https://prices.example/v1/price?status={status_code}")
     response = httpx.Response(status_code, request=request)
@@ -127,16 +115,9 @@ def _seed_token(session: Session, *, address: str, price_usd: str | None = None,
 
 
 @pytest.mark.asyncio
-async def test_price_alias_uses_cvx_quote_for_alias_token_and_persists_logo() -> None:
+async def test_price_alias_uses_one_cvx_quote_for_all_alias_tokens() -> None:
     repo = FakeTokenRepository()
-    provider = FakePriceProvider(
-        prices={
-            CVX_ADDRESS: Decimal("3.25"),
-        },
-        logo_urls={
-            CVX_ADDRESS: "https://cdn.example/cvx.png",
-        },
-    )
+    provider = FakePriceProvider(prices={CVX_ADDRESS: Decimal("3.25")})
     service = TokenPriceRefreshService(
         chain_id=1,
         enabled=True,
@@ -163,65 +144,6 @@ async def test_price_alias_uses_cvx_quote_for_alias_token_and_persists_logo() ->
     assert updates_by_address[CVX_ADDRESS]["price_usd"] == "3.25"
     assert updates_by_address[CVX_PRICE_ALIAS_ADDRESS]["price_usd"] == "3.25"
     assert updates_by_address[CVX_WRAPPER_ALIAS_ADDRESS]["price_usd"] == "3.25"
-
-    logo_updates_by_address = {item["address"]: item for item in repo.logo_updates}
-    assert logo_updates_by_address[CVX_ADDRESS]["logo_url"] == "https://cdn.example/cvx.png"
-    assert logo_updates_by_address[CVX_PRICE_ALIAS_ADDRESS]["logo_url"] == "https://cdn.example/cvx.png"
-    assert logo_updates_by_address[CVX_WRAPPER_ALIAS_ADDRESS]["logo_url"] == "https://cdn.example/cvx.png"
-
-
-@pytest.mark.asyncio
-async def test_price_refresh_always_updates_logo_url() -> None:
-    """Logo URL from price API is always written, even if it changes."""
-    token_address = "0x4e3fbd56cd56c3e72c1403e103b45db9da5b9d2b"
-    repo = FakeTokenRepository()
-    provider = FakePriceProvider(
-        prices={token_address: Decimal("4.2")},
-        logo_urls={token_address: "https://cdn.example/new-logo.png"},
-    )
-    service = TokenPriceRefreshService(
-        chain_id=1,
-        enabled=True,
-        concurrency=1,
-        price_provider=provider,
-        token_repository=repo,
-    )
-
-    stats, errors = await service.refresh_many(
-        run_id="run-1",
-        tokens=[PriceToken(address=token_address, decimals=18)],
-    )
-
-    assert errors == []
-    assert stats["tokens_succeeded"] == 1
-    assert repo.logo_updates == [{"address": token_address, "logo_url": "https://cdn.example/new-logo.png"}]
-
-
-@pytest.mark.asyncio
-async def test_price_refresh_writes_null_logo_when_api_returns_none() -> None:
-    token_address = "0x4e3fbd56cd56c3e72c1403e103b45db9da5b9d2b"
-    repo = FakeTokenRepository()
-    provider = FakePriceProvider(
-        prices={token_address: None},
-        logo_urls={token_address: None},
-    )
-    service = TokenPriceRefreshService(
-        chain_id=1,
-        enabled=True,
-        concurrency=1,
-        price_provider=provider,
-        token_repository=repo,
-    )
-
-    stats, errors = await service.refresh_many(
-        run_id="run-1",
-        tokens=[PriceToken(address=token_address, decimals=18)],
-    )
-
-    assert errors == []
-    assert stats["tokens_not_found"] == 1
-    assert repo.logo_updates == [{"address": token_address, "logo_url": None}]
-
 
 @pytest.mark.asyncio
 async def test_transient_price_failure_preserves_existing_price() -> None:

@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from tidal.normalizers import normalize_address
+from tidal.pricing.token_logo import token_logo_url
 
 STRATEGY_DETAIL_ROWS_SQL = """
 SELECT
@@ -34,7 +35,7 @@ SELECT
     t.symbol AS token_symbol,
     t.name AS token_name,
     t.price_usd AS token_price_usd,
-    {logo_column} AS token_logo_url,
+    t.chain_id AS token_chain_id,
     stbl.normalized_balance,
     {auction_enabled_scan_status_column} AS auction_enabled_scan_status,
     {auction_enabled_scan_scanned_at_column} AS auction_enabled_scan_scanned_at,
@@ -80,7 +81,7 @@ SELECT
     t.symbol AS token_symbol,
     t.name AS token_name,
     t.price_usd AS token_price_usd,
-    {logo_column} AS token_logo_url,
+    t.chain_id AS token_chain_id,
     fbtbl.normalized_balance,
     {auction_enabled_scan_status_column} AS auction_enabled_scan_status,
     {auction_enabled_scan_scanned_at_column} AS auction_enabled_scan_scanned_at,
@@ -220,7 +221,7 @@ class DashboardReadService:
                     "tokenName": detail_row["token_name"],
                     "normalizedBalance": detail_row["normalized_balance"],
                     "tokenPriceUsd": detail_row["token_price_usd"],
-                    "tokenLogoUrl": detail_row["token_logo_url"],
+                    "tokenLogoUrl": self._token_logo_url(detail_row),
                     "auctionSellTokenStatus": self._derive_auction_sell_token_status(detail_row),
                     "auctionSellTokenStatusScannedAt": detail_row["auction_enabled_scan_scanned_at"],
                     "auctionSellTokenStatusError": detail_row["auction_enabled_scan_error"],
@@ -247,7 +248,7 @@ class DashboardReadService:
                     "tokenSymbol": row["token_symbol"],
                     "tokenName": row["token_name"],
                     "tokenPriceUsd": row["token_price_usd"],
-                    "logoUrl": row["token_logo_url"],
+                    "logoUrl": self._token_logo_url(row),
                     "latestScanAt": row["scanned_at"],
                     "strategyCount": 0,
                     "sourceCount": 0,
@@ -257,7 +258,6 @@ class DashboardReadService:
             token_row["tokenSymbol"] = token_row["tokenSymbol"] or row["token_symbol"]
             token_row["tokenName"] = token_row["tokenName"] or row["token_name"]
             token_row["tokenPriceUsd"] = token_row["tokenPriceUsd"] or row["token_price_usd"]
-            token_row["logoUrl"] = token_row["logoUrl"] or row["token_logo_url"]
             if row["scanned_at"] and (token_row["latestScanAt"] is None or row["scanned_at"] > token_row["latestScanAt"]):
                 token_row["latestScanAt"] = row["scanned_at"]
 
@@ -296,7 +296,6 @@ class DashboardReadService:
             "strategies.auction_address": self._has_column("strategies", "auction_address"),
             "strategies.auction_version": self._has_column("strategies", "auction_version"),
             "strategies.want_address": self._has_column("strategies", "want_address"),
-            "tokens.logo_url": self._has_column("tokens", "logo_url"),
             "vaults.deposit_limit": self._has_column("vaults", "deposit_limit"),
             "auction_enabled_tokens_latest": self._has_table("auction_enabled_tokens_latest"),
             "auction_enabled_token_scans": self._has_table("auction_enabled_token_scans"),
@@ -318,7 +317,6 @@ class DashboardReadService:
     def _build_strategy_detail_rows_sql(self, features: dict[str, bool]) -> str:
         auction_column = "s.auction_address" if features["strategies.auction_address"] else "NULL"
         auction_version_column = "s.auction_version" if features["strategies.auction_version"] else "NULL"
-        logo_column = "t.logo_url" if features["tokens.logo_url"] else "NULL"
         deposit_limit_column = "v.deposit_limit" if features["vaults.deposit_limit"] else "NULL"
         if features["strategies.want_address"]:
             strategy_want_column = "s.want_address"
@@ -372,7 +370,6 @@ class DashboardReadService:
         return STRATEGY_DETAIL_ROWS_SQL.format(
             auction_column=auction_column,
             auction_version_column=auction_version_column,
-            logo_column=logo_column,
             deposit_limit_column=deposit_limit_column,
             strategy_want_column=strategy_want_column,
             strategy_want_symbol_column=strategy_want_symbol_column,
@@ -391,7 +388,6 @@ class DashboardReadService:
         )
 
     def _build_fee_burner_detail_rows_sql(self, features: dict[str, bool]) -> str:
-        logo_column = "t.logo_url" if features["tokens.logo_url"] else "NULL"
         fee_burner_auction_column = "fb.auction_address" if features["fee_burners.auction_address"] else "NULL"
         fee_burner_auction_version_column = "fb.auction_version" if features["fee_burners.auction_version"] else "NULL"
         if features["fee_burners.want_address"]:
@@ -432,7 +428,6 @@ class DashboardReadService:
             fee_burner_want_column=fee_burner_want_column,
             fee_burner_want_symbol_column=fee_burner_want_symbol_column,
             fee_burner_want_join=fee_burner_want_join,
-            logo_column=logo_column,
             auction_enabled_scan_status_column=auction_enabled_scan_status_column,
             auction_enabled_scan_scanned_at_column=auction_enabled_scan_scanned_at_column,
             auction_enabled_scan_error_column=auction_enabled_scan_error_column,
@@ -488,3 +483,11 @@ class DashboardReadService:
         if not address:
             return None
         return normalize_address(str(address))
+
+    @staticmethod
+    def _token_logo_url(row: dict[str, object]) -> str | None:
+        chain_id = row.get("token_chain_id")
+        address = row.get("token_address")
+        if chain_id is None or address is None:
+            return None
+        return token_logo_url(chain_id=int(chain_id), address=str(address))

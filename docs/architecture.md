@@ -17,7 +17,7 @@ The design splits shared state from signing authority. The server owns the datab
 
 | Component | Responsibility | Main code |
 |---|---|---|
-| Scanner | Builds the cached dataset: sources, balances, auctions, prices, logos, enabled tokens | `tidal/scanner/service.py` |
+| Scanner | Builds the cached dataset: sources, balances, auctions, prices, enabled tokens | `tidal/scanner/service.py` |
 | Persistence | Shared SQLite schema, migrations, repository helpers | `tidal/persistence/`, `alembic/` |
 | Transaction service | Selects candidates, inspects auctions, prepares actions, and supports server-owned scan-side auction maintenance | `tidal/transaction_service/` |
 | API | Exposes read models and action preparation over HTTP | `tidal/api/app.py` |
@@ -66,7 +66,7 @@ It is responsible for:
 - discovering Yearn strategies and their vault context
 - loading configured fee burners
 - resolving strategy and fee-burner token balances
-- refreshing token USD prices and logos from `prices.wavey.info`
+- refreshing token USD prices from `prices.wavey.info`
 - mapping sources to auctions
 - caching enabled-token status per auction
 - optionally auto-settling stale auctions
@@ -111,6 +111,11 @@ The shortlist is built from cached scanner outputs:
 - cached enabled-token data
 
 This phase is cheap and stable enough to rank opportunities.
+
+Token logos are not scanner state. The dashboard derives a stable
+`prices.wavey.info/token-logos/{chain_id}/{address}` resource identifier from
+each token identity, and the browser fetches owned image bytes independently.
+Tidal never validates, downloads, or persists logo URLs.
 
 ### Just-in-time phase
 

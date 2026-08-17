@@ -1984,6 +1984,26 @@ function KickLogPage({
   );
 }
 
+function TokenLogo({ src, alt }) {
+  const [failedSrc, setFailedSrc] = useState(null);
+
+  if (!src || failedSrc === src) {
+    return <span className="token-logo-placeholder" aria-hidden="true" />;
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="token-logo"
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={() => setFailedSrc(src)}
+    />
+  );
+}
+
 function TokenBalances({
   balances,
   displayMode,
@@ -2015,19 +2035,10 @@ function TokenBalances({
               className={itemClassName}
               title={auctionTooltip || undefined}
             >
-              {balance.tokenLogoUrl ? (
-                <img
-                  src={balance.tokenLogoUrl}
-                  alt={`${balance.tokenSymbol} logo`}
-                  className="token-logo"
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                  onError={(event) => {
-                    event.currentTarget.style.visibility = "hidden";
-                  }}
-                />
-              ) : <span className="token-logo-placeholder" />}
+              <TokenLogo
+                src={balance.tokenLogoUrl}
+                alt={`${balance.tokenSymbol} logo`}
+              />
               <span className="token-symbol-wrap">
                 <span className="mono token-symbol" title={auctionTooltip || undefined}>
                   {tokenSymbol}

@@ -13,6 +13,7 @@ from tidal.api.services.action_audit import create_prepared_action
 from tidal.config import Settings
 from tidal.persistence import models
 from tidal.persistence.repositories import APIActionRepository
+from tidal.pricing.token_logo import token_logo_url
 
 _TEST_API_KEY = "secret-token"
 
@@ -248,6 +249,17 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     assert row["kickGuardReason"] == "curve_gauge_killed"
     assert row["kickGuardDetail"] == "Curve gauge is killed"
     assert row["kickGuardCheckedAt"] == "2026-03-28T00:02:00+00:00"
+    expected_logo_url = token_logo_url(
+        chain_id=1,
+        address="0x5000000000000000000000000000000000000005",
+    )
+    assert row["balances"][0]["tokenLogoUrl"] == expected_logo_url
+    token = next(
+        item
+        for item in payload["data"]["tokens"]
+        if item["tokenAddress"] == "0x5000000000000000000000000000000000000005"
+    )
+    assert token["logoUrl"] == expected_logo_url
 
 
 def test_dashboard_endpoint_returns_rows_with_kick_history_without_chain_id_column(tmp_path: Path) -> None:

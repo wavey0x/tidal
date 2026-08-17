@@ -26,7 +26,11 @@ Parameters:
 The scanner persists:
 
 - `summary.median_price` as the token USD value
-- `token.logo_url` as the token logo when present
+
+The price response also contains token metadata, but Tidal deliberately does
+not persist its `logo_url`. Dashboard responses derive the stable first-party
+logo resource from the token chain and address, while browsers fetch and cache
+the image independently.
 
 Price refreshes are paced between request starts by `price_delay_seconds`, which
 defaults to `0.25` seconds. If a refresh hits a transient provider/API failure

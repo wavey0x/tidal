@@ -103,6 +103,25 @@ def _repair(session, web3):
     )
 
 
+def _web3(receipts, *, active: bool = False, latest_block: int = 101):  # noqa: ANN001
+    async def get_receipt(tx_hash: str, *, timeout_seconds: int):
+        del timeout_seconds
+        return receipts[tx_hash]
+
+    settlement_event = SimpleNamespace(get_logs=AsyncMock(return_value=[]))
+    functions = SimpleNamespace(isActive=lambda token: ("isActive", token))
+    return SimpleNamespace(
+        get_transaction_receipt=AsyncMock(side_effect=get_receipt),
+        get_block=AsyncMock(return_value={"timestamp": 1_754_131_200}),
+        get_block_number=AsyncMock(return_value=latest_block),
+        contract=lambda address, abi: SimpleNamespace(  # noqa: ARG005
+            events=SimpleNamespace(AuctionSettled=lambda: settlement_event),
+            functions=functions,
+        ),
+        call=AsyncMock(return_value=active),
+    )
+
+
 @pytest.mark.asyncio
 async def test_repair_check_is_read_only_and_fails_ambiguous_evidence(session) -> None:
     repo = KickTxRepository(session)
@@ -173,14 +192,7 @@ async def test_repair_apply_is_idempotent_and_following_check_passes(session) ->
         },
     }
 
-    async def get_receipt(tx_hash: str, *, timeout_seconds: int):
-        del timeout_seconds
-        return receipts[tx_hash]
-
-    web3 = SimpleNamespace(
-        get_transaction_receipt=AsyncMock(side_effect=get_receipt),
-        get_block=AsyncMock(return_value={"timestamp": 1_754_131_200}),
-    )
+    web3 = _web3(receipts)
 
     def decode(receipt, auctions):  # noqa: ANN001
         assert auctions == [AUCTION] or auctions == (AUCTION,)
@@ -199,6 +211,9 @@ async def test_repair_apply_is_idempotent_and_following_check_passes(session) ->
     check = await repair.run(apply=False)
 
     assert first.passed and second.passed and check.passed
+    assert first.mutations == 2
+    assert second.mutations == 0
+    assert check.mutations == 0
     assert first_rows == second_rows
     assert len(second_rows) == 2
     assert second_rows[0]["requested_sell_amount"] == "100"
@@ -208,7 +223,7 @@ async def test_repair_apply_is_idempotent_and_following_check_passes(session) ->
 
 
 @pytest.mark.asyncio
-async def test_repair_check_skips_historical_pair_without_current_candidate(
+async def test_repair_check_covers_historical_pair_without_current_candidate(
     session,
 ) -> None:
     repo = KickTxRepository(session)
@@ -237,13 +252,13 @@ async def test_repair_check_skips_historical_pair_without_current_candidate(
 
     report = await _repair(session, SimpleNamespace()).run(apply=False)
 
-    assert report.passed is True
+    assert report.passed is False
     assert report.pairs[0].in_scope is False
     assert report.pairs[0].outcome == "UNKNOWN"
 
 
 @pytest.mark.asyncio
-async def test_old_submitted_row_does_not_block_later_productive_reset(session) -> None:
+async def test_unreviewed_old_submitted_row_fails_full_history_audit(session) -> None:
     repo = KickTxRepository(session)
     repo.insert(_row("kick", "0xold", created_at="2026-08-02T10:00:00+00:00"))
     kick_id = repo.insert(
@@ -276,9 +291,120 @@ async def test_old_submitted_row_does_not_block_later_productive_reset(session) 
 
     report = await _repair(session, SimpleNamespace()).run(apply=False)
 
-    assert report.passed is True
+    assert report.passed is False
     assert report.pairs[0].in_scope is True
     assert report.pairs[0].outcome == "PRODUCTIVE"
+
+
+@pytest.mark.asyncio
+async def test_repair_apply_baselines_inactive_unprovable_history(session) -> None:
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(
+        _row(
+            "kick",
+            "0xkick",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="90",
+            block_number=100,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    repo.insert(
+        _row(
+            "resolve_auction",
+            "0xresolve",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            sell_amount="90",
+            round_kick_id=kick_id,
+            resolution_path=1,
+            block_number=101,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    receipts = {
+        "0xkick": {
+            "kind": "kick",
+            "status": 1,
+            "blockNumber": 100,
+            "transactionIndex": 0,
+            "gasUsed": 100,
+            "effectiveGasPrice": 1_000_000_000,
+            "logs": [],
+        },
+        "0xresolve": {
+            "kind": "resolve",
+            "status": 1,
+            "blockNumber": 101,
+            "transactionIndex": 0,
+            "gasUsed": 100,
+            "effectiveGasPrice": 1_000_000_000,
+            "logs": [],
+        },
+    }
+    web3 = _web3(receipts, active=False)
+    repair = _repair(session, web3)
+    repair.reconciler.decode_receipt_fn = lambda receipt, auctions: (
+        DecodedReceipt(kicks=(DecodedKick(SOURCE, AUCTION, TOKEN, 100, 90),))
+        if receipt["kind"] == "kick"
+        else DecodedReceipt(resolves=(DecodedResolve(AUCTION, TOKEN, 1, 90),))
+    )
+
+    first = await repair.run(apply=True)
+    second = await repair.run(apply=True)
+
+    row = repo.get(kick_id)
+    assert row is not None
+    assert row["historical_baseline"] == 1
+    assert row["historical_baseline_reason"] == "REQUESTED_PLACED_MISMATCH"
+    assert first.passed and second.passed
+    assert first.pairs[0].outcome == "HISTORICAL_BASELINE"
+    assert first.pairs[0].baseline_kick_ids == (kick_id,)
+    assert second.mutations == 0
+
+
+@pytest.mark.asyncio
+async def test_repair_does_not_baseline_active_unprovable_round(session) -> None:
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(
+        _row(
+            "kick",
+            "0xkick",
+            created_at=MINED_AT,
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="90",
+            block_number=100,
+            transaction_index=0,
+            mined_at=MINED_AT,
+        )
+    )
+    receipts = {
+        "0xkick": {
+            "status": 1,
+            "blockNumber": 100,
+            "transactionIndex": 0,
+            "gasUsed": 100,
+            "effectiveGasPrice": 1_000_000_000,
+            "logs": [],
+        }
+    }
+    web3 = _web3(receipts, active=True)
+    repair = _repair(session, web3)
+    repair.reconciler.decode_receipt_fn = lambda receipt, auctions: DecodedReceipt(
+        kicks=(DecodedKick(SOURCE, AUCTION, TOKEN, 100, 90),)
+    )
+
+    report = await repair.run(apply=True)
+
+    row = repo.get(kick_id)
+    assert row is not None
+    assert row["historical_baseline"] == 0
+    assert report.passed is False
 
 
 def test_repair_recomputes_round_links_in_chain_order(session) -> None:

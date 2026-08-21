@@ -43,6 +43,8 @@ tidal-server api serve --config config/server.yaml
 
 Set `RPC_URL` for scanner reconciliation and on-chain reads. Receipt finalization
 uses the same reconciler for local execution, API-reported receipts, and scans.
+Before alert evaluation, scans also retry canonical repair for current ambiguous
+auction rounds. Successful repairs do not generate an operational notification.
 
 ## Scan Execution
 
@@ -129,6 +131,11 @@ The API stores only SHA-256 hashes of keys. The plaintext key is shown once at c
 ## Database Notes
 
 SQLite is the canonical datastore for this repo.
+
+When upgrading an installation with retained auction history, stop all writers,
+back up the database, apply migrations, and follow the full repair procedure in
+[Server Database Commands](cli-server-db.md). Do not restart automation until a
+second repair pass reports zero mutations.
 
 Runtime behavior:
 

@@ -304,3 +304,24 @@ def test_ambiguity_inside_current_no_fill_sequence_blocks_retry() -> None:
     )
     assert decision.action == NoFillAction.BLOCK
     assert decision.reason_code == NoFillReason.OUTCOME_UNKNOWN
+
+
+def test_reviewed_historical_baseline_starts_a_fresh_retry_sequence() -> None:
+    ambiguous = kick(1, hour=0)
+    ambiguous["sell_amount"] = "99"
+    ambiguous["historical_baseline"] = 1
+    rows = [
+        ambiguous,
+        resolve(2, recovered="99", kick_id=1, hour=1),
+        *completed_no_fill(3, hour=2),
+    ]
+
+    decision = NoFillGuard(Repo(rows), [720, 1440]).decide(
+        auction_address=AUCTION,
+        token_address=TOKEN,
+        now=NOW + timedelta(days=2),
+    )
+
+    assert decision.reason_code == NoFillReason.RETRY_DUE
+    assert decision.consecutive_no_fills == 1
+    assert decision.kick_ids == (3,)

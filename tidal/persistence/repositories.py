@@ -368,6 +368,7 @@ class TokenRepository:
             )
         )
 
+
 class StrategyTokenRepository:
     def __init__(self, session: Session):
         self.session = session
@@ -857,6 +858,18 @@ class KickTxRepository:
                 models.kick_txs.c.transaction_index.asc(),
                 models.kick_txs.c.id.asc(),
             )
+        )
+        return [dict(row) for row in self.session.execute(stmt).mappings().all()]
+
+    def list_round_operations(self) -> list[dict[str, object]]:
+        stmt = (
+            select(models.kick_txs)
+            .where(
+                models.kick_txs.c.operation_type.in_(
+                    ("kick", "resolve_auction", "sweep_auction", "auction_settled")
+                )
+            )
+            .order_by(models.kick_txs.c.id.asc())
         )
         return [dict(row) for row in self.session.execute(stmt).mappings().all()]
 

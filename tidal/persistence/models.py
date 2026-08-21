@@ -253,6 +253,9 @@ kick_txs = Table(
     Column("mined_at", String, nullable=True),
     Column("transaction_index", Integer, nullable=True),
     Column("requested_sell_amount", Text, nullable=True),
+    Column("historical_baseline", Integer, nullable=False, server_default="0"),
+    Column("historical_baseline_reason", Text, nullable=True),
+    Column("historical_baselined_at", String, nullable=True),
     Column("created_at", String, nullable=False),
 )
 

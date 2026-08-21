@@ -372,9 +372,9 @@ def classify_round(
     )
 
 
-def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSequence:
-    """Classify the latest contiguous sequence for one auction/token pair."""
-
+def _classify_pair_rounds(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[RoundEvidence, ...]:
     kicks = [
         row
         for row in rows
@@ -386,17 +386,14 @@ def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSeque
         reverse=True,
     )
     if not kicks:
-        return RoundSequence(rounds=(), consecutive_no_fills=0, terminal_outcome=None)
-
+        return ()
     unlinked_closes = [
         row
         for row in rows
         if _text(row, "status") in {"CONFIRMED", "SUBMITTED"}
         and _text(row, "operation_type") in {"resolve_auction", "auction_settled"}
         and row.get("round_kick_id") is None
-        and (
-            _text(row, "status") == "SUBMITTED" or operation_closes_round(row)
-        )
+        and (_text(row, "status") == "SUBMITTED" or operation_closes_round(row))
     ]
 
     def has_unlinked_close(kick_index: int) -> bool:
@@ -424,8 +421,6 @@ def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSeque
         return False
 
     classified: list[RoundEvidence] = []
-    consecutive_no_fills = 0
-    terminal: RoundOutcome | None = None
     for index, kick in enumerate(kicks):
         evidence = (
             _unknown(kick, "UNLINKED_LOGICAL_CLOSE")
@@ -433,6 +428,44 @@ def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSeque
             else classify_round(kick, rows)
         )
         classified.append(evidence)
+    return tuple(classified)
+
+
+def classify_all_pair_operations(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[RoundEvidence, ...]:
+    """Classify every retained round for one auction/token pair."""
+
+    return _classify_pair_rounds(rows)
+
+
+def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSequence:
+    """Classify the latest contiguous sequence after any reviewed baseline."""
+
+    classified = _classify_pair_rounds(rows)
+    baselined_kick_ids = {
+        int(row["id"])
+        for row in rows
+        if _text(row, "operation_type") == "kick"
+        and int(row.get("historical_baseline") or 0) == 1
+    }
+    baseline_index = next(
+        (
+            index
+            for index, evidence in enumerate(classified)
+            if evidence.kick_id in baselined_kick_ids
+        ),
+        None,
+    )
+    current_rounds = (
+        classified if baseline_index is None else classified[:baseline_index]
+    )
+
+    sequence: list[RoundEvidence] = []
+    consecutive_no_fills = 0
+    terminal: RoundOutcome | None = None
+    for evidence in current_rounds:
+        sequence.append(evidence)
         terminal = evidence.outcome
         if evidence.outcome == RoundOutcome.NO_FILL:
             consecutive_no_fills += 1
@@ -440,7 +473,7 @@ def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSeque
         break
 
     return RoundSequence(
-        rounds=tuple(classified),
+        rounds=tuple(sequence),
         consecutive_no_fills=consecutive_no_fills,
         terminal_outcome=terminal,
     )

@@ -347,6 +347,46 @@ def test_ignored_and_inactive_pairs_are_suppressed(session) -> None:
     assert not any(item.kind == "auction_retry" for item in inactive.items)
 
 
+def test_reviewed_historical_baseline_suppresses_ancient_round_alert(session) -> None:
+    _add_successful_scan(session)
+    settings = _settings()
+    settings.txn_data_freshness_limit_seconds = 999_999_999
+    kick = _operation(1, "kick", hour=0)
+    kick["requested_sell_amount"] = "101"
+    session.execute(insert(models.kick_txs).values(**kick))
+    session.execute(
+        insert(models.kick_txs).values(
+            **_operation(2, "resolve_auction", hour=1, round_kick_id=1)
+        )
+    )
+    session.commit()
+
+    before = AlertService(session=session, settings=settings).evaluate(
+        now=NOW + timedelta(hours=2)
+    )
+    assert any(item.title == "Auction outcome needs review" for item in before.items)
+
+    session.execute(
+        models.kick_txs.update()
+        .where(models.kick_txs.c.id == 1)
+        .values(
+            historical_baseline=1,
+            historical_baseline_reason="REQUESTED_PLACED_MISMATCH",
+            historical_baselined_at=(NOW + timedelta(hours=2)).isoformat(),
+        )
+    )
+    session.commit()
+
+    after = AlertService(session=session, settings=settings).evaluate(
+        now=NOW + timedelta(hours=2)
+    )
+    assert not any(item.kind == "auction_retry" for item in after.items)
+    assert not any(
+        message.delivery_key.startswith("auction_unknown:")
+        for message in after.transitions
+    )
+
+
 class _Sink:
     destination_codes = ("admin_alerts", "operations_alerts")
 

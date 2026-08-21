@@ -125,6 +125,10 @@ or unknown evidence.
 
 After the no-fill guard, Tidal checks recent kick history for the same `(auction, token)` pair.
 
+A reviewed historical baseline created by the one-time database repair is a hard
+cutoff for this sequence. No-fill counting starts with the first canonical round
+after that baseline; the retained older rows remain available for audit.
+
 If the pair was kicked too recently, it is marked as:
 
 - cooldown

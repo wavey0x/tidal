@@ -811,12 +811,17 @@ class ScannerService:
                 if self.operation_reconciliation_pairs_fn is not None
                 else None
             )
-            add_reconciliation_errors(
-                await self.operation_reconciler.discover_direct_settlements(
+            reconciliation_errors = (
+                await self.operation_reconciler.repair_pairs(
+                    reconciliation_pairs,
                     timeout_seconds=2,
-                    pairs=reconciliation_pairs,
+                )
+                if reconciliation_pairs is not None
+                else await self.operation_reconciler.discover_direct_settlements(
+                    timeout_seconds=2,
                 )
             )
+            add_reconciliation_errors(reconciliation_errors)
             self._commit_stage()
 
         _progress(12, "Enriching AuctionScan")

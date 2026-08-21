@@ -26,6 +26,7 @@ from tidal.persistence.repositories import KickTxRepository
 
 AUCTION = "0x00000000000000000000000000000000000000a1"
 TOKEN = "0x00000000000000000000000000000000000000b1"
+TOKEN_2 = "0x00000000000000000000000000000000000000b2"
 SOURCE = "0x00000000000000000000000000000000000000c1"
 KICKER = "0x00000000000000000000000000000000000000d1"
 HISTORICAL_KICKER = "0x00000000000000000000000000000000000000d2"
@@ -134,7 +135,6 @@ class _SettlementEvent:
         self.ranges = []
 
     async def get_logs(self, **kwargs):  # noqa: ANN003
-        assert kwargs["argument_filters"]["from"].lower() == TOKEN
         block_range = (kwargs["from_block"], kwargs["to_block"])
         self.ranges.append(block_range)
         return [
@@ -281,6 +281,45 @@ async def test_reconciliation_is_idempotent(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_targeted_pair_repair_replays_confirmed_ambiguous_receipt(
+    session,
+) -> None:
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(
+        _row(
+            operation_type="kick",
+            tx_hash="0xkick",
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="90",
+            block_number=100,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+    web3 = _web3({"0xkick": _receipt(block=100, transaction_index=1)})
+    settlement_events = _SettlementEvents([])
+    web3.contract = lambda address, abi: SimpleNamespace(  # noqa: ARG005
+        events=settlement_events
+    )
+    reconciler = OperationReconciler(
+        session=session,
+        web3_client=web3,
+        auction_kicker_address=KICKER,
+        decode_receipt_fn=lambda receipt, auctions: DecodedReceipt(
+            kicks=(DecodedKick(SOURCE, AUCTION, TOKEN, 100, 100),),
+        ),
+    )
+
+    assert await reconciler.repair_pairs({(AUCTION, TOKEN)}) == []
+
+    row = repo.get(kick_id)
+    assert row is not None
+    assert row["sell_amount"] == "100"
+    web3.get_transaction_receipt.assert_awaited_once_with("0xkick", timeout_seconds=2)
+
+
+@pytest.mark.asyncio
 async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> None:
     repo = KickTxRepository(session)
     kick_id = repo.insert(
@@ -327,15 +366,65 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
     assert len(settlements) == 1
     assert settlements[0]["round_kick_id"] == kick_id
     assert settlements[0]["sell_amount"] == "0"
-    assert settlement_events.event.ranges == [(100, 50_099), (50_100, 100_099)]
+    assert settlement_events.event.ranges == [
+        (100, 50_099),
+        (50_100, 100_099),
+        (100_100, 150_000),
+        (100, 50_099),
+        (50_100, 100_099),
+        (100_100, 150_000),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_direct_settlement_discovery_ignores_older_unclosed_rounds(
+async def test_settlement_logs_are_scanned_once_per_auction(session) -> None:
+    repo = KickTxRepository(session)
+    repo.insert(
+        _row(
+            operation_type="kick",
+            tx_hash="0xkick-1",
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=100,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+    repo.insert(
+        _row(
+            operation_type="kick",
+            tx_hash="0xkick-2",
+            token_address=TOKEN_2,
+            status="CONFIRMED",
+            requested_sell_amount="100",
+            sell_amount="100",
+            block_number=101,
+            transaction_index=1,
+            mined_at=MINED_AT,
+        )
+    )
+    web3 = _web3(latest_block=101)
+    settlement_events = _SettlementEvents([])
+    web3.contract = lambda address, abi: SimpleNamespace(  # noqa: ARG005
+        events=settlement_events
+    )
+    reconciler = OperationReconciler(
+        session=session,
+        web3_client=web3,
+        auction_kicker_address=KICKER,
+    )
+
+    assert await reconciler.discover_direct_settlements() == []
+    assert settlement_events.event.ranges == [(100, 101)]
+
+
+@pytest.mark.asyncio
+async def test_direct_settlement_discovery_repairs_older_unclosed_rounds(
     session,
 ) -> None:
     repo = KickTxRepository(session)
-    repo.insert(
+    old_kick_id = repo.insert(
         _row(
             operation_type="kick",
             tx_hash="0xold",
@@ -372,20 +461,39 @@ async def test_direct_settlement_discovery_ignores_older_unclosed_rounds(
             mined_at=MINED_AT,
         )
     )
-    web3 = _web3()
-
-    def unexpected_contract(*args, **kwargs):  # noqa: ANN002, ANN003
-        del args, kwargs
-        pytest.fail("historical round should not trigger an event lookup")
-
-    web3.contract = unexpected_contract
+    web3 = _web3(
+        {"0xold-settle": _receipt(block=150, transaction_index=3)},
+        latest_block=250,
+    )
+    settlement_events = _SettlementEvents(
+        [
+            {
+                "blockNumber": 150,
+                "transactionIndex": 3,
+                "transactionHash": "0xold-settle",
+            }
+        ]
+    )
+    web3.contract = lambda address, abi: SimpleNamespace(  # noqa: ARG005
+        events=settlement_events
+    )
     reconciler = OperationReconciler(
         session=session,
         web3_client=web3,
         auction_kicker_address=KICKER,
+        decode_receipt_fn=lambda receipt, auctions: DecodedReceipt(
+            settlements=(DecodedSettlement(AUCTION, TOKEN),),
+        ),
     )
 
     assert await reconciler.discover_direct_settlements() == []
+    settlements = [
+        row
+        for row in repo.list_pair_operations(AUCTION, TOKEN)
+        if row["operation_type"] == "auction_settled"
+    ]
+    assert len(settlements) == 1
+    assert settlements[0]["round_kick_id"] == old_kick_id
 
 
 def test_noop_resolution_does_not_mark_kick_closed(session) -> None:

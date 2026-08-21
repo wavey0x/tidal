@@ -10,6 +10,7 @@ import uvicorn
 from tidal.api.app import create_app
 from tidal.auth_cli import app as auth_app
 from tidal.auction_round_repair import AuctionRoundRepair
+from tidal.cli_renderers import render_status_panel, render_warning_panel
 from tidal.cli_context import CLIContext
 from tidal.cli_options import ConfigOption
 from tidal.logging import OutputMode, configure_logging
@@ -81,7 +82,7 @@ def db_repair_auction_rounds(
     apply: bool = typer.Option(
         False,
         "--apply",
-        help="Repair receipts and round links for current automation scope.",
+        help="Repair all retained receipts, round links, and inactive historical gaps.",
     ),
 ) -> None:
     import asyncio
@@ -104,23 +105,31 @@ def db_repair_auction_rounds(
             await web3_client.close()
 
     report = asyncio.run(_run())
+    lines: list[str] = []
     for pair in report.pairs:
         live_suffix = " live" if pair.live_on_chain is True else ""
-        audit_status = (
-            "OUT_OF_SCOPE"
-            if not pair.in_scope
-            else "OK"
-            if pair.passed
-            else "UNRESOLVED"
+        baseline_suffix = (
+            f" baseline={','.join(str(value) for value in pair.baseline_kick_ids)}"
+            if pair.baseline_kick_ids
+            else ""
         )
-        typer.echo(
+        audit_status = "OK" if pair.passed else "UNRESOLVED"
+        lines.append(
             f"{pair.auction_address} {pair.token_address} "
-            f"{pair.outcome} {pair.reason_code or '-'}{live_suffix} "
+            f"{pair.outcome} {pair.reason_code or '-'}{live_suffix}{baseline_suffix} "
             f"{audit_status}"
         )
+    lines.append(f"Mutations: {report.mutations}")
+    render_status_panel(
+        "Auction round repair",
+        lines,
+        border_style="green" if report.passed else "yellow",
+    )
     if report.reconciliation_errors:
-        typer.echo(
-            f"{len(report.reconciliation_errors)} reconciliation error(s)", err=True
+        render_warning_panel(
+            [
+                f"{len(report.reconciliation_errors)} receipt or settlement lookup(s) remain unresolved."
+            ]
         )
     if not report.passed:
         raise typer.Exit(code=1)

@@ -10,7 +10,11 @@ import structlog
 from eth_utils import to_checksum_address
 from web3.logs import DISCARD
 
-from tidal.auction_rounds import operation_closes_round
+from tidal.auction_rounds import (
+    RoundOutcome,
+    classify_pair_operations,
+    operation_closes_round,
+)
 from tidal.chain.contracts.abis import (
     AUCTION_ABI,
     AUCTION_KICKER_ABI,
@@ -99,14 +103,28 @@ class OperationReconciler:
         timeout_seconds: int = 2,
         tx_hashes: Collection[str] | None = None,
     ) -> list[ReconciliationError]:
-        grouped: dict[str, list[dict[str, object]]] = {}
-        for row in self.kick_repo.list_submitted():
-            tx_hash = str(row["tx_hash"])
-            if tx_hashes is None or tx_hash in tx_hashes:
-                grouped.setdefault(tx_hash, []).append(row)
+        submitted_hashes = {
+            str(row["tx_hash"])
+            for row in self.kick_repo.list_submitted()
+            if tx_hashes is None or str(row["tx_hash"]) in tx_hashes
+        }
+        return await self.reconcile_receipts(
+            submitted_hashes,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def reconcile_receipts(
+        self,
+        tx_hashes: Collection[str],
+        *,
+        timeout_seconds: int = 2,
+    ) -> list[ReconciliationError]:
+        """Fetch and finalize each retained transaction receipt exactly once."""
 
         errors: list[ReconciliationError] = []
-        for tx_hash in grouped:
+        for tx_hash in sorted(set(tx_hashes)):
+            if not self.kick_repo.list_by_tx_hash(tx_hash):
+                continue
             try:
                 receipt = await self.web3_client.get_transaction_receipt(
                     tx_hash,
@@ -137,6 +155,59 @@ class OperationReconciler:
                         error_message="confirmed receipt could not be decoded",
                     )
                 )
+        return errors
+
+    async def repair_pairs(
+        self,
+        pairs: Collection[tuple[str, str]],
+        *,
+        timeout_seconds: int = 2,
+    ) -> list[ReconciliationError]:
+        """Replay retained evidence and settlement logs for exact pairs."""
+
+        normalized_pairs = {
+            (normalize_address(auction), normalize_address(token))
+            for auction, token in pairs
+        }
+        normalized_pairs = {
+            pair
+            for pair in normalized_pairs
+            if (
+                (
+                    latest := classify_pair_operations(
+                        self.kick_repo.list_pair_operations(*pair)
+                    ).latest
+                )
+                is not None
+                and latest.outcome in {RoundOutcome.UNKNOWN, RoundOutcome.INCOMPLETE}
+            )
+        }
+        if not normalized_pairs:
+            return []
+        tx_hashes = {
+            str(row["tx_hash"])
+            for auction_address, token_address in normalized_pairs
+            for row in self.kick_repo.list_pair_operations(
+                auction_address,
+                token_address,
+            )
+            if row.get("tx_hash")
+            and row.get("status") in {"SUBMITTED", "CONFIRMED"}
+            and row.get("operation_type")
+            in {"kick", "resolve_auction", "sweep_auction"}
+        }
+        errors = await self.reconcile_receipts(
+            tx_hashes,
+            timeout_seconds=timeout_seconds,
+        )
+        self.rebuild_round_links(normalized_pairs)
+        errors.extend(
+            await self.discover_direct_settlements(
+                timeout_seconds=timeout_seconds,
+                pairs=normalized_pairs,
+            )
+        )
+        self.rebuild_round_links(normalized_pairs)
         return errors
 
     async def reconcile_all(
@@ -349,11 +420,18 @@ class OperationReconciler:
         timeout_seconds: int = 2,
         pairs: Collection[tuple[str, str]] | None = None,
     ) -> list[ReconciliationError]:
-        """Persist missing AuctionSettled closes for confirmed round openings."""
+        """Persist all missing AuctionSettled closes using one log scan per auction."""
 
         kicks = self.kick_repo.list_confirmed_kicks()
-        by_pair: dict[tuple[str, str], list[dict[str, object]]] = {}
-        pair_filter = set(pairs) if pairs is not None else None
+        pair_filter = (
+            {
+                (normalize_address(auction), normalize_address(token))
+                for auction, token in pairs
+            }
+            if pairs is not None
+            else None
+        )
+        by_auction: dict[str, list[dict[str, object]]] = {}
         for kick in kicks:
             pair = (
                 normalize_address(str(kick["auction_address"])),
@@ -361,129 +439,124 @@ class OperationReconciler:
             )
             if pair_filter is not None and pair not in pair_filter:
                 continue
-            by_pair.setdefault(pair, []).append(kick)
+            if (
+                kick.get("block_number") is None
+                or kick.get("transaction_index") is None
+            ):
+                continue
+            by_auction.setdefault(pair[0], []).append(kick)
 
         errors: list[ReconciliationError] = []
         receipt_cache: dict[str, dict[str, object]] = {}
         block_cache: dict[int, dict[str, object]] = {}
-        latest_block: int | None = None
-        for (auction_address, token_address), pair_kicks in by_pair.items():
-            rows = self.kick_repo.list_pair_operations(auction_address, token_address)
-            closed_ids = {
-                int(row["round_kick_id"])
-                for row in rows
-                if row.get("round_kick_id") is not None
-                and row.get("status") == "CONFIRMED"
-                and operation_closes_round(row)
-            }
-            # Older gaps cannot affect the current guard and stay historical.
-            positioned = [
-                kick
-                for kick in pair_kicks
-                if kick.get("block_number") is not None
-                and kick.get("transaction_index") is not None
-            ][-1:]
-            for kick in positioned:
-                kick_id = int(kick["id"])
-                if kick_id in closed_ids:
-                    continue
-                kick_position = (
-                    int(kick["block_number"]),
-                    int(kick["transaction_index"]),
+        latest_block = await self.web3_client.get_block_number() if by_auction else None
+        for auction_address, auction_kicks in sorted(by_auction.items()):
+            assert latest_block is not None
+            earliest_block = min(int(kick["block_number"]) for kick in auction_kicks)
+            try:
+                contract = self.web3_client.contract(
+                    to_checksum_address(auction_address), AUCTION_ABI
                 )
-                try:
-                    contract = self.web3_client.contract(
-                        to_checksum_address(auction_address), AUCTION_ABI
+                logs: list[Mapping[str, object]] = []
+                chunk_start = earliest_block
+                while chunk_start <= latest_block:
+                    chunk_end = min(
+                        chunk_start + SETTLEMENT_LOG_BLOCK_SPAN - 1,
+                        latest_block,
                     )
-                    if latest_block is None:
-                        latest_block = await self.web3_client.get_block_number()
-                    logs = []
-                    chunk_start = kick_position[0]
-                    while chunk_start <= latest_block:
-                        chunk_end = min(
-                            chunk_start + SETTLEMENT_LOG_BLOCK_SPAN - 1,
-                            latest_block,
-                        )
-                        logs = await contract.events.AuctionSettled().get_logs(
+                    logs.extend(
+                        await contract.events.AuctionSettled().get_logs(
                             from_block=chunk_start,
                             to_block=chunk_end,
-                            argument_filters={
-                                "from": to_checksum_address(token_address)
-                            },
                         )
-                        if logs:
-                            break
-                        chunk_start = chunk_end + 1
+                    )
+                    chunk_start = chunk_end + 1
+            except Exception as exc:  # noqa: BLE001
+                anchor = min(auction_kicks, key=lambda row: int(row["block_number"]))
+                errors.append(
+                    ReconciliationError(
+                        tx_hash=str(anchor.get("tx_hash") or ""),
+                        error_code="event_lookup_failed",
+                        error_message="settlement event lookup failed",
+                    )
+                )
+                logger.warning(
+                    "operation_settlement_lookup_failed",
+                    auction_address=auction_address,
+                    error_type=exc.__class__.__name__,
+                )
+                continue
+
+            settlements_by_tx: dict[str, tuple[int, int]] = {}
+            for log in logs:
+                tx_hash_value = log["transactionHash"]
+                tx_hash = (
+                    tx_hash_value.hex()
+                    if hasattr(tx_hash_value, "hex")
+                    else str(tx_hash_value)
+                )
+                if not tx_hash.startswith("0x"):
+                    tx_hash = f"0x{tx_hash}"
+                settlements_by_tx[tx_hash] = (
+                    int(log["blockNumber"]),
+                    int(log["transactionIndex"]),
+                )
+
+            for tx_hash, position in sorted(
+                settlements_by_tx.items(), key=lambda item: item[1]
+            ):
+                try:
+                    receipt = receipt_cache.get(tx_hash)
+                    if receipt is None:
+                        receipt = await self.web3_client.get_transaction_receipt(
+                            tx_hash,
+                            timeout_seconds=timeout_seconds,
+                        )
+                        receipt_cache[tx_hash] = receipt
+                    decoded = self.decode_receipt_fn(receipt, (auction_address,))
                 except Exception as exc:  # noqa: BLE001
                     errors.append(
                         ReconciliationError(
-                            tx_hash=str(kick.get("tx_hash") or ""),
-                            error_code="event_lookup_failed",
-                            error_message="settlement event lookup failed",
+                            tx_hash=tx_hash,
+                            error_code="event_decode_failed",
+                            error_message="settlement receipt decode failed",
                         )
                     )
                     logger.warning(
-                        "operation_settlement_lookup_failed",
-                        kick_tx_id=kick_id,
+                        "operation_settlement_decode_failed",
+                        tx_hash=tx_hash,
                         error_type=exc.__class__.__name__,
                     )
                     continue
 
-                for log in logs:
-                    position = (int(log["blockNumber"]), int(log["transactionIndex"]))
-                    if position <= kick_position:
+                resolved_pairs = {
+                    (item.auction_address, item.token_address)
+                    for item in decoded.resolves
+                }
+                for event in decoded.settlements:
+                    pair = (event.auction_address, event.token_address)
+                    if pair[0] != auction_address:
                         continue
-                    tx_hash_value = log["transactionHash"]
-                    tx_hash = (
-                        tx_hash_value.hex()
-                        if hasattr(tx_hash_value, "hex")
-                        else str(tx_hash_value)
-                    )
-                    if not tx_hash.startswith("0x"):
-                        tx_hash = f"0x{tx_hash}"
-                    try:
-                        receipt = receipt_cache.get(tx_hash)
-                        if receipt is None:
-                            receipt = await self.web3_client.get_transaction_receipt(
-                                tx_hash,
-                                timeout_seconds=timeout_seconds,
-                            )
-                            receipt_cache[tx_hash] = receipt
-                        decoded = self.decode_receipt_fn(receipt, (auction_address,))
-                    except Exception as exc:  # noqa: BLE001
-                        errors.append(
-                            ReconciliationError(
-                                tx_hash=tx_hash,
-                                error_code="event_decode_failed",
-                                error_message="settlement receipt decode failed",
-                            )
-                        )
-                        logger.warning(
-                            "operation_settlement_decode_failed",
-                            tx_hash=tx_hash,
-                            error_type=exc.__class__.__name__,
-                        )
+                    if pair_filter is not None and pair not in pair_filter:
                         continue
-                    pair = (auction_address, token_address)
-                    if pair in {
-                        (item.auction_address, item.token_address)
-                        for item in decoded.resolves
-                    }:
-                        continue
-                    if pair not in {
-                        (item.auction_address, item.token_address)
-                        for item in decoded.settlements
-                    }:
+                    if pair in resolved_pairs:
                         continue
                     if (
                         self.kick_repo.find_exact_operation(
                             operation_type="auction_settled",
                             tx_hash=tx_hash,
-                            auction_address=auction_address,
-                            token_address=token_address,
+                            auction_address=event.auction_address,
+                            token_address=event.token_address,
                         )
                         is not None
                     ):
+                        continue
+                    kick = self.kick_repo.latest_confirmed_unclosed_kick(
+                        event.auction_address,
+                        event.token_address,
+                        before_position=position,
+                    )
+                    if kick is None:
                         continue
                     block_number = position[0]
                     block = block_cache.get(block_number)
@@ -500,21 +573,80 @@ class OperationReconciler:
                             "source_type": kick.get("source_type"),
                             "source_address": kick.get("source_address"),
                             "strategy_address": kick.get("strategy_address"),
-                            "token_address": token_address,
-                            "auction_address": auction_address,
+                            "token_address": event.token_address,
+                            "auction_address": event.auction_address,
                             "sell_amount": "0",
-                            "normalized_balance": self._normalized(token_address, 0),
+                            "normalized_balance": self._normalized(
+                                event.token_address, 0
+                            ),
                             "status": "CONFIRMED",
                             "tx_hash": tx_hash,
                             "block_number": block_number,
                             "transaction_index": position[1],
                             "mined_at": mined_at,
-                            "round_kick_id": kick_id,
+                            "round_kick_id": int(kick["id"]),
                             "created_at": mined_at,
                         }
                     )
         self.session.commit()
         return errors
+
+    def rebuild_round_links(
+        self,
+        pairs: Collection[tuple[str, str]],
+    ) -> None:
+        """Rebuild confirmed recovery links from deterministic chain order."""
+
+        changed = False
+        for auction_address, token_address in sorted(pairs):
+            rows = [
+                row
+                for row in self.kick_repo.list_pair_operations(
+                    auction_address,
+                    token_address,
+                )
+                if row.get("status") == "CONFIRMED"
+                and row.get("block_number") is not None
+                and row.get("transaction_index") is not None
+            ]
+            rows.sort(
+                key=lambda row: (
+                    int(row["block_number"]),
+                    int(row["transaction_index"]),
+                    int(row["id"]),
+                )
+            )
+            open_kick_id: int | None = None
+            for row in rows:
+                operation_type = row.get("operation_type")
+                if operation_type == "kick":
+                    open_kick_id = int(row["id"])
+                    continue
+                if operation_type not in {
+                    "resolve_auction",
+                    "sweep_auction",
+                    "auction_settled",
+                }:
+                    continue
+                target_kick_id = open_kick_id
+                if operation_type == "resolve_auction":
+                    try:
+                        if int(row.get("resolution_path")) == 0:
+                            target_kick_id = None
+                    except (TypeError, ValueError):
+                        pass
+                existing = row.get("round_kick_id")
+                existing_id = int(existing) if existing is not None else None
+                if existing_id != target_kick_id:
+                    self.kick_repo.update_fields(
+                        int(row["id"]),
+                        round_kick_id=target_kick_id,
+                    )
+                    changed = True
+                if open_kick_id is not None and operation_closes_round(row):
+                    open_kick_id = None
+        if changed:
+            self.session.commit()
 
     def _round_kick_id(
         self,

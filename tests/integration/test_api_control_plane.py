@@ -975,8 +975,8 @@ def test_legacy_kick_action_without_tx_index_materializes_through_logs_kicks(tmp
     payload = logs_response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["total"] == 1
-    # Client-reported receipt metadata does not substitute for canonical event decoding.
-    assert payload["data"]["kicks"][0]["status"] == "SUBMITTED"
+    # Receipt lifecycle propagates even when canonical event evidence is still absent.
+    assert payload["data"]["kicks"][0]["status"] == "CONFIRMED"
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
     assert payload["data"]["kicks"][0]["wantSymbol"] == "USDC"
@@ -1321,8 +1321,7 @@ def test_settle_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Pat
     payload = logs_response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["total"] == 1
-    # The shared reconciler finalizes this after the raw receipt is available from RPC.
-    assert payload["data"]["kicks"][0]["status"] == "SUBMITTED"
+    assert payload["data"]["kicks"][0]["status"] == "CONFIRMED"
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["operationType"] == "resolve_auction"
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
@@ -1414,3 +1413,71 @@ def test_kick_logs_endpoint_falls_back_to_cached_token_symbols(tmp_path: Path) -
     assert payload["total"] == 1
     assert payload["kicks"][0]["tokenSymbol"] == "CRV"
     assert payload["kicks"][0]["wantSymbol"] == "USDC"
+
+
+def test_failed_api_receipt_propagates_to_operation_log(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    app = create_app(settings)
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        action_id = create_prepared_action(
+            session,
+            operator_id="tester",
+            action_type="kick",
+            sender="0x6000000000000000000000000000000000000006",
+            request_payload={},
+            preview_payload={
+                "preparedOperations": [
+                    {
+                        "operation": "kick",
+                        "sourceType": "strategy",
+                        "sourceAddress": "0x2000000000000000000000000000000000000002",
+                        "auctionAddress": "0x3000000000000000000000000000000000000003",
+                        "tokenAddress": "0x5000000000000000000000000000000000000005",
+                        "sellAmount": "1",
+                    }
+                ]
+            },
+            transactions=[
+                {
+                    "operation": "kick",
+                    "to": "0x7000000000000000000000000000000000000007",
+                    "data": "0xdeadbeef",
+                    "value": "0x0",
+                    "chainId": 1,
+                }
+            ],
+        )
+
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret-token"}
+    broadcast = client.post(
+        f"/api/v1/tidal/actions/{action_id}/broadcast",
+        headers=headers,
+        json={
+            "sender": "0x6000000000000000000000000000000000000006",
+            "txHash": "0xfailed",
+            "broadcastAt": "2026-03-28T00:01:00+00:00",
+            "txIndex": 0,
+        },
+    )
+    assert broadcast.status_code == 200
+
+    receipt = client.post(
+        f"/api/v1/tidal/actions/{action_id}/receipt",
+        headers=headers,
+        json={
+            "txIndex": 0,
+            "receiptStatus": "FAILED",
+            "observedAt": "2026-03-28T00:02:00+00:00",
+            "errorMessage": "wallet stopped tracking transaction",
+        },
+    )
+
+    assert receipt.status_code == 200
+    assert receipt.json()["data"]["status"] == "FAILED"
+    with Session(engine, future=True) as session:
+        operation = session.execute(select(models.kick_txs)).mappings().one()
+    assert operation["status"] == "FAILED"
+    assert operation["error_message"] == "wallet stopped tracking transaction"

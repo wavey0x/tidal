@@ -307,8 +307,6 @@ def _sync_kick_log_rows(
             repo.insert(row)
             continue
 
-        if status != "SUBMITTED":
-            continue
         repo.update_status(
             int(existing["id"]),
             status=status,

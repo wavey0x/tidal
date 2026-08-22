@@ -98,6 +98,13 @@ class ScannerService:
         alert_dispatcher=None,
     ):
         del concurrency
+        if (
+            operation_reconciler is not None
+            and operation_reconciliation_pairs_fn is None
+        ):
+            raise ValueError(
+                "operation_reconciliation_pairs_fn is required with operation_reconciler"
+            )
         self.session = session
         self.chain_id = chain_id
         self.multicall_enabled = multicall_enabled
@@ -806,20 +813,10 @@ class ScannerService:
         self._commit_stage()
 
         if self.operation_reconciler is not None:
-            reconciliation_pairs = (
-                self.operation_reconciliation_pairs_fn()
-                if self.operation_reconciliation_pairs_fn is not None
-                else None
-            )
-            reconciliation_errors = (
-                await self.operation_reconciler.repair_pairs(
-                    reconciliation_pairs,
-                    timeout_seconds=2,
-                )
-                if reconciliation_pairs is not None
-                else await self.operation_reconciler.discover_direct_settlements(
-                    timeout_seconds=2,
-                )
+            assert self.operation_reconciliation_pairs_fn is not None
+            reconciliation_errors = await self.operation_reconciler.repair_pairs(
+                self.operation_reconciliation_pairs_fn(),
+                timeout_seconds=2,
             )
             add_reconciliation_errors(reconciliation_errors)
             self._commit_stage()

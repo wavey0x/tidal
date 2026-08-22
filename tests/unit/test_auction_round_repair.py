@@ -253,7 +253,6 @@ async def test_repair_check_covers_historical_pair_without_current_candidate(
     report = await _repair(session, SimpleNamespace()).run(apply=False)
 
     assert report.passed is False
-    assert report.pairs[0].in_scope is False
     assert report.pairs[0].outcome == "UNKNOWN"
 
 
@@ -292,7 +291,6 @@ async def test_unreviewed_old_submitted_row_fails_full_history_audit(session) ->
     report = await _repair(session, SimpleNamespace()).run(apply=False)
 
     assert report.passed is False
-    assert report.pairs[0].in_scope is True
     assert report.pairs[0].outcome == "PRODUCTIVE"
 
 
@@ -477,7 +475,9 @@ def test_repair_recomputes_round_links_in_chain_order(session) -> None:
         )
     )
 
-    _repair(session, SimpleNamespace())._repair_links({(AUCTION, TOKEN)})
+    _repair(session, SimpleNamespace()).reconciler.rebuild_round_links(
+        {(AUCTION, TOKEN)}
+    )
 
     rows = {int(row["id"]): row for row in repo.list_pair_operations(AUCTION, TOKEN)}
     assert rows[old_close_id]["round_kick_id"] == old_kick_id

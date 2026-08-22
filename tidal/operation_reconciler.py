@@ -210,17 +210,6 @@ class OperationReconciler:
         self.rebuild_round_links(normalized_pairs)
         return errors
 
-    async def reconcile_all(
-        self, *, timeout_seconds: int = 2
-    ) -> list[ReconciliationError]:
-        """Run one bounded pass for submitted receipts and direct settlements."""
-
-        errors = await self.reconcile_submitted(timeout_seconds=timeout_seconds)
-        errors.extend(
-            await self.discover_direct_settlements(timeout_seconds=timeout_seconds)
-        )
-        return errors
-
     async def finalize_receipt(
         self, tx_hash: str, receipt: dict[str, object]
     ) -> str | None:

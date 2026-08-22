@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from eth_utils import to_checksum_address
 
-from tidal.automation_scope import current_automation_pairs, pair_in_automation_scope
 from tidal.auction_rounds import (
     RoundOutcome,
     classify_all_pair_operations,
@@ -26,7 +25,6 @@ class RepairPairAudit:
     outcome: str
     reason_code: str | None
     live_on_chain: bool | None
-    in_scope: bool
     baseline_kick_ids: tuple[int, ...]
     passed: bool
 
@@ -74,14 +72,14 @@ class AuctionRoundRepair:
                     timeout_seconds=2,
                 )
             )
-            self._repair_links(pairs)
+            self.reconciler.rebuild_round_links(pairs)
             errors.extend(
                 await self.reconciler.discover_direct_settlements(
                     timeout_seconds=2,
                     pairs=pairs,
                 )
             )
-            self._repair_links(pairs)
+            self.reconciler.rebuild_round_links(pairs)
             await self._baseline_unprovable_rounds(pairs)
         pairs = await self._audit_pairs()
         after = self._snapshot()
@@ -103,9 +101,6 @@ class AuctionRoundRepair:
             )
             for row in self.repo.list_round_operations()
         }
-
-    def _repair_links(self, pairs: set[tuple[str, str]]) -> None:
-        self.reconciler.rebuild_round_links(pairs)
 
     async def _baseline_unprovable_rounds(
         self,
@@ -171,7 +166,6 @@ class AuctionRoundRepair:
 
     async def _audit_pairs(self) -> list[RepairPairAudit]:
         pairs = sorted(self._pair_keys())
-        current_pairs = current_automation_pairs(self.session, self.settings)
         output: list[RepairPairAudit] = []
         for auction_address, token_address in pairs:
             rows = self.repo.list_pair_operations(auction_address, token_address)
@@ -190,20 +184,6 @@ class AuctionRoundRepair:
                 if round_.kick_id not in baseline_set
                 and round_.outcome in {RoundOutcome.UNKNOWN, RoundOutcome.INCOMPLETE}
             ]
-            latest_kick = next(
-                (
-                    row
-                    for row in reversed(rows)
-                    if row.get("operation_type") == "kick"
-                    and row.get("status") in {"CONFIRMED", "SUBMITTED"}
-                ),
-                None,
-            )
-            in_scope = latest_kick is not None and pair_in_automation_scope(
-                self.session,
-                current_pairs,
-                latest_kick,
-            )
             live = None
             if (
                 unreviewed
@@ -231,7 +211,6 @@ class AuctionRoundRepair:
                     outcome=outcome,
                     reason_code=reason,
                     live_on_chain=live,
-                    in_scope=in_scope,
                     baseline_kick_ids=baseline_kick_ids,
                     passed=passed,
                 )

@@ -22,6 +22,7 @@ from tidal.transaction_service.kick_policy import IgnorePolicy
 AUCTION = "0x00000000000000000000000000000000000000a1"
 TOKEN = "0x00000000000000000000000000000000000000b1"
 SOURCE = "0x00000000000000000000000000000000000000c1"
+WANT = "0x00000000000000000000000000000000000000e1"
 NOW = datetime(2026, 8, 2, 12, tzinfo=timezone.utc)
 
 
@@ -37,7 +38,7 @@ def session(tmp_path):
             vault_address="0xvault",
             active=1,
             auction_address=AUCTION,
-            want_address="0x00000000000000000000000000000000000000e1",
+            want_address=WANT,
             first_seen_at=NOW.isoformat(),
             last_seen_at=NOW.isoformat(),
         )
@@ -46,10 +47,21 @@ def session(tmp_path):
         insert(models.tokens).values(
             address=TOKEN,
             chain_id=1,
-            decimals=18,
+            symbol="FROM",
+            decimals=0,
             price_usd="1",
             price_status="SUCCESS",
             price_fetched_at=NOW.isoformat(),
+            first_seen_at=NOW.isoformat(),
+            last_seen_at=NOW.isoformat(),
+        )
+    )
+    session.execute(
+        insert(models.tokens).values(
+            address=WANT,
+            chain_id=1,
+            symbol="WANT",
+            decimals=18,
             first_seen_at=NOW.isoformat(),
             last_seen_at=NOW.isoformat(),
         )
@@ -103,6 +115,11 @@ def _operation(
         "strategy_address": SOURCE,
         "token_address": TOKEN,
         "auction_address": AUCTION,
+        "token_symbol": "FROM",
+        "want_address": WANT,
+        "want_symbol": "WANT",
+        "normalized_balance": recovered,
+        "usd_value": recovered,
         "status": "CONFIRMED",
         "tx_hash": f"0x{row_id:064x}",
         "block_number": 100 + hour,
@@ -193,6 +210,9 @@ def test_no_fill_backoff_and_exhaustion_share_occurrence(session, monkeypatch) -
     assert terminal.occurrence_id == watching.occurrence_id
     assert terminal.opened_at == (NOW + timedelta(hours=41)).isoformat()
     assert terminal.updated_at == terminal.opened_at
+    assert terminal.summary == (
+        "100.00 FROM → WANT · $100.00\n3 no-fills · automation paused"
+    )
     assert terminal.next_action["command"].endswith("--allow-no-fill-retry")
     assert any(
         message.delivery_key == "auction_retry_exhausted:5"
@@ -488,9 +508,9 @@ async def test_telegram_message_is_compact_escaped_and_disables_previews(
         "text": (
             "<b>[TIDAL WARNING] Auction &lt;review&gt;</b>\n"
             "Evidence is ambiguous &amp; automation is paused.\n\n"
-            '<a href="https://tidal.wavey.info/alerts">Tidal Alerts</a> · '
-            '<a href="https://etherscan.io/tx/0xabc">Etherscan</a> · '
-            '<a href="https://auctionscan.info/auction/1/0xabc">AuctionScan</a>'
+            '<a href="https://tidal.wavey.info/alerts">Tidal</a> · '
+            '<a href="https://etherscan.io/tx/0xabc">Transaction</a> · '
+            '<a href="https://auctionscan.info/auction/1/0xabc">Auction</a>'
         ),
         "parse_mode": "HTML",
         "link_preview_options": {"is_disabled": True},

@@ -16,9 +16,9 @@ def _link_label(url: str) -> str | None:
         return None
     host = parsed.netloc.lower()
     if host == "etherscan.io" or host.endswith(".etherscan.io"):
-        return "Etherscan"
+        return "Transaction"
     if host == "auctionscan.info" or host.endswith(".auctionscan.info"):
-        return "AuctionScan"
+        return "Auction"
     return "Details"
 
 
@@ -51,7 +51,7 @@ class TelegramAlertSink:
         if message.retry_at:
             lines.append(f"<b>Retry:</b> {escape(message.retry_at)}")
         links = [
-            f'<a href="{escape(self._alerts_url, quote=True)}">Tidal Alerts</a>',
+            f'<a href="{escape(self._alerts_url, quote=True)}">Tidal</a>',
             *(
                 f'<a href="{escape(link, quote=True)}">{label}</a>'
                 for link in message.links

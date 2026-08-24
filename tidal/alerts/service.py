@@ -66,6 +66,21 @@ def _parse_time(value: object) -> datetime | None:
     )
 
 
+def _compact_label(value: object) -> str | None:
+    text = " ".join(str(value or "").split())
+    return text[:24] or None
+
+
+def _format_number(value: object) -> str | None:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite():
+        return None
+    return f"{parsed:,.2f}"
+
+
 def _camel_item(item: AlertItem) -> dict[str, object]:
     return {
         "id": item.id,
@@ -205,7 +220,10 @@ class AlertService:
                     severity="high",
                     status="needs_action",
                     title="Auction retry budget exhausted",
-                    summary=f"{decision.consecutive_no_fills} consecutive no-fill rounds paused automation.",
+                    summary=self._auction_retry_summary(
+                        latest_kick,
+                        no_fill_count=decision.consecutive_no_fills,
+                    ),
                     retry_at=None,
                     next_command=(
                         f"tidal kick run --auction {auction_address} --token {token_address} "
@@ -235,6 +253,58 @@ class AlertService:
             )
             items.append(item)
         return items, transitions
+
+    def _auction_retry_summary(
+        self,
+        latest_kick: dict[str, object],
+        *,
+        no_fill_count: int,
+    ) -> str:
+        token_address = str(latest_kick.get("token_address") or "")
+        token_row = (
+            self.session.execute(
+                select(models.tokens.c.symbol, models.tokens.c.decimals).where(
+                    models.tokens.c.address == token_address
+                )
+            )
+            .mappings()
+            .first()
+        )
+        token_symbol = _compact_label(
+            latest_kick.get("token_symbol")
+            or (token_row.get("symbol") if token_row else None)
+        )
+        want_symbol = _compact_label(latest_kick.get("want_symbol"))
+        raw_amount = latest_kick.get("requested_sell_amount")
+        if raw_amount is None:
+            raw_amount = latest_kick.get("sell_amount")
+        amount = None
+        if raw_amount is not None and token_row is not None:
+            try:
+                normalized = Decimal(str(raw_amount)) / (
+                    Decimal(10) ** int(token_row["decimals"])
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                pass
+            else:
+                amount = _format_number(normalized)
+        if amount is None:
+            amount = _format_number(latest_kick.get("normalized_balance"))
+
+        pair_parts = []
+        if amount and token_symbol:
+            pair_parts.append(f"{amount} {token_symbol}")
+        elif token_symbol:
+            pair_parts.append(token_symbol)
+        if want_symbol:
+            pair_parts.append(want_symbol)
+        pair = " → ".join(pair_parts)
+        usd_value = _format_number(latest_kick.get("usd_value"))
+        if usd_value:
+            pair = f"{pair} · ${usd_value}" if pair else f"${usd_value}"
+
+        state = f"{no_fill_count} no-fills · automation paused"
+        return f"{pair}\n{state}" if pair else state
 
     def _auction_item(
         self,

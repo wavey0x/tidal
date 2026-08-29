@@ -22,11 +22,14 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(REPO_ROOT))
 
 from tidal.chain.contracts.abis import (
-    AUCTION_ABI,
     AUCTION_FACTORY_ABI,
     ERC20_ABI,
     MULTICALL3_ABI,
+    SUPPORTED_AUCTION_ABI,
+    SUPPORTED_AUCTION_FACTORY_ABI,
 )
+from tidal.auction_price_units import decode_starting_price_amount
+from tidal.auction_versions import approved_auction_spec_for_factory
 from tidal.auction_migration.prompts import (
     prompt_address,
     prompt_bool,
@@ -48,33 +51,8 @@ from tidal.constants import (
 from tidal.normalizers import normalize_address, short_address
 from tidal.transaction_service.signer import TransactionSigner
 
-NEW_AUCTION_FACTORY_ADDRESS = "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
-
-SINGLE_AUCTION_FACTORY_ABI = AUCTION_FACTORY_ABI + [
-    {
-        "inputs": [
-            {"internalType": "address", "name": "_want", "type": "address"},
-            {"internalType": "address", "name": "_receiver", "type": "address"},
-            {"internalType": "address", "name": "_governance", "type": "address"},
-            {"internalType": "uint256", "name": "_startingPrice", "type": "uint256"},
-            {"internalType": "bytes32", "name": "_salt", "type": "bytes32"},
-        ],
-        "name": "createNewAuction",
-        "outputs": [{"internalType": "address", "name": "newAuction", "type": "address"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    }
-]
-
-SINGLE_AUCTION_ABI = AUCTION_ABI + [
-    {
-        "inputs": [],
-        "name": "startingPrice",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-]
+SINGLE_AUCTION_FACTORY_ABI = SUPPORTED_AUCTION_FACTORY_ABI
+SINGLE_AUCTION_ABI = SUPPORTED_AUCTION_ABI
 
 
 @dataclass(slots=True)
@@ -401,7 +379,8 @@ def main() -> None:
     w3 = build_sync_web3(settings)
     chain_id = int(w3.eth.chain_id)
 
-    default_factory = normalize_address(settings.auction_factory_address or NEW_AUCTION_FACTORY_ADDRESS)
+    default_factory = normalize_address(settings.auction_factory_address)
+    approved_auction_spec_for_factory(default_factory)
     default_governance = YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS
     default_keystore_path = discover_local_keystore_path(settings)
     default_preview_caller = read_keystore_address(default_keystore_path)
@@ -413,6 +392,7 @@ def main() -> None:
     print()
 
     factory_address = prompt_address("Auction factory", default=default_factory)
+    factory_spec = approved_auction_spec_for_factory(factory_address)
     want = prompt_token_address(w3, "Want token")
     receiver = prompt_address("Receiver")
     governance = prompt_address("Governance", default=default_governance)
@@ -436,6 +416,10 @@ def main() -> None:
             None,
         )
     starting_price = prompt_uint("Starting price", default=default_starting_price)
+    if starting_price <= 0:
+        raise ValueError("starting price must be positive")
+    if factory_spec.version == "1.0.5" and starting_price <= 10**9:
+        raise ValueError("v1.0.5 starting price must be greater than 1e9")
     salt = build_default_salt(want, receiver, governance)
     print("Salt auto-generated.")
 
@@ -456,6 +440,11 @@ def main() -> None:
     print(f"  receiver      {to_checksum_address(receiver)}")
     print(f"  governance    {to_checksum_address(governance)}")
     print(f"  startingPrice {starting_price}")
+    print(
+        "  economic start "
+        f"{decode_starting_price_amount(starting_price, factory_spec.starting_price_encoding):f}"
+    )
+    print(f"  auction version {factory_spec.version}")
     print(f"  salt          {salt}")
     if caller_address:
         print(f"  caller        {to_checksum_address(caller_address)}")

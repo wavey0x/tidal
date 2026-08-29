@@ -1042,6 +1042,11 @@ async def async_main(args: argparse.Namespace) -> tuple[dict[str, Any], dict[tup
     settings = load_settings(args.config, mode="server")
     legacy_factory = normalize_address(args.legacy_factory)
     new_factory = normalize_address(args.new_factory)
+    if new_factory != normalize_address(NEW_AUCTION_FACTORY_ADDRESS):
+        raise SystemExit(
+            "This migration cache contains v1.0.4 whole-token starting prices and may only "
+            f"target {NEW_AUCTION_FACTORY_ADDRESS}."
+        )
     required_governance = normalize_address(args.required_governance)
     require_rpc_url(settings)
 

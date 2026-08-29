@@ -157,7 +157,12 @@ def _handle_prepared_action(
 def deploy(
     want: str = typer.Option(..., "--want", help="Want token address."),
     receiver: str = typer.Option(..., "--receiver", help="Auction receiver address."),
-    starting_price: int = typer.Option(..., "--starting-price", min=0, help="Starting price for the new auction."),
+    starting_price: int = typer.Option(
+        ...,
+        "--starting-price",
+        min=1,
+        help="Contract-raw startingPrice; units are determined by the selected factory version.",
+    ),
     config: ConfigOption = None,
     api_base_url: ApiBaseUrlOption = None,
     api_key: ApiKeyOption = None,

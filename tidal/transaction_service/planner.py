@@ -86,7 +86,7 @@ def _prepared_estimate_failure(prepared: PreparedKick, reason: str) -> SkippedPr
             status=KickStatus.ESTIMATE_FAILED,
             error_message=reason,
             sell_amount=prepared.sell_amount_str,
-            starting_price=prepared.starting_price_str,
+            starting_price=prepared.starting_price_raw_str,
             minimum_price=prepared.minimum_price_str,
             minimum_quote=prepared.minimum_quote_str,
             live_balance_raw=prepared.live_balance_raw,
@@ -229,6 +229,39 @@ class KickPlanner:
                 plan.ready_count = len(plan.resolve_operations) + len(plan.kick_operations)
                 return plan
 
+        kick_inspections = await self.preparer.inspect_candidates(candidates_to_prepare)
+        version_safe_candidates: list[KickCandidate] = []
+        for candidate in candidates_to_prepare:
+            inspection = kick_inspections.get(_candidate_key(candidate))
+            if inspection is None:
+                reason = "auction compatibility inspection missing"
+            elif inspection.compatibility_error is not None:
+                reason = f"auction compatibility check failed: {inspection.compatibility_error}"
+            elif candidate.auction_version != inspection.auction_version:
+                reason = (
+                    f"stored auction version {candidate.auction_version!r} does not match "
+                    f"onchain version {inspection.auction_version!r}"
+                )
+            else:
+                version_safe_candidates.append(candidate)
+                continue
+            plan.skipped_during_prepare.append(
+                SkippedPreparedCandidate(
+                    candidate=candidate,
+                    reason=reason,
+                    result=KickResult(
+                        kick_tx_id=0,
+                        status=KickStatus.ERROR,
+                        error_message=reason,
+                    ),
+                )
+            )
+
+        candidates_to_prepare = version_safe_candidates
+        if not candidates_to_prepare:
+            plan.ready_count = len(plan.resolve_operations) + len(plan.kick_operations)
+            return plan
+
         auction_candidates: dict[str, list[KickCandidate]] = {}
         for candidate in candidates_to_prepare:
             auction_candidates.setdefault(_candidate_key(candidate)[0], []).append(candidate)
@@ -348,7 +381,6 @@ class KickPlanner:
 
             clean_candidates.extend(auction_group)
 
-        inspections = await self.preparer.inspect_candidates(clean_candidates)
         prepared_kicks: list[PreparedKick] = []
 
         for candidate in clean_candidates:
@@ -369,7 +401,7 @@ class KickPlanner:
             result = await self.preparer.prepare_kick(
                 candidate,
                 run_id=run_id,
-                inspection=inspections.get(_candidate_key(candidate)),
+                inspection=kick_inspections.get(_candidate_key(candidate)),
             )
             if isinstance(result, KickResult):
                 reason = result.error_message or "candidate was skipped during prepare"

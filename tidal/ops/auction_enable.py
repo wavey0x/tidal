@@ -11,14 +11,16 @@ from hexbytes import HexBytes
 from sqlalchemy import select
 from web3 import Web3
 
+from tidal.auction_versions import APPROVED_AUCTION_SPECS, approved_auction_spec_for_version
 from tidal.chain.contracts.abis import (
-    AUCTION_ABI,
     AUCTION_FACTORY_ABI,
     AUCTION_KICKER_ABI,
+    AUCTION_VERSION_ABI,
     ERC20_ABI,
     FEE_BURNER_ABI,
     MULTICALL3_ABI,
     STRATEGY_ABI,
+    SUPPORTED_AUCTION_ABI,
 )
 from tidal.config import MonitoredFeeBurner
 from tidal.constants import CORE_REWARD_TOKENS, YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS, ZERO_ADDRESS
@@ -150,9 +152,21 @@ class AuctionTokenEnabler:
 
     def inspect_auction(self, auction_address: str) -> AuctionInspection:
         auction_address = normalize_address(auction_address)
+        version_contract = self.w3.eth.contract(
+            address=to_checksum_address(auction_address),
+            abi=AUCTION_VERSION_ABI,
+        )
+        try:
+            version = str(version_contract.functions.version().call()).strip() or None
+            approved_auction_spec_for_version(version)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"unsupported or unreadable auction version for {auction_address}: {exc}"
+            ) from exc
+
         auction = self.w3.eth.contract(
             address=to_checksum_address(auction_address),
-            abi=AUCTION_ABI,
+            abi=SUPPORTED_AUCTION_ABI,
         )
 
         try:
@@ -167,13 +181,6 @@ class AuctionTokenEnabler:
         if receiver == ZERO_ADDRESS:
             raise RuntimeError("auction receiver is zero address")
 
-        version: str | None
-        try:
-            raw_version = auction.functions.version().call()
-            version = str(raw_version).strip() or None
-        except Exception:  # noqa: BLE001
-            version = None
-
         enabled_tokens: tuple[str, ...]
         try:
             enabled_tokens = tuple(
@@ -184,18 +191,21 @@ class AuctionTokenEnabler:
             enabled_tokens = ()
 
         in_configured_factory = False
-        try:
-            factory = self.w3.eth.contract(
-                address=to_checksum_address(normalize_address(self.settings.auction_factory_address)),
-                abi=AUCTION_FACTORY_ABI,
-            )
-            all_auctions = {
-                normalize_address(address)
-                for address in factory.functions.getAllAuctions().call()
-            }
-            in_configured_factory = auction_address in all_auctions
-        except Exception:  # noqa: BLE001
-            in_configured_factory = False
+        for spec in APPROVED_AUCTION_SPECS:
+            try:
+                factory = self.w3.eth.contract(
+                    address=to_checksum_address(spec.factory_address),
+                    abi=AUCTION_FACTORY_ABI,
+                )
+                all_auctions = {
+                    normalize_address(address)
+                    for address in factory.functions.getAllAuctions().call()
+                }
+            except Exception:  # noqa: BLE001
+                continue
+            if auction_address in all_auctions:
+                in_configured_factory = True
+                break
 
         return AuctionInspection(
             auction_address=auction_address,
@@ -571,7 +581,7 @@ class AuctionTokenEnabler:
     def _auction_contract(self, auction_address: str):
         return self.w3.eth.contract(
             address=to_checksum_address(normalize_address(auction_address)),
-            abi=AUCTION_ABI,
+            abi=SUPPORTED_AUCTION_ABI,
         )
 
     def _auction_kicker_contract(self, kicker_address: str):

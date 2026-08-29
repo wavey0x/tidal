@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tidal.api.errors import APIError
 from tidal.api.services.action_prepare import (
     _estimate_transaction,
     inspect_kicks,
@@ -13,10 +14,18 @@ from tidal.api.services.action_prepare import (
     prepare_settle_action,
 )
 from tidal.config import MonitoredFeeBurner
+from tidal.auction_versions import AUCTION_V105_FACTORY_ADDRESS, StartingPriceEncoding
 from tidal.ops.auction_enable import AuctionInspection, SourceResolution, TokenDiscovery, TokenProbe
 from tidal.auction_settlement import AuctionLotPreview, AuctionSettlementDecision, AuctionSettlementInspection, AuctionSettlementOperation
 from tidal.transaction_service.planner import KickPlanner
-from tidal.transaction_service.types import KickCandidate, KickPlan, PreparedKick, PreparedResolveAuction, TxIntent
+from tidal.transaction_service.types import (
+    AuctionInspection as KickAuctionInspection,
+    KickCandidate,
+    KickPlan,
+    PreparedKick,
+    PreparedResolveAuction,
+    TxIntent,
+)
 
 
 class _FailingWeb3Client:
@@ -81,7 +90,18 @@ class _FakeKickDeps:
         batch_data: str = "0xdeadbeef",
     ) -> None:
         inspection_key = (candidate.auction_address, candidate.token_address)
-        self.inspect_candidates = AsyncMock(return_value={inspection_key: None})
+        self.inspect_candidates = AsyncMock(
+            return_value={
+                inspection_key: KickAuctionInspection(
+                    auction_address=candidate.auction_address,
+                    is_active_auction=False,
+                    active_tokens=(),
+                    auction_version=candidate.auction_version,
+                    auction_length_seconds=86_400,
+                    step_duration_seconds=60,
+                )
+            }
+        )
         self.prepare_kick = AsyncMock(return_value=prepared)
         self.single_data = single_data
         self.batch_data = batch_data
@@ -171,18 +191,20 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
         want_address="0x4444444444444444444444444444444444444444",
         usd_value=2500.0,
         decimals=18,
+        auction_version="1.0.4",
         source_name="Test Strategy",
         token_symbol="CRV",
         want_symbol="USDC",
     )
     prepared = PreparedKick(
         candidate=candidate,
+        starting_price_encoding=StartingPriceEncoding.WHOLE_WANT,
         sell_amount=10**21,
-        starting_price_unscaled=2750,
+        starting_price_raw=2750,
         minimum_price_scaled_1e18=2_375_000_000_000_000_000,
         minimum_quote_unscaled=2375,
         sell_amount_str="1000",
-        starting_price_unscaled_str="2750",
+        starting_price_raw_str="2750",
         minimum_price_scaled_1e18_str="2375000000000000000",
         minimum_quote_unscaled_str="2375",
         usd_value_str="2500",
@@ -326,18 +348,20 @@ async def test_prepare_kick_action_skips_unsendable_batch_kick_when_gas_estimate
         want_address="0x4444444444444444444444444444444444444444",
         usd_value=1000.0,
         decimals=18,
+        auction_version="1.0.4",
         source_name="Fee Burner",
         token_symbol="CRV",
         want_symbol="crvUSD",
     )
     prepared = PreparedKick(
         candidate=candidate,
+        starting_price_encoding=StartingPriceEncoding.WHOLE_WANT,
         sell_amount=10**21,
-        starting_price_unscaled=1100,
+        starting_price_raw=1100,
         minimum_price_scaled_1e18=950_000_000_000_000_000,
         minimum_quote_unscaled=950,
         sell_amount_str="1000",
-        starting_price_unscaled_str="1100",
+        starting_price_raw_str="1100",
         minimum_price_scaled_1e18_str="950000000000000000",
         minimum_quote_unscaled_str="950",
         usd_value_str="1000",
@@ -911,6 +935,7 @@ async def test_prepare_kick_action_threads_resolve_operations_from_planner(monke
         want_address="0x4444444444444444444444444444444444444444",
         usd_value=1000.0,
         decimals=18,
+        auction_version="1.0.4",
         source_name="Fee Burner",
         token_symbol="CRV",
         want_symbol="crvUSD",
@@ -1064,7 +1089,7 @@ async def test_prepare_settle_action_returns_noop_when_manual_sweep_is_required(
 async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypatch) -> None:
     strategy_address = "0x1111111111111111111111111111111111111111"
     want_address = "0x2222222222222222222222222222222222222222"
-    factory_address = "0x3333333333333333333333333333333333333333"
+    factory_address = AUCTION_V105_FACTORY_ADDRESS
     governance_address = "0x4444444444444444444444444444444444444444"
     predicted_address = "0x5555555555555555555555555555555555555555"
 
@@ -1120,6 +1145,7 @@ async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypat
 
     monkeypatch.setattr("tidal.api.services.action_prepare.TokenPriceAggProvider", _FakeQuoteProvider)
     monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
+    monkeypatch.setattr("tidal.api.services.action_prepare.read_token_decimals", lambda w3, token: 6)
     monkeypatch.setattr("tidal.api.services.action_prepare.default_factory_address", lambda settings: factory_address)
     monkeypatch.setattr("tidal.api.services.action_prepare.default_governance_address", lambda: governance_address)
     monkeypatch.setattr("tidal.api.services.action_prepare.read_factory_auction_addresses", lambda w3, factory: [])
@@ -1148,6 +1174,10 @@ async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypat
     assert data["strategyAddress"] == strategy_address
     assert data["receiverAddress"] == strategy_address
     assert data["factoryAddress"] == factory_address
+    assert data["factoryVersion"] == "1.0.5"
+    assert data["startingPriceEncoding"] == "wad_want"
+    assert data["startingPrice"] == 550_000_000_000_000_000_000
+    assert data["startingPriceDisplay"] == "550"
     assert data["predictedAuctionAddress"] == predicted_address
 
 
@@ -1156,7 +1186,7 @@ async def test_prepare_deploy_browser_action_is_stateless(monkeypatch) -> None:
     want_address = "0x1111111111111111111111111111111111111111"
     receiver_address = "0x2222222222222222222222222222222222222222"
     sender_address = "0x3333333333333333333333333333333333333333"
-    factory_address = "0x4444444444444444444444444444444444444444"
+    factory_address = AUCTION_V105_FACTORY_ADDRESS
     governance_address = "0x5555555555555555555555555555555555555555"
     predicted_address = "0x6666666666666666666666666666666666666666"
 
@@ -1203,7 +1233,7 @@ async def test_prepare_deploy_browser_action_is_stateless(monkeypatch) -> None:
         sender=sender_address,
         factory=factory_address,
         governance=governance_address,
-        starting_price=610,
+        starting_price=10**18,
         salt="0x" + "11" * 32,
     )
 
@@ -1213,3 +1243,27 @@ async def test_prepare_deploy_browser_action_is_stateless(monkeypatch) -> None:
     assert data["actionType"] == "deploy"
     assert data["preview"]["predictedAuctionAddress"] == predicted_address
     assert data["transactions"][0]["to"] == factory_address
+
+
+@pytest.mark.asyncio
+async def test_prepare_deploy_browser_action_rejects_failed_preview(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "tidal.api.services.action_prepare.build_sync_web3",
+        lambda settings: object(),
+    )
+    monkeypatch.setattr(
+        "tidal.api.services.action_prepare.preview_deployment",
+        lambda *args, **kwargs: SimpleNamespace(preview_error="execution reverted"),
+    )
+
+    with pytest.raises(APIError, match="Deployment preview failed: execution reverted"):
+        await prepare_deploy_browser_action(
+            SimpleNamespace(chain_id=1, txn_max_gas_limit=500000),
+            want="0x1111111111111111111111111111111111111111",
+            receiver="0x2222222222222222222222222222222222222222",
+            sender="0x3333333333333333333333333333333333333333",
+            factory=AUCTION_V105_FACTORY_ADDRESS,
+            governance="0x5555555555555555555555555555555555555555",
+            starting_price=10**18,
+            salt="0x" + "11" * 32,
+        )

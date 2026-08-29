@@ -17,7 +17,7 @@ txn_data_freshness_limit_seconds: 1200
 txn_require_curve_quote: true
 max_batch_kick_size: 5
 batch_kick_delay_seconds: 5
-auction_factory_address: "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
+auction_factory_address: "0x55B3830B4D85e6868c73f00A2e857e9AdbF89568"
 scan_stale_after_minutes: 90
 
 monitored_fee_burners:

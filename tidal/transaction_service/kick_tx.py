@@ -81,7 +81,7 @@ class KickTxBuilder:
             to_checksum_address(prepared_kick.candidate.token_address),
             prepared_kick.sell_amount,
             to_checksum_address(prepared_kick.candidate.want_address),
-            prepared_kick.starting_price_unscaled,
+            prepared_kick.starting_price_raw,
             prepared_kick.minimum_price_scaled_1e18,
             prepared_kick.step_decay_rate_bps,
         )

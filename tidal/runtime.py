@@ -201,7 +201,6 @@ def build_scanner_service(
         strategy_auction_mapper=StrategyAuctionMapper(
             web3_client=web3_client,
             chain_id=settings.chain_id,
-            auction_factory_address=settings.auction_factory_address,
             required_governance_address=YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS,
             multicall_client=multicall_client,
             multicall_enabled=settings.multicall_enabled,

@@ -252,7 +252,7 @@ class KickExecutor:
     def _pk_audit_kwargs(prepared_kick: PreparedKick) -> dict[str, object]:
         return {
             "requested_sell_amount": prepared_kick.sell_amount_str,
-            "starting_price": prepared_kick.starting_price_str,
+            "starting_price": prepared_kick.starting_price_raw_str,
             "minimum_price": prepared_kick.minimum_price_str,
             "minimum_quote": prepared_kick.minimum_quote_str,
             "usd_value": prepared_kick.usd_value_str,
@@ -395,9 +395,9 @@ class KickExecutor:
                         "auction": prepared_kick.candidate.auction_address,
                         "sell_amount": prepared_kick.normalized_balance,
                         "usd_value": prepared_kick.usd_value_str,
-                        "starting_price": prepared_kick.starting_price_str,
+                        "starting_price": prepared_kick.starting_price_raw_str,
                         "starting_price_display": (
-                            f"{prepared_kick.starting_price_unscaled:,} {want_symbol} "
+                            f"{prepared_kick.starting_price_amount_str} {want_symbol} "
                             f"(+{format_buffer_pct(prepared_kick.start_price_buffer_bps)} buffer)"
                         ),
                         "minimum_price": prepared_kick.minimum_price_str,
@@ -452,7 +452,7 @@ class KickExecutor:
                             kick_tx_id=kick_tx_id,
                             status=KickStatus.USER_SKIPPED,
                             sell_amount=prepared_kick.sell_amount_str,
-                            starting_price=prepared_kick.starting_price_str,
+                            starting_price=prepared_kick.starting_price_raw_str,
                             minimum_price=prepared_kick.minimum_price_str,
                             minimum_quote=prepared_kick.minimum_quote_str,
                             live_balance_raw=prepared_kick.live_balance_raw,
@@ -511,7 +511,7 @@ class KickExecutor:
                     status=KickStatus.SUBMITTED,
                     tx_hash=tx_hash,
                     sell_amount=prepared_kick.sell_amount_str,
-                    starting_price=prepared_kick.starting_price_str,
+                    starting_price=prepared_kick.starting_price_raw_str,
                     minimum_price=prepared_kick.minimum_price_str,
                     minimum_quote=prepared_kick.minimum_quote_str,
                     live_balance_raw=prepared_kick.live_balance_raw,
@@ -578,7 +578,7 @@ class KickExecutor:
                         if persisted.get("sell_amount") is not None
                         else None
                     ),
-                    starting_price=prepared_kick.starting_price_str,
+                    starting_price=prepared_kick.starting_price_raw_str,
                     minimum_price=prepared_kick.minimum_price_str,
                     minimum_quote=prepared_kick.minimum_quote_str,
                     live_balance_raw=prepared_kick.live_balance_raw,

@@ -23,6 +23,9 @@ class _FakeFunctions:
     def getAllEnabledAuctions(self):
         return _FakeFunction("getAllEnabledAuctions")
 
+    def version(self):
+        return _FakeFunction("version")
+
 
 class _FakeContract:
     def __init__(self) -> None:
@@ -105,4 +108,21 @@ async def test_read_address_array_noargs_many_normalizes_direct_calls() -> None:
 
     assert result == {
         "0x1111111111111111111111111111111111111111": ["0xd533a949740bb3306d119cc777fa900ba034cd52"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_string_noargs_many_uses_minimal_version_read() -> None:
+    address = "0x1111111111111111111111111111111111111111"
+    reader = AuctionStateReader(
+        web3_client=_FakeWeb3Client(),
+        multicall_client=_FakeMulticallClient(
+            {(address, "version"): encode(["string"], ["1.0.5"])}
+        ),
+        multicall_enabled=True,
+        multicall_auction_batch_calls=10,
+    )
+
+    assert await reader.read_string_noargs_many([address], "version") == {
+        address: "1.0.5"
     }

@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         alias="MULTICALL_AUCTION_BATCH_CALLS",
     )
     auction_factory_address: str = Field(
-        default="0xe87af17acba165686e5aa7de2cec523864c25712",
+        default="0x55b3830b4d85e6868c73f00a2e857e9adbf89568",
         alias="AUCTION_FACTORY_ADDRESS",
     )
     price_refresh_enabled: bool = Field(default=True, alias="PRICE_REFRESH_ENABLED")

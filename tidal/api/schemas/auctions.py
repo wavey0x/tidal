@@ -11,7 +11,11 @@ class AuctionDeployPrepareRequest(BaseModel):
     sender: str | None = None
     factory: str | None = None
     governance: str | None = None
-    starting_price: int = Field(alias="startingPrice", ge=0)
+    starting_price: int = Field(
+        alias="startingPrice",
+        gt=0,
+        description="Contract-raw startingPrice value; units depend on the approved factory version.",
+    )
     salt: str | None = None
 
     model_config = {"populate_by_name": True}

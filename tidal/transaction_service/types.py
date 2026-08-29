@@ -7,7 +7,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
 
-from tidal.auction_price_units import format_buffer_pct
+from tidal.auction_price_units import decode_starting_price_amount, format_buffer_pct
+from tidal.auction_versions import StartingPriceEncoding
 
 _WAD = Decimal(10) ** 18
 
@@ -49,6 +50,7 @@ class KickCandidate:
     want_address: str
     usd_value: float
     decimals: int
+    auction_version: str | None = None
     source_name: str | None = None
     context_type: str | None = None
     context_address: str | None = None
@@ -71,12 +73,13 @@ class PreparedKick:
     """Output of the prepare phase — everything needed to include this kick in a batch."""
 
     candidate: KickCandidate
+    starting_price_encoding: StartingPriceEncoding
     sell_amount: int
-    starting_price_unscaled: int
+    starting_price_raw: int
     minimum_price_scaled_1e18: int
     minimum_quote_unscaled: int
     sell_amount_str: str
-    starting_price_unscaled_str: str
+    starting_price_raw_str: str
     minimum_price_scaled_1e18_str: str
     minimum_quote_unscaled_str: str
     usd_value_str: str
@@ -91,8 +94,14 @@ class PreparedKick:
     want_price_usd_str: str | None = None
 
     @property
-    def starting_price_str(self) -> str:
-        return self.starting_price_unscaled_str
+    def starting_price_amount(self) -> Decimal:
+        return decode_starting_price_amount(self.starting_price_raw, self.starting_price_encoding)
+
+    @property
+    def starting_price_amount_str(self) -> str:
+        if self.starting_price_encoding == StartingPriceEncoding.WHOLE_WANT:
+            return f"{self.starting_price_raw:,}"
+        return format(self.starting_price_amount, "f")
 
     @property
     def minimum_price_str(self) -> str:
@@ -108,7 +117,7 @@ class PreparedKick:
 
     @property
     def start_rate(self) -> str:
-        return str(Decimal(self.starting_price_unscaled) / Decimal(self.normalized_balance))
+        return str(self.starting_price_amount / Decimal(self.normalized_balance))
 
     @property
     def floor_rate(self) -> str | None:
@@ -150,6 +159,8 @@ class AuctionInspection:
     auction_address: str
     is_active_auction: bool | None
     active_tokens: tuple[str, ...]
+    auction_version: str | None = None
+    compatibility_error: str | None = None
     active_token: str | None = None
     active_available_raw: int | None = None
     active_price_public_raw: int | None = None
@@ -166,6 +177,7 @@ class AuctionInspection:
     inactive_token_kickable_raw: int | None = None
     inactive_token_kicked_at: int | None = None
     auction_length_seconds: int | None = None
+    step_duration_seconds: int | None = None
     selected_token: str | None = None
     selected_token_active: bool | None = None
     selected_token_balance_raw: int | None = None
@@ -321,9 +333,11 @@ def _prepared_kick_preview_item(item: PreparedKick) -> dict[str, object]:
         "wantSymbol": item.candidate.want_symbol,
         "wantPriceUsd": item.want_price_usd_str,
         "sellAmount": item.normalized_balance,
-        "startingPrice": item.starting_price_unscaled_str,
+        "auctionVersion": item.candidate.auction_version,
+        "startingPriceEncoding": item.starting_price_encoding.value,
+        "startingPrice": item.starting_price_raw_str,
         "startingPriceDisplay": (
-            f"{item.starting_price_unscaled:,} {item.candidate.want_symbol or 'want-token'} "
+            f"{item.starting_price_amount_str} {item.candidate.want_symbol or 'want-token'} "
             f"(+{format_buffer_pct(item.start_price_buffer_bps)} buffer)"
         ),
         "minimumPrice": item.minimum_price_str,

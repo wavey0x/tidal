@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from decimal import Decimal
@@ -12,8 +13,11 @@ import structlog
 from tidal.auction_price_units import (
     compute_minimum_price_scaled_1e18,
     compute_minimum_quote_unscaled,
-    compute_starting_price_unscaled,
+    decode_starting_price_amount,
+    encode_starting_price_raw,
+    latent_terminal_full_lot_ask_raw,
 )
+from tidal.auction_versions import approved_auction_spec_for_version
 from tidal.chain.contracts.erc20 import ERC20Reader
 from tidal.normalizers import to_decimal_string
 from tidal.scanner.auction_state import AuctionStateReader
@@ -147,13 +151,71 @@ class KickPreparer:
         candidate_keys = [_candidate_key(candidate) for candidate in candidates]
         auction_addresses = sorted({auction_address for auction_address, _ in candidate_keys})
 
-        active_flags = await reader.read_bool_noargs_many(auction_addresses, "isAnActiveAuction")
-        for auction_address, token_address in candidate_keys:
+        fresh_versions = await reader.read_string_noargs_many(auction_addresses, "version")
+        compatibility_by_address: dict[str, list[bool]] = {}
+        for candidate in candidates:
+            auction_address, token_address = _candidate_key(candidate)
+            fresh_version = fresh_versions.get(auction_address)
+            compatibility_error: str | None = None
+            try:
+                approved_auction_spec_for_version(candidate.auction_version)
+            except ValueError as exc:
+                compatibility_error = str(exc)
+            if fresh_version is None:
+                compatibility_error = "auction version() read failed"
+            else:
+                try:
+                    approved_auction_spec_for_version(fresh_version)
+                except ValueError as exc:
+                    compatibility_error = str(exc)
+            if compatibility_error is None and fresh_version != candidate.auction_version:
+                compatibility_error = (
+                    f"stored auction version {candidate.auction_version!r} does not match "
+                    f"onchain version {fresh_version!r}"
+                )
+            compatibility_by_address.setdefault(auction_address, []).append(
+                compatibility_error is None
+            )
+
             inspections[(auction_address, token_address)] = AuctionInspection(
                 auction_address=auction_address,
-                is_active_auction=active_flags.get(auction_address),
+                is_active_auction=None,
                 active_tokens=(),
+                auction_version=fresh_version,
+                compatibility_error=compatibility_error,
             )
+
+        # A stale row for a shared auction must fail the whole address closed.
+        # This keeps every shared-ABI read behind an unambiguous stored/fresh
+        # version agreement for every candidate that would consume it.
+        approved_addresses = sorted(
+            auction_address
+            for auction_address, checks in compatibility_by_address.items()
+            if all(checks)
+        )
+        blocked_addresses = {
+            auction_address
+            for auction_address, checks in compatibility_by_address.items()
+            if not all(checks)
+        }
+        for key, inspection in inspections.items():
+            if key[0] in blocked_addresses and inspection.compatibility_error is None:
+                inspection.compatibility_error = (
+                    "conflicting stored auction versions for the same auction address"
+                )
+        if approved_addresses:
+            active_flags, auction_lengths, step_durations = await asyncio.gather(
+                reader.read_bool_noargs_many(approved_addresses, "isAnActiveAuction"),
+                reader.read_uint_noargs_many(approved_addresses, "auctionLength"),
+                reader.read_uint_noargs_many(approved_addresses, "stepDuration"),
+            )
+            for key, inspection in inspections.items():
+                auction_address = key[0]
+                if inspection.compatibility_error is not None:
+                    continue
+                inspection.is_active_auction = active_flags.get(auction_address)
+                inspection.auction_length_seconds = auction_lengths.get(auction_address)
+                inspection.step_duration_seconds = step_durations.get(auction_address)
 
         return inspections
 
@@ -183,6 +245,21 @@ class KickPreparer:
             inspection = (await self.inspect_candidates([candidate])).get(_candidate_key(candidate))
         if inspection is None:
             return KickResult(kick_tx_id=0, status=KickStatus.ERROR, error_message="auction inspection missing")
+        if inspection.compatibility_error is not None:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=f"auction compatibility check failed: {inspection.compatibility_error}",
+            )
+        if candidate.auction_version != inspection.auction_version:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=(
+                    f"stored auction version {candidate.auction_version!r} does not match "
+                    f"onchain version {inspection.auction_version!r}"
+                ),
+            )
         if inspection.is_active_auction is None:
             return KickResult(
                 kick_tx_id=0,
@@ -197,13 +274,51 @@ class KickPreparer:
                 error_message="auction still active",
             )
 
+        if inspection.auction_length_seconds is None or inspection.auction_length_seconds <= 0:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message="auction auctionLength() read failed or returned zero",
+            )
+        if inspection.step_duration_seconds is None or inspection.step_duration_seconds <= 0:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message="auction stepDuration() read failed or returned zero",
+            )
+
         try:
-            live_balance_raw = await self._resolve_erc20_reader().read_balance(
-                candidate.token_address,
-                candidate.source_address,
+            auction_spec = approved_auction_spec_for_version(inspection.auction_version)
+        except ValueError as exc:
+            return KickResult(kick_tx_id=0, status=KickStatus.ERROR, error_message=str(exc))
+
+        erc20_reader = self._resolve_erc20_reader()
+        try:
+            live_balance_raw, sell_decimals, want_decimals = await asyncio.gather(
+                erc20_reader.read_balance(candidate.token_address, candidate.source_address),
+                erc20_reader.read_decimals(candidate.token_address),
+                erc20_reader.read_decimals(candidate.want_address),
             )
         except Exception as exc:
-            return KickResult(kick_tx_id=0, status=KickStatus.ERROR, error_message=f"balance read failed: {exc}")
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=f"live token read failed: {exc}",
+            )
+        if sell_decimals != candidate.decimals:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=(
+                    f"sell token decimals mismatch: cached {candidate.decimals}, onchain {sell_decimals}"
+                ),
+            )
+        if not 0 <= sell_decimals <= 18 or not 0 <= want_decimals <= 18:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message="auction tokens must have between 0 and 18 decimals",
+            )
 
         try:
             selected_sell = self._select_sell_size(candidate, live_balance_raw)
@@ -326,22 +441,53 @@ class KickPreparer:
                 quote_response_json=quote_response_json,
             )
 
-        amount_out_normalized = Decimal(to_decimal_string(quote_result.amount_out_raw, quote_result.token_out_decimals))
-        starting_price_unscaled = compute_starting_price_unscaled(
-            amount_out_raw=quote_result.amount_out_raw,
-            want_decimals=quote_result.token_out_decimals,
-            buffer_bps=profile.start_price_buffer_bps,
-        )
+        if quote_result.token_out_decimals is None:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message="quote response is missing want token decimals",
+                quote_response_json=quote_response_json,
+            )
+        if quote_result.token_out_decimals != want_decimals:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=(
+                    f"want token decimals mismatch: quote {quote_result.token_out_decimals}, "
+                    f"onchain {want_decimals}"
+                ),
+                quote_response_json=quote_response_json,
+            )
+
+        amount_out_normalized = Decimal(to_decimal_string(quote_result.amount_out_raw, want_decimals))
+        try:
+            starting_price_raw = encode_starting_price_raw(
+                amount_out_raw=quote_result.amount_out_raw,
+                want_decimals=want_decimals,
+                buffer_bps=profile.start_price_buffer_bps,
+                encoding=auction_spec.starting_price_encoding,
+            )
+        except ValueError as exc:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=f"starting price encoding failed: {exc}",
+                quote_response_json=quote_response_json,
+            )
 
         buffer = Decimal(1) + Decimal(profile.start_price_buffer_bps) / Decimal(10_000)
         exact_value = amount_out_normalized * buffer
-        if exact_value > 0 and starting_price_unscaled > exact_value * 2:
+        decoded_start = decode_starting_price_amount(
+            starting_price_raw,
+            auction_spec.starting_price_encoding,
+        )
+        if exact_value > 0 and decoded_start > exact_value * 2:
             self.logger.warning(
                 "txn_starting_price_precision_loss",
                 source=candidate.source_address,
                 token=candidate.token_address,
                 exact_want_value=str(exact_value),
-                ceiled_value=starting_price_unscaled,
+                ceiled_value=str(decoded_start),
             )
 
         floor_quote_amount_raw = _select_floor_quote_amount_raw(
@@ -350,22 +496,67 @@ class KickPreparer:
         )
         minimum_price_scaled_1e18 = compute_minimum_price_scaled_1e18(
             amount_out_raw=floor_quote_amount_raw,
-            want_decimals=quote_result.token_out_decimals,
+            want_decimals=want_decimals,
             sell_amount_raw=sell_amount,
-            sell_decimals=candidate.decimals,
+            sell_decimals=sell_decimals,
             buffer_bps=profile.min_price_buffer_bps,
         )
         minimum_quote_unscaled = compute_minimum_quote_unscaled(
             minimum_price_scaled_1e18=minimum_price_scaled_1e18,
             sell_amount_raw=sell_amount,
-            sell_decimals=candidate.decimals,
+            sell_decimals=sell_decimals,
         )
+
+        sell_scaler = 10 ** (18 - sell_decimals)
+        want_scaler = 10 ** (18 - want_decimals)
+        minimum_full_lot_quote_raw = (
+            sell_amount * sell_scaler * minimum_price_scaled_1e18
+        ) // 10**18 // want_scaler
+        if minimum_full_lot_quote_raw >= floor_quote_amount_raw:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.SKIP,
+                error_message="minimum full-lot quote is not below the trusted floor quote",
+                quote_response_json=quote_response_json,
+            )
+
+        try:
+            terminal_ask_raw = latent_terminal_full_lot_ask_raw(
+                encoding=auction_spec.starting_price_encoding,
+                starting_price_raw=starting_price_raw,
+                sell_amount_raw=sell_amount,
+                sell_decimals=sell_decimals,
+                want_decimals=want_decimals,
+                step_decay_rate_bps=profile.step_decay_rate_bps,
+                step_duration_seconds=inspection.step_duration_seconds,
+                auction_length_seconds=inspection.auction_length_seconds,
+            )
+        except ValueError as exc:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=f"terminal ask calculation failed: {exc}",
+                quote_response_json=quote_response_json,
+            )
+        if terminal_ask_raw > floor_quote_amount_raw:
+            floor_quote_display = to_decimal_string(floor_quote_amount_raw, want_decimals)
+            terminal_display = to_decimal_string(terminal_ask_raw, want_decimals)
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.SKIP,
+                error_message=(
+                    f"quote {floor_quote_display} {candidate.want_symbol or 'want-token'} is below "
+                    f"latent terminal full-lot ask {terminal_display} "
+                    f"{candidate.want_symbol or 'want-token'}"
+                ),
+                quote_response_json=quote_response_json,
+            )
 
         want_price_usd_str: str | None = None
         try:
             want_price_quote = await self.price_provider.quote_usd(
                 candidate.want_address,
-                quote_result.token_out_decimals or 18,
+                want_decimals,
             )
         except Exception as exc:
             self.logger.info(
@@ -381,12 +572,13 @@ class KickPreparer:
 
         return PreparedKick(
             candidate=candidate,
+            starting_price_encoding=auction_spec.starting_price_encoding,
             sell_amount=sell_amount,
-            starting_price_unscaled=starting_price_unscaled,
+            starting_price_raw=starting_price_raw,
             minimum_price_scaled_1e18=minimum_price_scaled_1e18,
             minimum_quote_unscaled=minimum_quote_unscaled,
             sell_amount_str=str(sell_amount),
-            starting_price_unscaled_str=str(starting_price_unscaled),
+            starting_price_raw_str=str(starting_price_raw),
             minimum_price_scaled_1e18_str=str(minimum_price_scaled_1e18),
             minimum_quote_unscaled_str=str(minimum_quote_unscaled),
             usd_value_str=str(selected_sell.selected_sell_usd_value),

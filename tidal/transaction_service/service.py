@@ -143,7 +143,7 @@ class TxnService:
             "want_symbol": candidate.want_symbol,
             "token_symbol": candidate.token_symbol,
             "requested_sell_amount": prepared_kick.sell_amount_str,
-            "starting_price": prepared_kick.starting_price_str,
+            "starting_price": prepared_kick.starting_price_raw_str,
             "minimum_price": prepared_kick.minimum_price_str,
             "minimum_quote": prepared_kick.minimum_quote_str,
             "quote_amount": prepared_kick.quote_amount_str,

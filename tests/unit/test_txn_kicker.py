@@ -38,6 +38,7 @@ def _candidate() -> KickCandidate:
         want_address="0x4444444444444444444444444444444444444444",
         usd_value=2500.0,
         decimals=18,
+        auction_version="1.0.4",
         source_name="Test Strategy",
         token_symbol="CRV",
         want_symbol="USDC",
@@ -62,7 +63,10 @@ async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult
         ),
         usd_threshold=100.0,
         require_curve_quote=True,
-        erc20_reader=SimpleNamespace(read_balance=AsyncMock(return_value=1000 * 10**18)),
+        erc20_reader=SimpleNamespace(
+            read_balance=AsyncMock(return_value=1000 * 10**18),
+            read_decimals=AsyncMock(return_value=18),
+        ),
         pricing_policy=_pricing_policy(profile),
         start_price_buffer_bps=1000,
         min_price_buffer_bps=500,
@@ -74,6 +78,9 @@ async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult
             auction_address=candidate.auction_address,
             is_active_auction=False,
             active_tokens=(),
+            auction_version="1.0.4",
+            auction_length_seconds=86_400,
+            step_duration_seconds=60,
         ),
     )
     assert isinstance(result, PreparedKick)
@@ -118,7 +125,7 @@ async def test_kick_preparer_uses_non_high_provider_median_for_stable_outlier_fl
 
     prepared = await _prepare_with_quote(profile, quote)
 
-    assert prepared.starting_price_unscaled == 1212
+    assert prepared.starting_price_raw == 1212
     assert prepared.minimum_quote_unscaled == 975
     assert prepared.minimum_price_scaled_1e18 == 975_000_000_000_000_000
     assert prepared.quote_amount_str == "1200"
@@ -207,7 +214,11 @@ async def test_kick_preparer_skips_active_auction() -> None:
         require_curve_quote=True,
         erc20_reader=MagicMock(),
         auction_state_reader=SimpleNamespace(
+            read_string_noargs_many=AsyncMock(
+                return_value={candidate.auction_address: "1.0.4"}
+            ),
             read_bool_noargs_many=AsyncMock(return_value={candidate.auction_address: True}),
+            read_uint_noargs_many=AsyncMock(return_value={candidate.auction_address: 60}),
         ),
         start_price_buffer_bps=1000,
         min_price_buffer_bps=50,
@@ -217,6 +228,171 @@ async def test_kick_preparer_skips_active_auction() -> None:
 
     assert result.status == KickStatus.SKIP
     assert result.error_message == "auction still active"
+
+
+@pytest.mark.asyncio
+async def test_kick_preparer_stops_before_shared_abi_reads_for_unsupported_version() -> None:
+    candidate = _candidate()
+    candidate.auction_version = "1.0.3cc"
+    active_read = AsyncMock()
+    uint_read = AsyncMock()
+    preparer = KickPreparer(
+        web3_client=object(),
+        price_provider=MagicMock(),
+        usd_threshold=100.0,
+        require_curve_quote=True,
+        erc20_reader=MagicMock(),
+        auction_state_reader=SimpleNamespace(
+            read_string_noargs_many=AsyncMock(
+                return_value={candidate.auction_address: "1.0.3cc"}
+            ),
+            read_bool_noargs_many=active_read,
+            read_uint_noargs_many=uint_read,
+        ),
+        start_price_buffer_bps=1000,
+        min_price_buffer_bps=50,
+    )
+
+    result = await preparer.prepare_kick(candidate, "run-1")
+
+    assert result.status == KickStatus.ERROR
+    assert "unsupported auction version" in str(result.error_message)
+    active_read.assert_not_awaited()
+    uint_read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kick_preparer_fails_shared_address_closed_on_conflicting_stored_versions() -> None:
+    supported = _candidate()
+    stale = _candidate()
+    stale.token_address = "0x5555555555555555555555555555555555555555"
+    stale.auction_version = "1.0.3cc"
+    active_read = AsyncMock()
+    uint_read = AsyncMock()
+    preparer = KickPreparer(
+        web3_client=object(),
+        price_provider=MagicMock(),
+        usd_threshold=100.0,
+        require_curve_quote=True,
+        erc20_reader=MagicMock(),
+        auction_state_reader=SimpleNamespace(
+            read_string_noargs_many=AsyncMock(
+                return_value={supported.auction_address: "1.0.4"}
+            ),
+            read_bool_noargs_many=active_read,
+            read_uint_noargs_many=uint_read,
+        ),
+        start_price_buffer_bps=1000,
+        min_price_buffer_bps=50,
+    )
+
+    inspections = await preparer.inspect_candidates([supported, stale])
+
+    assert inspections[(supported.auction_address, supported.token_address)].compatibility_error == (
+        "conflicting stored auction versions for the same auction address"
+    )
+    assert inspections[(stale.auction_address, stale.token_address)].compatibility_error is not None
+    active_read.assert_not_awaited()
+    uint_read.assert_not_awaited()
+
+
+async def _prepare_round_vector(
+    version: str,
+    *,
+    quote_amount_raw: int = 96_953_501_367_832_632,
+    step_decay_rate_bps: int = 15,
+    auction_length_seconds: int = 86_400,
+    step_duration_seconds: int = 60,
+):
+    candidate = _candidate()
+    candidate.auction_version = version
+    candidate.normalized_balance = "843.453068587196135157"
+    quote = QuoteResult(
+        amount_out_raw=quote_amount_raw,
+        token_out_decimals=18,
+        provider_statuses={"curve": "ok"},
+        provider_amounts={"curve": quote_amount_raw},
+    )
+    profile = PricingProfile(
+        name="volatile",
+        start_price_buffer_bps=1_000,
+        min_price_buffer_bps=500,
+        step_decay_rate_bps=step_decay_rate_bps,
+        outlier_floor_enabled=False,
+    )
+    preparer = KickPreparer(
+        web3_client=object(),
+        price_provider=SimpleNamespace(
+            quote=AsyncMock(return_value=quote),
+            quote_usd=AsyncMock(return_value=SimpleNamespace(price_usd="1")),
+        ),
+        usd_threshold=100.0,
+        require_curve_quote=True,
+        erc20_reader=SimpleNamespace(
+            read_balance=AsyncMock(return_value=843_453_068_587_196_135_157),
+            read_decimals=AsyncMock(return_value=18),
+        ),
+        pricing_policy=_pricing_policy(profile),
+        start_price_buffer_bps=1_000,
+        min_price_buffer_bps=500,
+    )
+    return await preparer.prepare_kick(
+        candidate,
+        "run-1",
+        inspection=AuctionInspection(
+            auction_address=candidate.auction_address,
+            is_active_auction=False,
+            active_tokens=(),
+            auction_version=version,
+            auction_length_seconds=auction_length_seconds,
+            step_duration_seconds=step_duration_seconds,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_round_8_v104_is_rejected_by_terminal_guard() -> None:
+    result = await _prepare_round_vector("1.0.4")
+
+    assert result.status == KickStatus.SKIP
+    assert "latent terminal full-lot ask 0.115138258855697109" in str(result.error_message)
+
+
+@pytest.mark.asyncio
+async def test_round_8_v105_is_not_rejected_by_terminal_guard() -> None:
+    result = await _prepare_round_vector("1.0.5")
+
+    assert isinstance(result, PreparedKick)
+    assert result.starting_price_raw == 106_648_851_504_615_896
+    assert result.starting_price_amount_str == "0.106648851504615896"
+
+
+@pytest.mark.asyncio
+async def test_round_9_v104_is_rejected_by_terminal_guard() -> None:
+    result = await _prepare_round_vector(
+        "1.0.4",
+        quote_amount_raw=91_596_284_559_433_726,
+    )
+
+    assert result.status == KickStatus.SKIP
+    assert "quote 0.091596284559433726" in str(result.error_message)
+    assert "latent terminal full-lot ask 0.115138258855697109" in str(result.error_message)
+
+
+@pytest.mark.asyncio
+async def test_kick_preparation_rejects_missing_timing() -> None:
+    result = await _prepare_round_vector("1.0.5", auction_length_seconds=0)
+
+    assert result.status == KickStatus.ERROR
+    assert "auctionLength() read failed" in str(result.error_message)
+
+
+@pytest.mark.asyncio
+async def test_kick_preparation_rejects_invalid_decay() -> None:
+    result = await _prepare_round_vector("1.0.5", step_decay_rate_bps=10_000)
+
+    assert result.status == KickStatus.ERROR
+    assert "terminal ask calculation failed" in str(result.error_message)
 
 
 def test_kick_tx_builder_encodes_resolve_auction_with_force_flag() -> None:

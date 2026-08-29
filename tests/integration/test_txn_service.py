@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.orm import Session
 
+from tidal.auction_versions import StartingPriceEncoding
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
@@ -54,6 +55,7 @@ def _seed_candidate(session, *, strategy_address="0xstrategy1", token_address="0
         adapter="yearn_curve_strategy",
         active=1,
         auction_address=auction_address,
+        auction_version="1.0.4",
         want_address=want_address,
         first_seen_at=now,
         last_seen_at=now,
@@ -98,6 +100,7 @@ def _seed_fee_burner_candidate(
         name="Yearn Fee Burner",
         active=1,
         auction_address=auction_address,
+        auction_version="1.0.4",
         want_address=want_address,
         first_seen_at=now,
         last_seen_at=now,
@@ -136,12 +139,13 @@ def _make_prepared_kick(candidate: KickCandidate) -> PreparedKick:
     """Build a PreparedKick from a KickCandidate for test mocks."""
     return PreparedKick(
         candidate=candidate,
+        starting_price_encoding=StartingPriceEncoding.WHOLE_WANT,
         sell_amount=1000000000000000000000,
-        starting_price_unscaled=1000,
+        starting_price_raw=1000,
         minimum_price_scaled_1e18=900000000000000000,
         minimum_quote_unscaled=900,
         sell_amount_str="1000000000000000000000",
-        starting_price_unscaled_str="1000",
+        starting_price_raw_str="1000",
         minimum_price_scaled_1e18_str="900000000000000000",
         minimum_quote_unscaled_str="900",
         usd_value_str=str(candidate.usd_value),

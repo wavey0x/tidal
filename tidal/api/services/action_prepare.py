@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import copy
 from dataclasses import asdict, dataclass, is_dataclass
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from eth_utils import to_checksum_address
@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
 from tidal.api.services.action_audit import create_prepared_action
+from tidal.auction_price_units import decode_starting_price_amount, encode_starting_price_raw
+from tidal.auction_versions import StartingPriceEncoding, approved_auction_spec_for_factory
 from tidal.auction_settlement import (
     PATH_SWEEP_AND_RESET,
     build_auction_sweep_call,
@@ -32,6 +34,8 @@ from tidal.ops.deploy import (
     preview_deployment,
     read_existing_matches,
     read_factory_auction_addresses,
+    read_token_decimals,
+    validate_starting_price_raw,
 )
 from tidal.ops.kick_inspect import inspect_kick_candidates
 from tidal.pricing.token_price_agg import TokenPriceAggProvider
@@ -253,6 +257,17 @@ async def load_strategy_deploy_defaults(
     if not context["wantAddress"]:
         raise APIError("Strategy is missing want token metadata", status_code=409)
 
+    try:
+        factory_address = default_factory_address(settings)
+        factory_spec = approved_auction_spec_for_factory(factory_address)
+    except ValueError as exc:
+        raise APIError(str(exc), status_code=409) from exc
+    w3 = build_sync_web3(settings)
+    try:
+        want_decimals = read_token_decimals(w3, str(context["wantAddress"]))
+    except Exception as exc:  # noqa: BLE001
+        raise APIError(f"Want token decimals read failed: {exc}", status_code=409) from exc
+
     balance = _select_deploy_balance(context)
     quote_provider = TokenPriceAggProvider(
         chain_id=settings.chain_id,
@@ -267,18 +282,27 @@ async def load_strategy_deploy_defaults(
         amount_in=str(balance["rawBalance"]),
     )
     await quote_provider.close()
+    if quote.token_out_decimals is None:
+        raise APIError("Quote response is missing output token decimals", status_code=502)
+    if quote.token_out_decimals != want_decimals:
+        raise APIError(
+            (
+                f"Want token decimals mismatch: quote {quote.token_out_decimals}, "
+                f"onchain {want_decimals}"
+            ),
+            status_code=409,
+        )
     starting_price = _compute_starting_price(
         quote.amount_out_raw,
-        quote.token_out_decimals,
+        want_decimals,
         buffer_bps=settings.txn_start_price_buffer_bps,
+        encoding=factory_spec.starting_price_encoding,
     )
     curve_quote_available = quote.curve_quote_available()
     curve_status = quote.provider_statuses.get("curve") or ("ok" if curve_quote_available else "not present")
     if not curve_quote_available:
         warnings.append(f"Curve quote unavailable for deploy inference (status: {curve_status})")
 
-    w3 = build_sync_web3(settings)
-    factory_address = default_factory_address(settings)
     governance_address = default_governance_address()
     existing_auctions = read_factory_auction_addresses(w3, factory_address)
     matches = read_existing_matches(
@@ -310,8 +334,14 @@ async def load_strategy_deploy_defaults(
         "wantAddress": context["wantAddress"],
         "wantSymbol": context["wantSymbol"],
         "factoryAddress": factory_address,
+        "factoryVersion": factory_spec.version,
+        "startingPriceEncoding": factory_spec.starting_price_encoding.value,
         "governanceAddress": governance_address,
         "startingPrice": starting_price,
+        "startingPriceDisplay": format(
+            decode_starting_price_amount(starting_price, factory_spec.starting_price_encoding),
+            "f",
+        ),
         "salt": salt,
         "warnings": warnings,
         "inference": {
@@ -418,7 +448,12 @@ def _build_deploy_prepare_payload(
     w3 = build_sync_web3(settings)
     normalized_want = normalize_address(want)
     normalized_receiver = normalize_address(receiver)
-    normalized_factory = normalize_address(factory) if factory else default_factory_address(settings)
+    try:
+        normalized_factory = normalize_address(factory) if factory else default_factory_address(settings)
+        factory_spec = approved_auction_spec_for_factory(normalized_factory)
+        validate_starting_price_raw(normalized_factory, starting_price)
+    except ValueError as exc:
+        raise APIError(str(exc), status_code=409) from exc
     normalized_governance = normalize_address(governance) if governance else default_governance_address()
     resolved_salt = salt or build_default_salt(normalized_want, normalized_receiver, normalized_governance)
     preview = preview_deployment(
@@ -432,6 +467,8 @@ def _build_deploy_prepare_payload(
         salt=resolved_salt,
         sender_address=sender,
     )
+    if preview.preview_error is not None:
+        raise APIError(f"Deployment preview failed: {preview.preview_error}", status_code=409)
     factory_contract = w3.eth.contract(address=to_checksum_address(normalized_factory), abi=SINGLE_AUCTION_FACTORY_ABI)
     data = factory_contract.functions.createNewAuction(
         to_checksum_address(normalized_want),
@@ -441,7 +478,6 @@ def _build_deploy_prepare_payload(
         bytes.fromhex(resolved_salt.removeprefix("0x")),
     )._encode_transaction_data()
     warnings = [line for line in (
-        f"Preview call failed: {preview.preview_error}" if preview.preview_error else None,
         f"Gas estimate failed: {preview.gas_error}" if preview.gas_error else None,
     ) if line]
     tx = {
@@ -459,16 +495,24 @@ def _build_deploy_prepare_payload(
         "receiver": normalized_receiver,
         "sender": sender,
         "factory": normalized_factory,
+        "factoryVersion": factory_spec.version,
+        "startingPriceEncoding": factory_spec.starting_price_encoding.value,
         "governance": normalized_governance,
         "startingPrice": starting_price,
         "salt": resolved_salt,
     }
     preview_payload = {
         "factoryAddress": normalized_factory,
+        "factoryVersion": factory_spec.version,
+        "startingPriceEncoding": factory_spec.starting_price_encoding.value,
         "want": normalized_want,
         "receiver": normalized_receiver,
         "governance": normalized_governance,
         "startingPrice": starting_price,
+        "startingPriceDisplay": format(
+            decode_starting_price_amount(starting_price, factory_spec.starting_price_encoding),
+            "f",
+        ),
         "salt": resolved_salt,
         "predictedAuctionAddress": preview.predicted_address,
         "predictedAuctionAddressExists": preview.predicted_address_exists,
@@ -1186,18 +1230,29 @@ def _select_deploy_balance(strategy_context: dict[str, object]) -> dict[str, obj
     return candidates[0]
 
 
-def _compute_starting_price(amount_out_raw: int | None, token_out_decimals: int | None, *, buffer_bps: int) -> int:
+def _compute_starting_price(
+    amount_out_raw: int | None,
+    token_out_decimals: int | None,
+    *,
+    buffer_bps: int,
+    encoding: StartingPriceEncoding,
+) -> int:
     parsed_amount = _parse_decimal(amount_out_raw)
     if parsed_amount is None or parsed_amount <= 0:
         raise APIError("Quote amount is missing or zero", status_code=409)
+    if parsed_amount != parsed_amount.to_integral_value():
+        raise APIError("Quote amount is not an integer raw value", status_code=409)
     if token_out_decimals is None:
         raise APIError("Quote response is missing output token decimals", status_code=502)
-    normalized = parsed_amount / (Decimal(10) ** int(token_out_decimals))
-    buffer = Decimal(1) + Decimal(buffer_bps) / Decimal(10_000)
-    starting_price = int((normalized * buffer).to_integral_value(rounding=ROUND_CEILING))
-    if starting_price <= 0:
-        raise APIError("Computed starting price is zero", status_code=409)
-    return starting_price
+    try:
+        return encode_starting_price_raw(
+            amount_out_raw=int(parsed_amount),
+            want_decimals=int(token_out_decimals),
+            buffer_bps=buffer_bps,
+            encoding=encoding,
+        )
+    except ValueError as exc:
+        raise APIError(f"Starting price encoding failed: {exc}", status_code=409) from exc
 
 
 def _parse_decimal(value: object) -> Decimal | None:

@@ -8,7 +8,7 @@ from eth_abi import decode as abi_decode
 from eth_utils import to_checksum_address
 from hexbytes import HexBytes
 
-from tidal.chain.contracts.abis import AUCTION_ABI
+from tidal.chain.contracts.abis import AUCTION_VERSION_ABI, SUPPORTED_AUCTION_ABI
 from tidal.chain.contracts.multicall import MulticallClient, MulticallRequest
 from tidal.normalizers import normalize_address
 
@@ -65,6 +65,19 @@ class AuctionStateReader:
             decoder=lambda data: int(abi_decode(["uint256"], data)[0]),
         )
 
+    async def read_string_noargs_many(
+        self,
+        auction_addresses: list[str],
+        method_name: str,
+    ) -> dict[str, str | None]:
+        return await self._read_noarg_many(
+            auction_addresses,
+            method_name,
+            direct_transform=lambda value: str(value).strip(),
+            decoder=lambda data: str(abi_decode(["string"], data)[0]).strip(),
+            abi=AUCTION_VERSION_ABI if method_name == "version" else SUPPORTED_AUCTION_ABI,
+        )
+
     async def read_bool_arg_many(self, pairs: list[tuple[str, str]], method_name: str) -> dict[tuple[str, str], bool | None]:
         return await self._read_arg_many(
             pairs,
@@ -99,6 +112,7 @@ class AuctionStateReader:
         *,
         direct_transform: Callable[[object], object],
         decoder: Callable[[bytes], object],
+        abi: list[dict] = SUPPORTED_AUCTION_ABI,
     ) -> dict[str, object | None]:
         output: dict[str, object | None] = {auction: None for auction in auction_addresses}
         if not auction_addresses:
@@ -106,7 +120,7 @@ class AuctionStateReader:
 
         if not self.multicall_enabled or self.multicall_client is None:
             for auction_address in auction_addresses:
-                contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+                contract = self.web3_client.contract(auction_address, abi)
                 fn = getattr(contract.functions, method_name)()
                 try:
                     output[auction_address] = direct_transform(await self.web3_client.call(fn))
@@ -116,7 +130,7 @@ class AuctionStateReader:
 
         requests: list[MulticallRequest] = []
         for auction_address in auction_addresses:
-            contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+            contract = self.web3_client.contract(auction_address, abi)
             fn = getattr(contract.functions, method_name)()
             requests.append(
                 MulticallRequest(
@@ -155,7 +169,7 @@ class AuctionStateReader:
 
         if not self.multicall_enabled or self.multicall_client is None:
             for auction_address, token_address in pairs:
-                contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+                contract = self.web3_client.contract(auction_address, SUPPORTED_AUCTION_ABI)
                 fn = getattr(contract.functions, method_name)(to_checksum_address(token_address))
                 try:
                     output[(auction_address, token_address)] = direct_transform(await self.web3_client.call(fn))
@@ -165,7 +179,7 @@ class AuctionStateReader:
 
         requests: list[MulticallRequest] = []
         for auction_address, token_address in pairs:
-            contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+            contract = self.web3_client.contract(auction_address, SUPPORTED_AUCTION_ABI)
             fn = getattr(contract.functions, method_name)(to_checksum_address(token_address))
             requests.append(
                 MulticallRequest(

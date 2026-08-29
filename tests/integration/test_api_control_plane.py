@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from tidal.api.app import create_app
 from tidal.api.services.action_audit import create_prepared_action
+from tidal.auction_versions import AUCTION_V105_FACTORY_ADDRESS
 from tidal.config import Settings
 from tidal.persistence import models
 from tidal.persistence.repositories import APIActionRepository
@@ -539,16 +540,16 @@ def test_public_browser_deploy_prepare_route_is_unauthenticated(tmp_path: Path, 
             "want": "0x4000000000000000000000000000000000000004",
             "receiver": "0x2000000000000000000000000000000000000002",
             "sender": "0x6000000000000000000000000000000000000006",
-            "factory": "0x7000000000000000000000000000000000000007",
+            "factory": AUCTION_V105_FACTORY_ADDRESS,
             "governance": "0x8000000000000000000000000000000000000008",
-            "startingPrice": 610,
+            "startingPrice": 10**18,
             "salt": "0x" + "11" * 32,
         },
     )
 
     assert response.status_code == 200
     assert captured["receiver"] == "0x2000000000000000000000000000000000000002"
-    assert captured["starting_price"] == 610
+    assert captured["starting_price"] == 10**18
 
 
 def test_public_browser_deploy_prepare_route_does_not_create_action_rows(tmp_path: Path, monkeypatch) -> None:
@@ -595,9 +596,9 @@ def test_public_browser_deploy_prepare_route_does_not_create_action_rows(tmp_pat
             "want": "0x4000000000000000000000000000000000000004",
             "receiver": "0x2000000000000000000000000000000000000002",
             "sender": "0x6000000000000000000000000000000000000006",
-            "factory": "0x7000000000000000000000000000000000000007",
+            "factory": AUCTION_V105_FACTORY_ADDRESS,
             "governance": "0x8000000000000000000000000000000000000008",
-            "startingPrice": 610,
+            "startingPrice": 10**18,
             "salt": "0x" + "11" * 32,
         },
     )

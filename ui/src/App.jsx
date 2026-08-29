@@ -238,7 +238,7 @@ function formatDeployConfirmation(spec) {
   const lines = [
     `Deploy auction for ${spec.strategyName || shortenAddress(spec.strategyAddress)}?`,
     "",
-    `Factory: ${shortenAddress(spec.factoryAddress)}`,
+    `Factory${spec.factoryVersion ? ` (${spec.factoryVersion})` : ""}: ${shortenAddress(spec.factoryAddress)}`,
     `Receiver: ${shortenAddress(spec.receiverAddress || spec.strategyAddress)}`,
     `Want: ${spec.wantSymbol || shortenAddress(spec.wantAddress)}`,
   ];
@@ -249,7 +249,8 @@ function formatDeployConfirmation(spec) {
     );
   }
   if (spec.startingPrice) {
-    lines.push(`Starting price: ${spec.startingPrice}`);
+    lines.push(`Starting price: ${spec.startingPriceDisplay || spec.startingPrice} ${spec.wantSymbol || "want"}`);
+    lines.push(`Raw startingPrice: ${spec.startingPrice}`);
   }
   if (spec.startPriceBufferBps != null) {
     lines.push(`Start-price buffer: +${(Number(spec.startPriceBufferBps) / 100).toFixed(1)}%`);
@@ -936,7 +937,10 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   const warnings = Array.isArray(spec.warnings) ? spec.warnings.filter(Boolean) : [];
   const receiverAddress = spec.receiverAddress || spec.strategyAddress || null;
   const rows = [
-    ["Factory", <AddressLinkCopy address={spec.factoryAddress} />],
+    [
+      spec.factoryVersion ? `Factory (${spec.factoryVersion})` : "Factory",
+      <AddressLinkCopy address={spec.factoryAddress} />,
+    ],
     ["Receiver", <AddressLinkCopy address={receiverAddress} />],
     ["Want", <AddressLinkCopy address={spec.wantAddress} label={spec.wantSymbol || shortenAddress(spec.wantAddress)} />],
   ];
@@ -950,7 +954,11 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
     ]);
   }
   if (spec.startingPrice) {
-    rows.push(["Starting price", spec.startingPrice]);
+    rows.push([
+      "Starting price",
+      `${spec.startingPriceDisplay || spec.startingPrice} ${spec.wantSymbol || "want"}`,
+    ]);
+    rows.push(["Raw startingPrice", spec.startingPrice]);
   }
   if (spec.startPriceBufferBps != null) {
     rows.push(["Start-price buffer", `+${(Number(spec.startPriceBufferBps) / 100).toFixed(1)}%`]);
@@ -1305,8 +1313,10 @@ function KickDetailContent({ kick, onOpenAuctionScan }) {
           <div className="kick-detail-item">
             <div className="kick-detail-label">Start Quote</div>
             <div className="kick-detail-value">
-              {kick.startingPrice || "—"}
-              {kick.startPriceBufferBps != null ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)` : ""}
+              {kick.startingPriceDisplay || kick.startingPrice || "—"}
+              {!kick.startingPriceDisplay && kick.startPriceBufferBps != null
+                ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)`
+                : ""}
             </div>
           </div>
           <div className="kick-detail-item">

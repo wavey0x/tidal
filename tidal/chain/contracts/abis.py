@@ -29,6 +29,24 @@ AUCTION_FACTORY_ABI = [
     }
 ]
 
+AUCTION_FACTORY_CREATE_ABI = [
+    {
+        "inputs": [
+            {"internalType": "address", "name": "_want", "type": "address"},
+            {"internalType": "address", "name": "_receiver", "type": "address"},
+            {"internalType": "address", "name": "_governance", "type": "address"},
+            {"internalType": "uint256", "name": "_startingPrice", "type": "uint256"},
+            {"internalType": "bytes32", "name": "_salt", "type": "bytes32"},
+        ],
+        "name": "createNewAuction",
+        "outputs": [{"internalType": "address", "name": "newAuction", "type": "address"}],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    }
+]
+
+SUPPORTED_AUCTION_FACTORY_ABI = AUCTION_FACTORY_ABI + AUCTION_FACTORY_CREATE_ABI
+
 TRADE_HANDLER_ABI = [
     {
         "inputs": [{"internalType": "address", "name": "mech", "type": "address"}],
@@ -318,6 +336,27 @@ AUCTION_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"internalType": "uint256", "name": "_startingPrice", "type": "uint256"}],
+        "name": "setStartingPrice",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "uint256", "name": "_minimumPrice", "type": "uint256"}],
+        "name": "setMinimumPrice",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "_from", "type": "address"}],
+        "name": "kick",
+        "outputs": [{"internalType": "uint256", "name": "_available", "type": "uint256"}],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
         "inputs": [{"internalType": "address", "name": "", "type": "address"}],
         "name": "auctions",
         "outputs": [
@@ -329,6 +368,19 @@ AUCTION_ABI = [
         "type": "function",
     },
 ]
+
+AUCTION_VERSION_ABI = [
+    {
+        "inputs": [],
+        "name": "version",
+        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+# v1.0.4 and v1.0.5 have identical signatures for every method Tidal uses.
+SUPPORTED_AUCTION_ABI = AUCTION_ABI
 
 ERC20_ABI = [
     {

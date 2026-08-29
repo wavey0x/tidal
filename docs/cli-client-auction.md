@@ -75,3 +75,8 @@ These commands use the same prepare and audit model as `tidal kick`:
 
 That means the API owns the action history while the CLI client keeps local control of the wallet.
 The signer comes from `TXN_KEYSTORE_PATH` and `TXN_KEYSTORE_PASSPHRASE` by default, or from `--keystore` and `--password-file` if you override them for one command. The sender address is inferred from the resolved keystore.
+
+`--starting-price` is the contract-raw integer. Its units are selected by the
+approved factory: v1.0.4 uses a whole want-token amount and v1.0.5 uses a
+WAD-scaled want-token amount. The confirmation shows both the decoded economic
+amount and the raw integer before signing.

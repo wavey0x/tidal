@@ -7,8 +7,9 @@ import pytest
 
 import tidal.transaction_service.planner as planner_module
 from tidal.auction_settlement import AuctionLotPreview, AuctionSettlementInspection
+from tidal.auction_versions import StartingPriceEncoding
 from tidal.transaction_service.planner import KickPlanner
-from tidal.transaction_service.types import KickCandidate, KickStatus, PreparedKick, TxIntent
+from tidal.transaction_service.types import AuctionInspection, KickCandidate, KickStatus, PreparedKick, TxIntent
 
 
 def _settings() -> SimpleNamespace:
@@ -40,6 +41,7 @@ def _candidate(*, token_address: str, usd_value: float) -> KickCandidate:
         want_address="0x4444444444444444444444444444444444444444",
         usd_value=usd_value,
         decimals=18,
+        auction_version="1.0.4",
         source_name="Test Strategy",
         token_symbol="CRV",
         want_symbol="USDC",
@@ -49,12 +51,13 @@ def _candidate(*, token_address: str, usd_value: float) -> KickCandidate:
 def _prepared(candidate: KickCandidate) -> PreparedKick:
     return PreparedKick(
         candidate=candidate,
+        starting_price_encoding=StartingPriceEncoding.WHOLE_WANT,
         sell_amount=10**21,
-        starting_price_unscaled=2750,
+        starting_price_raw=2750,
         minimum_price_scaled_1e18=2_375_000_000_000_000_000,
         minimum_quote_unscaled=2375,
         sell_amount_str="1000",
-        starting_price_unscaled_str="2750",
+        starting_price_raw_str="2750",
         minimum_price_scaled_1e18_str="2375000000000000000",
         minimum_quote_unscaled_str="2375",
         usd_value_str=str(int(candidate.usd_value)),
@@ -75,8 +78,21 @@ class _FakeKickDeps:
         self.inspect_candidates = AsyncMock(side_effect=self._inspect_candidates)
         self.prepare_kick = AsyncMock(side_effect=self._prepare_kick)
 
-    async def _inspect_candidates(self, candidates: list[KickCandidate]) -> dict[tuple[str, str], None]:
-        return {(candidate.auction_address, candidate.token_address): None for candidate in candidates}
+    async def _inspect_candidates(
+        self,
+        candidates: list[KickCandidate],
+    ) -> dict[tuple[str, str], AuctionInspection]:
+        return {
+            (candidate.auction_address, candidate.token_address): AuctionInspection(
+                auction_address=candidate.auction_address,
+                is_active_auction=False,
+                active_tokens=(),
+                auction_version=candidate.auction_version,
+                auction_length_seconds=86_400,
+                step_duration_seconds=60,
+            )
+            for candidate in candidates
+        }
 
     async def _prepare_kick(self, candidate: KickCandidate, run_id: str, inspection=None) -> PreparedKick:
         del run_id, inspection
@@ -218,6 +234,65 @@ async def test_kick_planner_skips_persisted_killed_gauge_strategy(monkeypatch) -
     assert guard_repo.calls == [("strategy", [candidate.source_address])]
     inspect_mock.assert_not_called()
     deps.prepare_kick.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_fill_retry_still_stops_before_settlement_for_unsupported_version(monkeypatch) -> None:
+    candidate = _candidate(token_address="0x2222222222222222222222222222222222222222", usd_value=2500.0)
+    candidate.auction_version = "1.0.3cc"
+    shortlist = SimpleNamespace(
+        selected_candidates=[candidate],
+        eligible_candidates=[candidate],
+        ignored_skips=[],
+        cooldown_skips=[],
+        no_fill_skips=[],
+        deferred_same_auction_count=0,
+        limited_candidates=[],
+    )
+    deps = _FakeKickDeps(prepared_by_token={candidate.token_address: _prepared(candidate)})
+    deps.inspect_candidates = AsyncMock(
+        return_value={
+            (candidate.auction_address, candidate.token_address): AuctionInspection(
+                auction_address=candidate.auction_address,
+                is_active_auction=None,
+                active_tokens=(),
+                auction_version="1.0.3cc",
+                compatibility_error="unsupported auction version: 1.0.3cc",
+            )
+        }
+    )
+    settlement_inspect = AsyncMock()
+    monkeypatch.setattr(planner_module, "inspect_auction_settlements", settlement_inspect)
+
+    planner = KickPlanner(
+        session=object(),
+        settings=_settings(),
+        preparer=deps,
+        tx_builder=deps,
+        kick_tx_repository=_FakeKickTxRepository(),  # type: ignore[arg-type]
+        web3_client=object(),
+        shortlist_builder=lambda *args, **kwargs: shortlist,
+        candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)),
+    )
+
+    plan = await planner.plan(
+        source_type="strategy",
+        source_address=candidate.source_address,
+        auction_address=candidate.auction_address,
+        token_address=None,
+        limit=1,
+        sender="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        run_id="run-no-fill-retry",
+        batch=True,
+        allow_no_fill_retry=True,
+    )
+
+    assert plan.tx_intents == []
+    assert plan.skipped_during_prepare[0].result is not None
+    assert plan.skipped_during_prepare[0].result.status == KickStatus.ERROR
+    settlement_inspect.assert_not_awaited()
+    deps.prepare_kick.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ txn_data_freshness_limit_seconds: 1200
 txn_require_curve_quote: true
 max_batch_kick_size: 5
 batch_kick_delay_seconds: 5
-auction_factory_address: "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
+auction_factory_address: "0x55B3830B4D85e6868c73f00A2e857e9AdbF89568"
 scan_stale_after_minutes: 90
 
 monitored_fee_burners:
@@ -92,6 +92,8 @@ kick:
     "0x7fE24F1A024D33506966CB7CA48Bab8c65fB632d": 200 # opASF
 
   ignore:
+    - auction: "0xdFEdBCd0a457ed9c2CC8853D23876b838Fd3258e"
+      token: "0xD533a949740bb3306d119CC777fa900bA034cd52"
     - auction: "0xcCE8031B58b42e900Aa2c1F23CD00B0939D1d675"
     - source: "0xC69aA6Cd632A88424ceAf3688F295B856eB82287"
     - source: "0xe1E426113DC75480bB6838520dEFA7dF92627b9A"

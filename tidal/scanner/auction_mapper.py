@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from eth_abi import decode as abi_decode
 from hexbytes import HexBytes
 
-from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_FACTORY_ABI, STRATEGY_ABI
+from tidal.auction_versions import APPROVED_AUCTION_SPECS, ApprovedAuctionSpec
+from tidal.chain.contracts.abis import AUCTION_FACTORY_ABI, STRATEGY_ABI, SUPPORTED_AUCTION_ABI
 from tidal.chain.contracts.multicall import MulticallClient, MulticallRequest
 from tidal.constants import ZERO_ADDRESS
 from tidal.normalizers import normalize_address
@@ -22,6 +23,12 @@ class AuctionMetadata:
     want: str | None = None
     receiver: str | None = None
     version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredAuction:
+    address: str
+    spec: ApprovedAuctionSpec
 
 
 @dataclass(slots=True)
@@ -59,15 +66,17 @@ class StrategyAuctionMapper:
         *,
         web3_client,
         chain_id: int,
-        auction_factory_address: str,
         required_governance_address: str,
+        auction_specs: tuple[ApprovedAuctionSpec, ...] = APPROVED_AUCTION_SPECS,
         multicall_client: MulticallClient | None = None,
         multicall_enabled: bool = True,
         multicall_auction_batch_calls: int = 100,
     ) -> None:
         self.web3_client = web3_client
         self.chain_id = chain_id
-        self.auction_factory_address = normalize_address(auction_factory_address)
+        self.auction_specs = tuple(sorted(auction_specs, key=lambda spec: spec.mapping_priority))
+        if not self.auction_specs:
+            raise ValueError("at least one approved auction factory is required")
         self.required_governance_address = normalize_address(required_governance_address)
         self.multicall_client = multicall_client
         self.multicall_enabled = multicall_enabled
@@ -80,8 +89,8 @@ class StrategyAuctionMapper:
 
         # Build lookup keyed by (want, receiver) — latest by factory order wins.
         want_receiver_to_auction: dict[tuple[str, str], tuple[str, AuctionMetadata]] = {}
-        for auction_address, meta in valid_auctions:
-            want_receiver_to_auction[(meta.want, meta.receiver)] = (auction_address, meta)
+        for discovered, meta in valid_auctions:
+            want_receiver_to_auction[(meta.want, meta.receiver)] = (discovered.address, meta)
 
         strategy_to_auction: dict[str, str | None] = {}
         strategy_to_auction_version: dict[str, str | None] = {}
@@ -122,9 +131,9 @@ class StrategyAuctionMapper:
 
         auction_addresses, valid_auctions, receiver_filtered_count = await self._load_valid_auctions()
         matches_by_key: dict[tuple[str, str], list[tuple[str, AuctionMetadata]]] = {}
-        for auction_address, meta in valid_auctions:
+        for discovered, meta in valid_auctions:
             key = (meta.want, meta.receiver)
-            matches_by_key.setdefault(key, []).append((auction_address, meta))
+            matches_by_key.setdefault(key, []).append((discovered.address, meta))
 
         fee_burner_to_auction: dict[str, str | None] = {}
         fee_burner_to_auction_version: dict[str, str | None] = {}
@@ -132,16 +141,14 @@ class StrategyAuctionMapper:
 
         for fee_burner_address, want_address in normalized_fee_burners.items():
             matches = matches_by_key.get((want_address, fee_burner_address), [])
-            if len(matches) == 1:
-                fee_burner_to_auction[fee_burner_address] = matches[0][0]
-                fee_burner_to_auction_version[fee_burner_address] = matches[0][1].version
+            if matches:
+                match = matches[-1]
+                fee_burner_to_auction[fee_burner_address] = match[0]
+                fee_burner_to_auction_version[fee_burner_address] = match[1].version
                 continue
             fee_burner_to_auction[fee_burner_address] = None
             fee_burner_to_auction_version[fee_burner_address] = None
-            if not matches:
-                fee_burner_to_error[fee_burner_address] = "no matching auction found for configured want/receiver"
-            else:
-                fee_burner_to_error[fee_burner_address] = "multiple matching auctions found for configured want/receiver"
+            fee_burner_to_error[fee_burner_address] = "no matching auction found for configured want/receiver"
 
         mapped_count = sum(1 for auction_address in fee_burner_to_auction.values() if auction_address)
         unmapped_count = len(normalized_fee_burners) - mapped_count
@@ -159,17 +166,23 @@ class StrategyAuctionMapper:
             source="fresh",
         )
 
-    async def _load_valid_auctions(self) -> tuple[list[str], list[tuple[str, AuctionMetadata]], int]:
-        auction_addresses = await self._read_auction_addresses()
+    async def _load_valid_auctions(
+        self,
+    ) -> tuple[list[DiscoveredAuction], list[tuple[DiscoveredAuction, AuctionMetadata]], int]:
+        discovered_auctions = await self._read_auction_addresses()
+        auction_addresses = [item.address for item in discovered_auctions]
         auction_metadata = await self._read_auction_metadata_many(auction_addresses)
 
-        valid_auctions: list[tuple[str, AuctionMetadata]] = []
+        valid_auctions: list[tuple[DiscoveredAuction, AuctionMetadata]] = []
         receiver_filtered_count = 0
 
-        for auction_address in auction_addresses:
-            meta = auction_metadata.get(auction_address)
-            if meta is None:
-                continue
+        for discovered in discovered_auctions:
+            meta = auction_metadata[discovered.address]
+            if meta.version != discovered.spec.version:
+                raise RuntimeError(
+                    f"auction {discovered.address} from factory {discovered.spec.factory_address} "
+                    f"reported version {meta.version!r}, expected {discovered.spec.version!r}"
+                )
             if meta.governance != self.required_governance_address:
                 continue
             if meta.want is None or meta.want == ZERO_ADDRESS:
@@ -177,14 +190,25 @@ class StrategyAuctionMapper:
             if meta.receiver is None or meta.receiver == ZERO_ADDRESS:
                 receiver_filtered_count += 1
                 continue
-            valid_auctions.append((auction_address, meta))
+            valid_auctions.append((discovered, meta))
 
-        return auction_addresses, valid_auctions, receiver_filtered_count
+        return discovered_auctions, valid_auctions, receiver_filtered_count
 
-    async def _read_auction_addresses(self) -> list[str]:
-        factory = self.web3_client.contract(self.auction_factory_address, AUCTION_FACTORY_ABI)
-        result = await self.web3_client.call(factory.functions.getAllAuctions())
-        return [normalize_address(address) for address in result]
+    async def _read_auction_addresses(self) -> list[DiscoveredAuction]:
+        output: list[DiscoveredAuction] = []
+        for spec in self.auction_specs:
+            factory = self.web3_client.contract(spec.factory_address, AUCTION_FACTORY_ABI)
+            try:
+                result = await self.web3_client.call(factory.functions.getAllAuctions())
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"failed to read approved auction factory {spec.factory_address}: {exc}"
+                ) from exc
+            output.extend(
+                DiscoveredAuction(address=normalize_address(address), spec=spec)
+                for address in result
+            )
+        return output
 
     async def _read_auction_metadata_many(self, auction_addresses: list[str]) -> dict[str, AuctionMetadata]:
         output: dict[str, AuctionMetadata] = {
@@ -196,37 +220,36 @@ class StrategyAuctionMapper:
 
         if not self.multicall_enabled or self.multicall_client is None:
             for auction_address in auction_addresses:
-                auction_contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+                auction_contract = self.web3_client.contract(auction_address, SUPPORTED_AUCTION_ABI)
                 meta = output[auction_address]
                 try:
                     meta.governance = normalize_address(
                         await self.web3_client.call(auction_contract.functions.governance())
                     )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(f"failed to read governance from auction {auction_address}: {exc}") from exc
                 try:
                     meta.want = normalize_address(
                         await self.web3_client.call(auction_contract.functions.want())
                     )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(f"failed to read want from auction {auction_address}: {exc}") from exc
                 try:
                     meta.receiver = normalize_address(
                         await self.web3_client.call(auction_contract.functions.receiver())
                     )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(f"failed to read receiver from auction {auction_address}: {exc}") from exc
                 try:
-                    meta.version = await self.web3_client.call(
-                        auction_contract.functions.version()
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
+                    raw_version = await self.web3_client.call(auction_contract.functions.version())
+                    meta.version = str(raw_version).strip() or None
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(f"failed to read version from auction {auction_address}: {exc}") from exc
             return output
 
         requests: list[MulticallRequest] = []
         for auction_address in auction_addresses:
-            auction_contract = self.web3_client.contract(auction_address, AUCTION_ABI)
+            auction_contract = self.web3_client.contract(auction_address, SUPPORTED_AUCTION_ABI)
             for field_name in _AUCTION_METADATA_FIELDS:
                 fn = getattr(auction_contract.functions, field_name)()
                 requests.append(
@@ -247,15 +270,22 @@ class StrategyAuctionMapper:
             auction_address = result.logical_key[0]
             field = result.logical_key[1]
             if not result.success:
-                continue
+                raise RuntimeError(f"failed to read {field} from auction {auction_address}")
             try:
                 if field in _AUCTION_ADDRESS_FIELDS:
                     decoded = normalize_address(abi_decode(["address"], result.return_data)[0])
                 else:
-                    decoded = abi_decode(["string"], result.return_data)[0]
-            except Exception:  # noqa: BLE001
-                continue
+                    decoded = str(abi_decode(["string"], result.return_data)[0]).strip() or None
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"failed to decode {field} from auction {auction_address}: {exc}") from exc
             setattr(output[auction_address], field, decoded)
+
+        for auction_address, meta in output.items():
+            missing = [field for field in _AUCTION_METADATA_FIELDS if getattr(meta, field) is None]
+            if missing:
+                raise RuntimeError(
+                    f"missing required auction metadata for {auction_address}: {', '.join(missing)}"
+                )
 
         return output
 

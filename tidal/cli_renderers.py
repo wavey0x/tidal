@@ -513,16 +513,18 @@ def render_kick_submission_summary(summary: dict[str, Any]) -> None:
         floor_rate = _safe_decimal(k.get("floor_rate"))
 
         rate_line = None
+        economic_starting_price = starting_price
         if amount > 0:
             quote_rate = quote_rate if quote_rate is not None else quote_amount / amount
             start_rate = start_rate if start_rate is not None else starting_price / amount
             floor_rate = floor_rate if floor_rate is not None else minimum_price / amount
+            economic_starting_price = start_rate * amount
             rate_line = (
                 f"  Rate:        {float(quote_rate):,.4f} quoted | {float(start_rate):,.4f} start | "
                 f"{float(floor_rate):,.4f} floor {want_sym}/{token_sym}"
             )
         precision_line = None
-        if quote_amount > 0 and starting_price > quote_amount * 2:
+        if quote_amount > 0 and economic_starting_price > quote_amount * 2:
             precision_line = f"               ↳ ceiled lot based on {quote_amount:.4f} quote"
 
         content = []

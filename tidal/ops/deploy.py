@@ -11,31 +11,24 @@ from eth_utils import to_checksum_address
 from hexbytes import HexBytes
 from web3 import Web3
 
-from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_FACTORY_ABI, ERC20_ABI, MULTICALL3_ABI
+from tidal.auction_versions import (
+    StartingPriceEncoding,
+    approved_auction_spec_for_factory,
+)
+from tidal.chain.contracts.abis import (
+    AUCTION_FACTORY_ABI,
+    ERC20_ABI,
+    MULTICALL3_ABI,
+    SUPPORTED_AUCTION_ABI,
+    SUPPORTED_AUCTION_FACTORY_ABI,
+)
 from tidal.constants import YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS
 from tidal.normalizers import normalize_address
 from tidal.time import utcnow_iso
 from tidal.transaction_service.signer import TransactionSigner
 
-NEW_AUCTION_FACTORY_ADDRESS = "0xbA7FCb508c7195eE5AE823F37eE2c11D7ED52F8e"
-
-SINGLE_AUCTION_FACTORY_ABI = AUCTION_FACTORY_ABI + [
-    {
-        "inputs": [
-            {"internalType": "address", "name": "_want", "type": "address"},
-            {"internalType": "address", "name": "_receiver", "type": "address"},
-            {"internalType": "address", "name": "_governance", "type": "address"},
-            {"internalType": "uint256", "name": "_startingPrice", "type": "uint256"},
-            {"internalType": "bytes32", "name": "_salt", "type": "bytes32"},
-        ],
-        "name": "createNewAuction",
-        "outputs": [{"internalType": "address", "name": "newAuction", "type": "address"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    }
-]
-
-SINGLE_AUCTION_ABI = AUCTION_ABI
+SINGLE_AUCTION_FACTORY_ABI = SUPPORTED_AUCTION_FACTORY_ABI
+SINGLE_AUCTION_ABI = SUPPORTED_AUCTION_ABI
 
 
 @dataclass(slots=True)
@@ -98,7 +91,16 @@ def read_token_symbol(w3: Web3, token_address: str) -> str | None:
     return symbol or None
 
 
+def read_token_decimals(w3: Web3, token_address: str) -> int:
+    token = w3.eth.contract(address=to_checksum_address(token_address), abi=ERC20_ABI)
+    decimals = int(token.functions.decimals().call())
+    if not 0 <= decimals <= 18:
+        raise ValueError("auction token decimals must be between 0 and 18")
+    return decimals
+
+
 def read_factory_auction_addresses(w3: Web3, factory_address: str) -> list[str]:
+    approved_auction_spec_for_factory(factory_address)
     factory = w3.eth.contract(address=to_checksum_address(factory_address), abi=AUCTION_FACTORY_ABI)
     auction_addresses = factory.functions.getAllAuctions().call()
     return [normalize_address(address) for address in auction_addresses]
@@ -256,7 +258,17 @@ def derive_fee_settings(w3: Web3) -> tuple[int, int]:
 
 
 def default_factory_address(settings: Any) -> str:
-    return normalize_address(settings.auction_factory_address or NEW_AUCTION_FACTORY_ADDRESS)
+    factory_address = normalize_address(settings.auction_factory_address)
+    approved_auction_spec_for_factory(factory_address)
+    return factory_address
+
+
+def validate_starting_price_raw(factory_address: str, starting_price: int) -> None:
+    spec = approved_auction_spec_for_factory(factory_address)
+    if starting_price <= 0:
+        raise ValueError("starting price must be positive")
+    if spec.starting_price_encoding == StartingPriceEncoding.WAD_WANT and starting_price <= 10**9:
+        raise ValueError("v1.0.5 starting price must be greater than 1e9")
 
 
 def default_governance_address() -> str:
@@ -275,6 +287,8 @@ def preview_deployment(
     salt: str,
     sender_address: str | None,
 ) -> AuctionDeployPreview:
+    approved_auction_spec_for_factory(factory_address)
+    validate_starting_price_raw(factory_address, starting_price)
     existing_auctions = read_factory_auction_addresses(w3, factory_address)
     existing_matches = read_existing_matches(
         w3,
@@ -341,6 +355,8 @@ def send_live_deployment(
     salt: str,
     receipt_timeout: int = 300,
 ) -> AuctionDeployExecution:
+    approved_auction_spec_for_factory(factory_address)
+    validate_starting_price_raw(factory_address, starting_price)
     factory = w3.eth.contract(address=to_checksum_address(factory_address), abi=SINGLE_AUCTION_FACTORY_ABI)
     create_fn = factory.functions.createNewAuction(
         to_checksum_address(want),

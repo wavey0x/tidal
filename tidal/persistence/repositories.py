@@ -187,7 +187,6 @@ class FeeBurnerRepository:
                 update(models.fee_burners)
                 .where(models.fee_burners.c.address == address)
                 .values(
-                    auction_address=None,
                     auction_updated_at=updated_at,
                     auction_error_message=error_message,
                 )

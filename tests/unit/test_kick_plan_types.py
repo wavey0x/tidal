@@ -1,3 +1,4 @@
+from tidal.auction_versions import StartingPriceEncoding
 from tidal.transaction_service.types import (
     KickCandidate,
     KickPlan,
@@ -19,6 +20,7 @@ def _candidate(*, token_address: str, token_symbol: str = "CRV") -> KickCandidat
         want_address="0x4444444444444444444444444444444444444444",
         usd_value=2500.0,
         decimals=18,
+        auction_version="1.0.4",
         source_name="Test Strategy",
         token_symbol=token_symbol,
         want_symbol="USDC",
@@ -28,12 +30,13 @@ def _candidate(*, token_address: str, token_symbol: str = "CRV") -> KickCandidat
 def _prepared_kick(candidate: KickCandidate) -> PreparedKick:
     return PreparedKick(
         candidate=candidate,
+        starting_price_encoding=StartingPriceEncoding.WHOLE_WANT,
         sell_amount=10**21,
-        starting_price_unscaled=2750,
+        starting_price_raw=2750,
         minimum_price_scaled_1e18=2_375_000_000_000_000_000,
         minimum_quote_unscaled=2375,
         sell_amount_str="1000",
-        starting_price_unscaled_str="2750",
+        starting_price_raw_str="2750",
         minimum_price_scaled_1e18_str="2375000000000000000",
         minimum_quote_unscaled_str="2375",
         usd_value_str="2500",

@@ -5,7 +5,15 @@ import pytest
 from typer.testing import CliRunner
 
 import tidal.scan_cli as scan_cli_module
+from tidal.migrations import run_migrations
+from tidal.persistence.db import Database
+from tidal.persistence.repositories import KickTxRepository
 from tidal.server_cli import app
+
+
+AUCTION = "0x00000000000000000000000000000000000000a1"
+TOKEN = "0x00000000000000000000000000000000000000b1"
+
 
 def _isolate_runtime_env(tmp_path: Path, monkeypatch) -> None:
     home_root = tmp_path / "home"
@@ -66,6 +74,92 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
         f"sqlite:///{tmp_path / 'tidal.db'}",
         f"sqlite:///{tmp_path / 'tidal.db'}",
     ]
+
+
+def test_clear_no_fill_suspension_previews_then_applies(tmp_path, monkeypatch) -> None:
+    _isolate_runtime_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("DB_PATH", raising=False)
+    db_path = tmp_path / "tidal.db"
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        (
+            f"db_path: {db_path}\n"
+            "kick:\n"
+            "  default_profile: volatile\n"
+            "  no_fill:\n"
+            "    retry_delays_minutes: [720, 1440]\n"
+            "  profiles:\n"
+            "    volatile:\n"
+            "      start_price_buffer_bps: 1000\n"
+            "      min_price_buffer_bps: 500\n"
+            "      step_decay_rate_bps: 25\n"
+        ),
+        encoding="utf-8",
+    )
+    database_url = f"sqlite:///{db_path}"
+    run_migrations(database_url)
+    database = Database(database_url)
+    with database.session() as session:
+        repo = KickTxRepository(session)
+        kick_id = repo.insert(
+            {
+                "run_id": "kick-run",
+                "operation_type": "kick",
+                "token_address": TOKEN,
+                "auction_address": AUCTION,
+                "sell_amount": "100",
+                "requested_sell_amount": "100",
+                "status": "CONFIRMED",
+                "block_number": 100,
+                "transaction_index": 0,
+                "mined_at": "2026-08-01T00:00:00+00:00",
+                "created_at": "2026-08-01T00:00:00+00:00",
+            }
+        )
+        repo.insert(
+            {
+                "run_id": "resolve-run",
+                "operation_type": "resolve_auction",
+                "token_address": TOKEN,
+                "auction_address": AUCTION,
+                "sell_amount": "100",
+                "status": "CONFIRMED",
+                "block_number": 101,
+                "transaction_index": 0,
+                "round_kick_id": kick_id,
+                "resolution_path": 1,
+                "mined_at": "2026-08-01T01:00:00+00:00",
+                "created_at": "2026-08-01T01:00:00+00:00",
+            }
+        )
+
+    args = [
+        "db",
+        "clear-no-fill-suspension",
+        "--auction",
+        AUCTION,
+        "--token",
+        TOKEN,
+        "--config",
+        str(config_path),
+    ]
+    runner = CliRunner()
+    preview = runner.invoke(app, args)
+    assert preview.exit_code == 0, preview.output
+    assert "preview only" in preview.output
+    with database.session() as session:
+        assert KickTxRepository(session).get(kick_id)["historical_baseline"] == 0
+
+    applied = runner.invoke(app, [*args, "--apply"])
+    assert applied.exit_code == 0, applied.output
+    assert "applied" in applied.output
+    with database.session() as session:
+        row = KickTxRepository(session).get(kick_id)
+        assert row["historical_baseline"] == 1
+        assert (
+            row["historical_baseline_reason"] == "OPERATOR_CLEARED_NO_FILL_SUSPENSION"
+        )
+
 
 class _FakeScannerService:
     async def scan_once(self, **kwargs):  # noqa: ANN003

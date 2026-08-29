@@ -8,12 +8,15 @@
 - `repair-auction-rounds`: audit every retained auction round; add `--apply` to
   replay receipts, discover settlement logs, rebuild links, and baseline
   inactive historical evidence the chain can no longer prove
+- `clear-no-fill-suspension`: preview an exact pair's no-fill reset; add
+  `--apply` to mark the newest completed no-fill as the reviewed baseline
 
 ## Common Invocation
 
 ```bash
 tidal-server db migrate --config config/server.yaml
 tidal-server db repair-auction-rounds --config config/server.yaml
+tidal-server db clear-no-fill-suspension --auction 0x... --token 0x... --config config/server.yaml
 ```
 
 For the one-time full repair:
@@ -47,4 +50,7 @@ Run migrations:
 - Apply mode may mark an unprovable round as a reviewed historical baseline only
   when a later round superseded it or the exact auction/token pair is inactive.
   Runtime reconciliation never creates baselines.
+- `clear-no-fill-suspension` preserves every operation and moves only the retry
+  cutoff. It refuses to cross ambiguous evidence. A newer incomplete round
+  remains enforced and becomes the first round in the fresh retry sequence.
 - Active or otherwise unresolved current evidence continues to fail the audit.

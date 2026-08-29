@@ -8,17 +8,20 @@ import typer
 import uvicorn
 
 from tidal.api.app import create_app
+from tidal.auction_rounds import plan_no_fill_suspension_clear
 from tidal.auth_cli import app as auth_app
 from tidal.auction_round_repair import AuctionRoundRepair
 from tidal.cli_renderers import render_status_panel, render_warning_panel
-from tidal.cli_context import CLIContext
+from tidal.cli_context import CLIContext, normalize_cli_address
 from tidal.cli_options import ConfigOption
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
 from tidal.persistence.db import Database
+from tidal.persistence.repositories import KickTxRepository
 from tidal.runtime import build_web3_client
 from tidal.resources import read_template_text
 from tidal.scan_cli import app as scan_app
+from tidal.time import utcnow_iso
 
 app = typer.Typer(help="Tidal server runtime CLI")
 db_app = typer.Typer(help="Database commands", no_args_is_help=True)
@@ -134,6 +137,61 @@ def db_repair_auction_rounds(
     if not report.passed:
         raise typer.Exit(code=1)
     typer.echo("auction round audit passed")
+
+
+@db_app.command("clear-no-fill-suspension")
+def db_clear_no_fill_suspension(
+    auction: str = typer.Option(..., "--auction", help="Auction contract address."),
+    token: str = typer.Option(..., "--token", help="Sell token address."),
+    config: ConfigOption = None,
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Persist the reviewed baseline. Without this flag the command is read-only.",
+    ),
+) -> None:
+    configure_logging(output_mode=OutputMode.TEXT)
+    auction_address = normalize_cli_address(auction, param_hint="--auction")
+    token_address = normalize_cli_address(token, param_hint="--token")
+    assert auction_address is not None and token_address is not None
+
+    cli_ctx = CLIContext(config, mode="server")
+    database = Database(cli_ctx.settings.database_url)
+    with database.session() as session:
+        repo = KickTxRepository(session)
+        try:
+            plan = plan_no_fill_suspension_clear(
+                repo.list_pair_operations(auction_address, token_address)
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        if apply:
+            repo.update_fields(
+                plan.baseline_kick_id,
+                historical_baseline=1,
+                historical_baseline_reason="OPERATOR_CLEARED_NO_FILL_SUSPENSION",
+                historical_baselined_at=utcnow_iso(),
+            )
+            session.commit()
+
+    lines = [
+        f"Auction: {auction_address}",
+        f"Token: {token_address}",
+        f"Baseline kick: {plan.baseline_kick_id}",
+    ]
+    if plan.newer_kick_ids:
+        lines.append(
+            "Newer rounds remain enforced: "
+            + ", ".join(str(kick_id) for kick_id in plan.newer_kick_ids)
+        )
+    lines.append("Status: applied" if apply else "Status: preview only")
+    render_status_panel(
+        "Clear no-fill suspension",
+        lines,
+        border_style="green" if apply else "cyan",
+    )
+    if not apply:
+        render_warning_panel(["Re-run with --apply to persist this baseline."])
 
 
 @api_app.command("serve")

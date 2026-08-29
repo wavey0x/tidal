@@ -88,6 +88,12 @@ class NoFillDecision:
     sequence: RoundSequence
 
 
+@dataclass(frozen=True, slots=True)
+class NoFillSuspensionClearPlan:
+    baseline_kick_id: int
+    newer_kick_ids: tuple[int, ...]
+
+
 def _text(row: Mapping[str, object], key: str) -> str | None:
     value = row.get(key)
     return str(value) if value is not None else None
@@ -439,9 +445,9 @@ def classify_all_pair_operations(
     return _classify_pair_rounds(rows)
 
 
-def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSequence:
-    """Classify the latest contiguous sequence after any reviewed baseline."""
-
+def _current_pair_rounds(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[RoundEvidence, ...]:
     classified = _classify_pair_rounds(rows)
     baselined_kick_ids = {
         int(row["id"])
@@ -457,10 +463,39 @@ def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSeque
         ),
         None,
     )
-    current_rounds = (
-        classified if baseline_index is None else classified[:baseline_index]
-    )
+    return classified if baseline_index is None else classified[:baseline_index]
 
+
+def plan_no_fill_suspension_clear(
+    rows: Sequence[Mapping[str, object]],
+) -> NoFillSuspensionClearPlan:
+    """Select the newest completed no-fill that can safely reset pair history."""
+
+    current_rounds = _current_pair_rounds(rows)
+    newer_kick_ids: list[int] = []
+    for evidence in current_rounds:
+        if evidence.outcome == RoundOutcome.NO_FILL:
+            return NoFillSuspensionClearPlan(
+                baseline_kick_id=evidence.kick_id,
+                newer_kick_ids=tuple(newer_kick_ids),
+            )
+        if evidence.outcome == RoundOutcome.INCOMPLETE:
+            newer_kick_ids.append(evidence.kick_id)
+            continue
+        if evidence.outcome == RoundOutcome.UNKNOWN:
+            raise ValueError(
+                f"cannot clear across ambiguous round {evidence.kick_id}: {evidence.reason_code}"
+            )
+        raise ValueError(
+            "no no-fill suspension to clear after the latest productive round"
+        )
+    raise ValueError("no completed no-fill round is available to clear")
+
+
+def classify_pair_operations(rows: Sequence[Mapping[str, object]]) -> RoundSequence:
+    """Classify the latest contiguous sequence after any reviewed baseline."""
+
+    current_rounds = _current_pair_rounds(rows)
     sequence: list[RoundEvidence] = []
     consecutive_no_fills = 0
     terminal: RoundOutcome | None = None

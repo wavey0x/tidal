@@ -11,6 +11,7 @@ from tidal.auction_rounds import (
     RoundOutcome,
     classify_pair_operations,
     classify_round,
+    plan_no_fill_suspension_clear,
 )
 
 
@@ -271,6 +272,64 @@ def test_third_no_fill_blocks_and_only_scoped_override_bypasses_exhaustion() -> 
     )
     assert overridden.action == NoFillAction.ALLOW
     assert overridden.reason_code == NoFillReason.MANUAL_RETRY_OVERRIDE
+
+
+def test_clear_no_fill_suspension_baselines_latest_completed_no_fill() -> None:
+    rows = [
+        *completed_no_fill(1, hour=0),
+        *completed_no_fill(3, hour=14),
+        *completed_no_fill(5, hour=40),
+    ]
+
+    plan = plan_no_fill_suspension_clear(rows)
+
+    assert plan.baseline_kick_id == 5
+    assert plan.newer_kick_ids == ()
+    next(row for row in rows if row["id"] == 5)["historical_baseline"] = 1
+    decision = NoFillGuard(Repo(rows), [720, 1440]).decide(
+        auction_address=AUCTION,
+        token_address=TOKEN,
+        now=NOW + timedelta(days=4),
+    )
+    assert decision.action == NoFillAction.ALLOW
+    assert decision.reason_code == NoFillReason.INITIAL
+
+
+def test_clear_no_fill_suspension_preserves_newer_incomplete_round() -> None:
+    rows = [
+        *completed_no_fill(1, hour=0),
+        *completed_no_fill(3, hour=14),
+        kick(5, hour=40),
+    ]
+
+    plan = plan_no_fill_suspension_clear(rows)
+
+    assert plan.baseline_kick_id == 3
+    assert plan.newer_kick_ids == (5,)
+    next(row for row in rows if row["id"] == 3)["historical_baseline"] = 1
+    incomplete = NoFillGuard(Repo(rows), [720, 1440]).decide(
+        auction_address=AUCTION,
+        token_address=TOKEN,
+        now=NOW + timedelta(days=4),
+    )
+    assert incomplete.action == NoFillAction.BLOCK
+    assert incomplete.reason_code == NoFillReason.ROUND_INCOMPLETE
+
+    rows.append(resolve(6, kick_id=5, hour=41))
+    first_new_no_fill = NoFillGuard(Repo(rows), [720, 1440]).decide(
+        auction_address=AUCTION,
+        token_address=TOKEN,
+        now=NOW + timedelta(hours=42),
+    )
+    assert first_new_no_fill.action == NoFillAction.DEFER
+    assert first_new_no_fill.consecutive_no_fills == 1
+
+
+def test_clear_no_fill_suspension_refuses_productive_history() -> None:
+    rows = [kick(1), resolve(2, recovered="0")]
+
+    with pytest.raises(ValueError, match="latest productive round"):
+        plan_no_fill_suspension_clear(rows)
 
 
 def test_productive_round_resets_older_no_fills() -> None:

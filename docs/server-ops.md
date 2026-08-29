@@ -18,6 +18,7 @@ The intended runtime surface is:
 
 - `tidal-server db migrate`
 - `tidal-server db repair-auction-rounds`
+- `tidal-server db clear-no-fill-suspension`
 - `tidal-server scan run`
 - `tidal-server api serve`
 - `tidal-server auth ...`

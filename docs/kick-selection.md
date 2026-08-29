@@ -117,17 +117,19 @@ their configured 12-hour and 24-hour backoffs are due. A third no-fill blocks
 automation. Incomplete or ambiguous evidence also blocks.
 
 A productive round resets the sequence. Every retry still uses the current live
-balance and fresh quotes. The only bypass is one exact manual preparation with
-`--auction`, `--token`, and `--allow-no-fill-retry`; it cannot bypass incomplete
-or unknown evidence.
+balance and fresh quotes. One exact manual preparation can bypass exhausted
+retries with `--auction`, `--token`, and `--allow-no-fill-retry`; it cannot
+bypass incomplete or unknown evidence.
 
 ## Cooldown Check
 
 After the no-fill guard, Tidal checks recent kick history for the same `(auction, token)` pair.
 
-A reviewed historical baseline created by the one-time database repair is a hard
-cutoff for this sequence. No-fill counting starts with the first canonical round
-after that baseline; the retained older rows remain available for audit.
+A reviewed baseline is a hard cutoff for this sequence. It can come from the
+one-time database repair or the explicit `tidal-server db
+clear-no-fill-suspension` operator command. No-fill counting starts with the
+first canonical round after that baseline; all older rows remain available for
+audit.
 
 If the pair was kicked too recently, it is marked as:
 

@@ -191,6 +191,25 @@ def _seed_kick_guard_status(settings: Settings) -> None:
         session.commit()
 
 
+def _seed_kick_prepare_pause(settings: Settings) -> None:
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        session.execute(
+            models.kick_prepare_status_latest.insert().values(
+                source_type="strategy",
+                source_address="0x2000000000000000000000000000000000000002",
+                auction_address="0x3000000000000000000000000000000000000003",
+                token_address="0x5000000000000000000000000000000000000005",
+                status="PAUSED",
+                reason="AUCTION_PRICE_GRANULARITY",
+                source_balance_raw="1000000000000000000",
+                detail_json='{"terminalAskRaw":"115"}',
+                checked_at="2026-03-28T00:04:00+00:00",
+            )
+        )
+        session.commit()
+
+
 def _record_action_transaction(
     client: TestClient,
     headers: dict[str, str],
@@ -232,6 +251,7 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     _init_db(settings)
     _seed_dashboard_data(settings)
     _seed_kick_guard_status(settings)
+    _seed_kick_prepare_pause(settings)
     client = TestClient(create_app(settings))
 
     response = client.get(
@@ -250,6 +270,9 @@ def test_dashboard_endpoint_returns_rows(tmp_path: Path) -> None:
     assert row["kickGuardReason"] == "curve_gauge_killed"
     assert row["kickGuardDetail"] == "Curve gauge is killed"
     assert row["kickGuardCheckedAt"] == "2026-03-28T00:02:00+00:00"
+    assert row["balances"][0]["kickPrepareStatus"] == "PAUSED"
+    assert row["balances"][0]["kickPrepareReason"] == "AUCTION_PRICE_GRANULARITY"
+    assert row["balances"][0]["kickPrepareCheckedAt"] == "2026-03-28T00:04:00+00:00"
     expected_logo_url = token_logo_url(
         chain_id=1,
         address="0x5000000000000000000000000000000000000005",
@@ -380,6 +403,65 @@ def test_kick_prepare_route_threads_curve_quote_and_guard_overrides(tmp_path: Pa
     assert captured["txn_max_gas_limit"] == 2_500_000
     assert captured["min_usd_value"] == 200.0
     assert captured["allow_killed_gauge"] is True
+
+
+def test_kick_prepare_route_records_precision_pause(tmp_path: Path, monkeypatch) -> None:
+    settings = _make_settings(tmp_path)
+    _init_db(settings)
+    source = "0x2000000000000000000000000000000000000002"
+    auction = "0x3000000000000000000000000000000000000003"
+    token = "0x5000000000000000000000000000000000000005"
+
+    async def fake_prepare_kick_action(session, settings, **kwargs):  # noqa: ANN001, ANN003
+        del session, settings, kwargs
+        return "noop", [], {
+            "preview": {
+                "preparedOperations": [],
+                "skippedDuringPrepare": [
+                    {
+                        "sourceType": "strategy",
+                        "sourceAddress": source,
+                        "auctionAddress": auction,
+                        "tokenAddress": token,
+                        "reasonCode": "AUCTION_PRICE_GRANULARITY",
+                        "reasonData": {
+                            "sourceBalanceRaw": "1000",
+                            "floorQuoteAmountRaw": "91",
+                            "terminalAskRaw": "115",
+                            "wantDecimals": 18,
+                        },
+                    }
+                ],
+            },
+            "transactions": [],
+        }
+
+    monkeypatch.setattr(
+        "tidal.api.routes.kick.prepare_kick_action",
+        fake_prepare_kick_action,
+    )
+
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/v1/tidal/kick/prepare",
+        headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+        json={
+            "sourceType": "strategy",
+            "sourceAddress": source,
+            "auctionAddress": auction,
+            "tokenAddress": token,
+        },
+    )
+
+    assert response.status_code == 200
+    engine = create_engine(settings.database_url, future=True)
+    with Session(engine, future=True) as session:
+        row = session.execute(
+            select(models.kick_prepare_status_latest)
+        ).mappings().one()
+    assert row["status"] == "PAUSED"
+    assert row["reason"] == "AUCTION_PRICE_GRANULARITY"
+    assert row["source_balance_raw"] == "1000"
 
 
 def test_auction_settle_prepare_route_threads_force_override(tmp_path: Path, monkeypatch) -> None:

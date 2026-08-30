@@ -505,6 +505,20 @@ function getAuctionSellTokenTooltip(balance) {
   }
 }
 
+function getKickPrepareTooltip(balance) {
+  if (
+    balance.kickPrepareStatus !== "PAUSED"
+    || balance.kickPrepareReason !== "AUCTION_PRICE_GRANULARITY"
+  ) {
+    return "";
+  }
+  return (
+    "Kick paused: the sell token is above the USD threshold, but auction v1.0.4 "
+    + "rounding means the current market price would not be reached before the auction "
+    + "ends. The kick will wait for a larger sell amount."
+  );
+}
+
 function parseBig(value) {
   if (value == null) {
     return null;
@@ -2014,6 +2028,22 @@ function TokenLogo({ src, alt }) {
   );
 }
 
+function KickPauseIcon({ title }) {
+  return (
+    <span
+      className="kick-pause-icon"
+      title={title}
+      aria-label={title}
+      role="img"
+    >
+      <svg viewBox="0 0 12 12" aria-hidden="true">
+        <rect x="2.5" y="2" width="2.25" height="8" rx="0.75" />
+        <rect x="7.25" y="2" width="2.25" height="8" rx="0.75" />
+      </svg>
+    </span>
+  );
+}
+
 function TokenBalances({
   balances,
   displayMode,
@@ -2025,6 +2055,7 @@ function TokenBalances({
       <div className="token-stack">
         {balances.map((balance) => {
           const auctionTooltip = getAuctionSellTokenTooltip(balance);
+          const kickPrepareTooltip = getKickPrepareTooltip(balance);
           const balanceTitle = displayMode === "usd"
             ? "Click to show token amounts"
             : "Click to show USD values";
@@ -2059,19 +2090,24 @@ function TokenBalances({
                   ariaLabel={`Copy token address for ${tokenSymbol || "token"}`}
                 />
               </span>
-              <button
-                type="button"
-                className="mono token-balance token-balance-button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleMode();
-                }}
-                title={title}
-              >
-                {displayMode === "usd"
-                  ? (balance.usdValue ? `$${formatBalance(balance.usdValue)}` : "?")
-                  : formatBalance(balance.normalizedBalance)}
-              </button>
+              <span className="token-balance-wrap">
+                <button
+                  type="button"
+                  className="mono token-balance token-balance-button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleMode();
+                  }}
+                  title={title}
+                >
+                  {displayMode === "usd"
+                    ? (balance.usdValue ? `$${formatBalance(balance.usdValue)}` : "?")
+                    : formatBalance(balance.normalizedBalance)}
+                </button>
+                {kickPrepareTooltip ? (
+                  <KickPauseIcon title={kickPrepareTooltip} />
+                ) : null}
+              </span>
             </div>
           );
         })}

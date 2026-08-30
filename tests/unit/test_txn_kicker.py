@@ -16,7 +16,14 @@ from tidal.transaction_service.kick_execute import KickExecutor
 from tidal.transaction_service.kick_policy import PricingPolicy, PricingProfile
 from tidal.transaction_service.kick_prepare import KickPreparer
 from tidal.transaction_service.kick_tx import KickTxBuilder
-from tidal.transaction_service.types import AuctionInspection, KickCandidate, KickStatus, PreparedKick, PreparedResolveAuction
+from tidal.transaction_service.types import (
+    AuctionInspection,
+    KickCandidate,
+    KickSkipReason,
+    KickStatus,
+    PreparedKick,
+    PreparedResolveAuction,
+)
 
 
 @pytest.fixture
@@ -355,6 +362,14 @@ async def test_round_8_v104_is_rejected_by_terminal_guard() -> None:
     result = await _prepare_round_vector("1.0.4")
 
     assert result.status == KickStatus.SKIP
+    assert result.reason_code == KickSkipReason.AUCTION_PRICE_GRANULARITY
+    assert result.reason_data == {
+        "sourceBalanceRaw": "843453068587196135157",
+        "sellAmountRaw": "843453068587196135157",
+        "floorQuoteAmountRaw": "96953501367832632",
+        "terminalAskRaw": "115138258855697109",
+        "wantDecimals": 18,
+    }
     assert "latent terminal full-lot ask 0.115138258855697109" in str(result.error_message)
 
 

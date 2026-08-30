@@ -423,6 +423,7 @@ async def test_prepare_kick_action_skips_unsendable_batch_kick_when_gas_estimate
     assert data["preview"]["preparedOperations"] == []
     assert data["preview"]["skippedDuringPrepare"] == [
         {
+            "sourceType": candidate.source_type,
             "sourceAddress": candidate.source_address,
             "sourceName": candidate.source_name,
             "auctionAddress": candidate.auction_address,

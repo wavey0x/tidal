@@ -44,7 +44,10 @@ SELECT
     {kick_guard_disabled_column} AS kick_guard_disabled,
     {kick_guard_reason_column} AS kick_guard_reason,
     {kick_guard_detail_column} AS kick_guard_detail,
-    {kick_guard_checked_at_column} AS kick_guard_checked_at
+    {kick_guard_checked_at_column} AS kick_guard_checked_at,
+    {kick_prepare_status_column} AS kick_prepare_status,
+    {kick_prepare_reason_column} AS kick_prepare_reason,
+    {kick_prepare_checked_at_column} AS kick_prepare_checked_at
 FROM strategy_token_balances_latest stbl
 JOIN strategies s ON s.address = stbl.strategy_address
 JOIN vaults v ON v.address = s.vault_address
@@ -53,6 +56,7 @@ JOIN tokens t ON t.address = stbl.token_address
 {auction_enabled_scan_join}
 {auction_enabled_token_join}
 {kick_guard_join}
+{kick_prepare_status_join}
 ORDER BY s.vault_address, stbl.strategy_address, t.symbol
 """
 
@@ -90,13 +94,17 @@ SELECT
     NULL AS kick_guard_disabled,
     NULL AS kick_guard_reason,
     NULL AS kick_guard_detail,
-    NULL AS kick_guard_checked_at
+    NULL AS kick_guard_checked_at,
+    {kick_prepare_status_column} AS kick_prepare_status,
+    {kick_prepare_reason_column} AS kick_prepare_reason,
+    {kick_prepare_checked_at_column} AS kick_prepare_checked_at
 FROM fee_burner_token_balances_latest fbtbl
 JOIN fee_burners fb ON fb.address = fbtbl.fee_burner_address
 JOIN tokens t ON t.address = fbtbl.token_address
 {fee_burner_want_join}
 {auction_enabled_scan_join}
 {auction_enabled_token_join}
+{kick_prepare_status_join}
 ORDER BY fbtbl.fee_burner_address, t.symbol
 """
 
@@ -225,6 +233,9 @@ class DashboardReadService:
                     "auctionSellTokenStatus": self._derive_auction_sell_token_status(detail_row),
                     "auctionSellTokenStatusScannedAt": detail_row["auction_enabled_scan_scanned_at"],
                     "auctionSellTokenStatusError": detail_row["auction_enabled_scan_error"],
+                    "kickPrepareStatus": detail_row["kick_prepare_status"],
+                    "kickPrepareReason": detail_row["kick_prepare_reason"],
+                    "kickPrepareCheckedAt": detail_row["kick_prepare_checked_at"],
                 }
             )
         return rows
@@ -307,6 +318,7 @@ class DashboardReadService:
             "kick_txs.chain_id": self._has_column("kick_txs", "chain_id"),
             "kick_txs.auctionscan_round_id": self._has_column("kick_txs", "auctionscan_round_id"),
             "kick_guard_status_latest": self._has_table("kick_guard_status_latest"),
+            "kick_prepare_status_latest": self._has_table("kick_prepare_status_latest"),
             "fee_burners": self._has_table("fee_burners"),
             "fee_burners.auction_address": self._has_column("fee_burners", "auction_address"),
             "fee_burners.auction_version": self._has_column("fee_burners", "auction_version"),
@@ -367,6 +379,24 @@ class DashboardReadService:
             kick_guard_checked_at_column = "NULL"
             kick_guard_join = ""
 
+        if features["kick_prepare_status_latest"] and features["strategies.auction_address"]:
+            kick_prepare_status_column = "kps.status"
+            kick_prepare_reason_column = "kps.reason"
+            kick_prepare_checked_at_column = "kps.checked_at"
+            kick_prepare_status_join = (
+                "LEFT JOIN kick_prepare_status_latest kps "
+                "ON kps.source_type = 'strategy' "
+                "AND kps.source_address = s.address "
+                "AND kps.auction_address = s.auction_address "
+                "AND kps.token_address = stbl.token_address "
+                "AND kps.source_balance_raw = stbl.raw_balance"
+            )
+        else:
+            kick_prepare_status_column = "NULL"
+            kick_prepare_reason_column = "NULL"
+            kick_prepare_checked_at_column = "NULL"
+            kick_prepare_status_join = ""
+
         return STRATEGY_DETAIL_ROWS_SQL.format(
             auction_column=auction_column,
             auction_version_column=auction_version_column,
@@ -385,6 +415,10 @@ class DashboardReadService:
             kick_guard_detail_column=kick_guard_detail_column,
             kick_guard_checked_at_column=kick_guard_checked_at_column,
             kick_guard_join=kick_guard_join,
+            kick_prepare_status_column=kick_prepare_status_column,
+            kick_prepare_reason_column=kick_prepare_reason_column,
+            kick_prepare_checked_at_column=kick_prepare_checked_at_column,
+            kick_prepare_status_join=kick_prepare_status_join,
         )
 
     def _build_fee_burner_detail_rows_sql(self, features: dict[str, bool]) -> str:
@@ -422,6 +456,24 @@ class DashboardReadService:
             auction_token_enabled_column = "NULL"
             auction_enabled_token_join = ""
 
+        if features["kick_prepare_status_latest"] and features["fee_burners.auction_address"]:
+            kick_prepare_status_column = "kps.status"
+            kick_prepare_reason_column = "kps.reason"
+            kick_prepare_checked_at_column = "kps.checked_at"
+            kick_prepare_status_join = (
+                "LEFT JOIN kick_prepare_status_latest kps "
+                "ON kps.source_type = 'fee_burner' "
+                "AND kps.source_address = fb.address "
+                "AND kps.auction_address = fb.auction_address "
+                "AND kps.token_address = fbtbl.token_address "
+                "AND kps.source_balance_raw = fbtbl.raw_balance"
+            )
+        else:
+            kick_prepare_status_column = "NULL"
+            kick_prepare_reason_column = "NULL"
+            kick_prepare_checked_at_column = "NULL"
+            kick_prepare_status_join = ""
+
         return FEE_BURNER_DETAIL_ROWS_SQL.format(
             fee_burner_auction_column=fee_burner_auction_column,
             fee_burner_auction_version_column=fee_burner_auction_version_column,
@@ -434,6 +486,10 @@ class DashboardReadService:
             auction_token_enabled_column=auction_token_enabled_column,
             auction_enabled_scan_join=auction_enabled_scan_join,
             auction_enabled_token_join=auction_enabled_token_join,
+            kick_prepare_status_column=kick_prepare_status_column,
+            kick_prepare_reason_column=kick_prepare_reason_column,
+            kick_prepare_checked_at_column=kick_prepare_checked_at_column,
+            kick_prepare_status_join=kick_prepare_status_join,
         )
 
     def _build_kicks_sql(self, features: dict[str, bool]) -> str:

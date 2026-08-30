@@ -614,6 +614,46 @@ class KickGuardStatusRepository:
         }
 
 
+class KickPrepareStatusRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def replace_for_candidates(
+        self,
+        candidate_keys: Iterable[tuple[str, str, str, str]],
+        pause_rows: Iterable[dict[str, object]],
+    ) -> None:
+        for source_type, source_address, auction_address, token_address in set(candidate_keys):
+            self.session.execute(
+                delete(models.kick_prepare_status_latest).where(
+                    models.kick_prepare_status_latest.c.source_type == source_type,
+                    models.kick_prepare_status_latest.c.source_address == source_address,
+                    models.kick_prepare_status_latest.c.auction_address == auction_address,
+                    models.kick_prepare_status_latest.c.token_address == token_address,
+                )
+            )
+
+        for row in pause_rows:
+            stmt = insert(models.kick_prepare_status_latest).values(**row)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[
+                    models.kick_prepare_status_latest.c.source_type,
+                    models.kick_prepare_status_latest.c.source_address,
+                    models.kick_prepare_status_latest.c.auction_address,
+                    models.kick_prepare_status_latest.c.token_address,
+                ],
+                set_={
+                    "status": row["status"],
+                    "reason": row["reason"],
+                    "source_balance_raw": row["source_balance_raw"],
+                    "detail_json": row.get("detail_json"),
+                    "checked_at": row["checked_at"],
+                },
+            )
+            self.session.execute(stmt)
+        self.session.commit()
+
+
 class ScanRunRepository:
     def __init__(self, session: Session):
         self.session = session

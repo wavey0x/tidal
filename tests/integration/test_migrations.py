@@ -107,7 +107,7 @@ def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
         "SUCCESS",
         "run-1",
     )
-    assert revision == ("0025_add_auction_history_baselines",)
+    assert revision == ("0026_add_kick_prepare_status_latest",)
 
     command.downgrade(config, "0023_bounded_retry_alerts")
 
@@ -179,4 +179,37 @@ def test_source_and_packaged_baseline_migrations_are_identical() -> None:
         root / "tidal/_resources/alembic/versions/0025_add_auction_history_baselines.py"
     )
 
+    assert source.read_bytes() == packaged.read_bytes()
+
+
+def test_kick_prepare_status_migration_and_packaged_copy(tmp_path: Path) -> None:
+    db_path = tmp_path / "tidal.db"
+    config = _alembic_config(db_path)
+    command.upgrade(config, "head")
+
+    with sqlite3.connect(db_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(kick_prepare_status_latest)"
+            )
+        }
+    assert {
+        "source_type",
+        "source_address",
+        "auction_address",
+        "token_address",
+        "status",
+        "reason",
+        "source_balance_raw",
+        "detail_json",
+        "checked_at",
+    } <= columns
+
+    root = Path(__file__).resolve().parents[2]
+    source = root / "alembic/versions/0026_add_kick_prepare_status_latest.py"
+    packaged = (
+        root
+        / "tidal/_resources/alembic/versions/0026_add_kick_prepare_status_latest.py"
+    )
     assert source.read_bytes() == packaged.read_bytes()

@@ -1062,9 +1062,46 @@ tbody tr:hover td {
   color: var(--text-primary);
 }
 
+.token-balance-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  width: 86px;
+  min-width: 86px;
+}
+
+.token-balance-wrap .token-balance {
+  width: auto;
+  min-width: 0;
+}
+
 .strategies-table .token-balance {
   width: auto;
   min-width: 0;
+}
+
+.strategies-table .token-balance-wrap {
+  width: auto;
+  min-width: 0;
+}
+
+.kick-pause-icon {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning);
+  cursor: help;
+}
+
+.kick-pause-icon svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
 }
 
 .token-balance-button {

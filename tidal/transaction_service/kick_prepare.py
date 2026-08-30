@@ -31,7 +31,14 @@ from tidal.transaction_service.kick_shared import (
     _quote_metadata_resolves_to_want,
     _select_sell_size,
 )
-from tidal.transaction_service.types import AuctionInspection, KickCandidate, KickResult, KickStatus, PreparedKick
+from tidal.transaction_service.types import (
+    AuctionInspection,
+    KickCandidate,
+    KickResult,
+    KickSkipReason,
+    KickStatus,
+    PreparedKick,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -541,6 +548,7 @@ class KickPreparer:
         if terminal_ask_raw > floor_quote_amount_raw:
             floor_quote_display = to_decimal_string(floor_quote_amount_raw, want_decimals)
             terminal_display = to_decimal_string(terminal_ask_raw, want_decimals)
+            is_v104_rounding_pause = auction_spec.version == "1.0.4"
             return KickResult(
                 kick_tx_id=0,
                 status=KickStatus.SKIP,
@@ -549,7 +557,26 @@ class KickPreparer:
                     f"latent terminal full-lot ask {terminal_display} "
                     f"{candidate.want_symbol or 'want-token'}"
                 ),
+                sell_amount=str(sell_amount),
+                live_balance_raw=live_balance_raw,
+                usd_value=str(selected_sell.selected_sell_usd_value),
                 quote_response_json=quote_response_json,
+                reason_code=(
+                    KickSkipReason.AUCTION_PRICE_GRANULARITY
+                    if is_v104_rounding_pause
+                    else None
+                ),
+                reason_data=(
+                    {
+                        "sourceBalanceRaw": str(live_balance_raw),
+                        "sellAmountRaw": str(sell_amount),
+                        "floorQuoteAmountRaw": str(floor_quote_amount_raw),
+                        "terminalAskRaw": str(terminal_ask_raw),
+                        "wantDecimals": want_decimals,
+                    }
+                    if is_v104_rounding_pause
+                    else None
+                ),
             )
 
         want_price_usd_str: str | None = None

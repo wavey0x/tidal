@@ -37,6 +37,10 @@ class KickStatus(str, Enum):
     SKIP = "SKIP"
 
 
+class KickSkipReason(str, Enum):
+    AUCTION_PRICE_GRANULARITY = "AUCTION_PRICE_GRANULARITY"
+
+
 @dataclass(slots=True)
 class KickCandidate:
     """Row from the shortlist query — a (source, token) pair above threshold."""
@@ -210,6 +214,8 @@ class KickResult:
     live_balance_raw: int | None = None
     usd_value: str | None = None
     quote_response_json: str | None = None
+    reason_code: KickSkipReason | None = None
+    reason_data: dict[str, object] | None = None
     execution_report: TransactionExecutionReport | None = None
 
 
@@ -281,6 +287,7 @@ class SkippedPreparedCandidate:
 
     def to_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {
+            "sourceType": self.candidate.source_type,
             "sourceAddress": self.candidate.source_address,
             "sourceName": self.candidate.source_name,
             "auctionAddress": self.candidate.auction_address,
@@ -289,6 +296,10 @@ class SkippedPreparedCandidate:
             "wantSymbol": self.candidate.want_symbol,
             "reason": self.reason,
         }
+        if self.result is not None and self.result.reason_code is not None:
+            payload["reasonCode"] = self.result.reason_code.value
+        if self.result is not None and self.result.reason_data is not None:
+            payload["reasonData"] = self.result.reason_data
         if self.blocked_token_address is not None:
             payload["blockedTokenAddress"] = self.blocked_token_address
         if self.blocked_token_symbol is not None:

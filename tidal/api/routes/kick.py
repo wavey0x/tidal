@@ -11,6 +11,7 @@ from tidal.api.schemas.kick import KickInspectRequest, KickPrepareRequest
 from tidal.api.services.action_prepare import inspect_kicks, prepare_kick_action
 from tidal.api.services.auctionscan import AuctionScanService
 from tidal.config import Settings
+from tidal.kick_prepare_status import record_kick_prepare_status
 from tidal.security import redact_sensitive_data
 
 router = APIRouter()
@@ -72,6 +73,11 @@ async def post_kick_prepare(
         txn_max_gas_limit=payload.txn_max_gas_limit,
         allow_killed_gauge=payload.allow_killed_gauge,
         allow_no_fill_retry=payload.allow_no_fill_retry,
+    )
+    preview = data.get("preview")
+    record_kick_prepare_status(
+        session,
+        preview if isinstance(preview, dict) else None,
     )
     return {"status": status, "warnings": redact_sensitive_data(warnings), "data": redact_sensitive_data(data)}
 

@@ -45,6 +45,10 @@
   font-size: 12px;
 }
 
+.auction-action-status .deployment-confirmed {
+  color: var(--success);
+}
+
 .alerts-heading {
   display: flex;
   align-items: flex-start;

@@ -4,7 +4,8 @@ export const WANT = "0x3333333333333333333333333333333333333333";
 export const AUCTION = "0x4444444444444444444444444444444444444444";
 
 export async function mockPublicApi(page) {
-  const state = { balance: "1", failed: false, dashboardReads: 0, logReads: [], alertReads: 0, holdDashboard: null, warnings: [] };
+  const state = { balance: "1", failed: false, dashboardReads: 0, logReads: [], alertReads: 0, holdDashboard: null,
+    warnings: [], defaultsWarnings: [], prepareWarnings: [] };
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     return url.hostname === "127.0.0.1" ? route.continue() : route.abort();
@@ -14,6 +15,7 @@ export async function mockPublicApi(page) {
     if (request.headers().authorization) throw new Error("Browser sent an operator credential");
     const url = new URL(request.url());
     let data;
+    let warnings = state.warnings;
     if (url.pathname.endsWith("/dashboard")) {
       state.dashboardReads += 1;
       if (state.holdDashboard) await state.holdDashboard;
@@ -37,10 +39,43 @@ export async function mockPublicApi(page) {
     } else if (url.pathname.endsWith("/alerts")) {
       state.alertReads += 1;
       data = { items: [], needsActionCount: Number(state.balance), evaluatedAt: "2026-09-04T20:00:00Z" };
+    } else if (url.pathname.endsWith("/deploy-defaults")) {
+      warnings = state.defaultsWarnings;
+      data = { strategyAddress: STRATEGY, strategyName: "Fixture Strategy", receiverAddress: STRATEGY,
+        wantAddress: WANT, wantSymbol: "USDC", factoryAddress: "0x5555555555555555555555555555555555555555",
+        governanceAddress: "0x6666666666666666666666666666666666666666", factoryVersion: "1.0.5",
+        startingPrice: "1000000000000000000", startingPriceDisplay: "1", salt: "0x" + "00".repeat(32),
+        predictedAuctionAddress: AUCTION };
+    } else if (url.pathname.endsWith("/deploy/browser-prepare")) {
+      warnings = state.prepareWarnings;
+      data = { transactions: [{ to: "0x5555555555555555555555555555555555555555", data: "0x00", value: "0x0", chainId: 1 }] };
     } else {
       return route.fulfill({ status: 404, json: { detail: "Unmocked fixture route" } });
     }
-    return route.fulfill({ json: { status: "ok", warnings: state.warnings, data } });
+    return route.fulfill({ json: { status: "ok", warnings, data } });
   });
   return state;
+}
+
+export async function mockWallet(page) {
+  await page.addInitScript(() => {
+    window.walletFixture = { account: "0x7777777777777777777777777777777777777777", chainId: "0x1",
+      receipt: { status: "0x1" }, receiptError: false, sends: 0, receiptReads: 0 };
+    window.ethereum = {
+      isRabby: true,
+      async request({ method, params }) {
+        const state = window.walletFixture;
+        if (method === "eth_requestAccounts" || method === "eth_accounts") return [state.account];
+        if (method === "eth_chainId") return state.chainId;
+        if (method === "wallet_switchEthereumChain") { state.chainId = params[0].chainId; return null; }
+        if (method === "eth_sendTransaction") { state.sends += 1; return "0x" + "ab".repeat(32); }
+        if (method === "eth_getTransactionReceipt") {
+          state.receiptReads += 1;
+          if (state.receiptError) throw new Error("Receipt temporarily unavailable");
+          return state.receipt;
+        }
+        throw new Error(`Unexpected wallet fixture method: ${method}`);
+      },
+    };
+  });
 }

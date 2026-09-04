@@ -10,9 +10,15 @@ export function useLiveData(url, { active = true, viewKey = "", loadInitially = 
   useEffect(() => {
     let disposed = false;
     let controller = null;
+    let refreshAgain = false;
 
-    async function refresh() {
-      if (disposed || controller || document.visibilityState === "hidden") return;
+    async function refresh(force = false) {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (controller) {
+        if (force) refreshAgain = true;
+        return;
+      }
+      refreshAgain = false;
       controller = new AbortController();
       setRefreshing(true);
       try {
@@ -33,29 +39,33 @@ export function useLiveData(url, { active = true, viewKey = "", loadInitially = 
         }
       } finally {
         controller = null;
-        if (!disposed) setRefreshing(false);
+        if (!disposed) {
+          setRefreshing(false);
+          if (refreshAgain) refresh();
+        }
       }
     }
 
     refreshRef.current = refresh;
     setRefreshing(false);
     if (active || (loadInitially && !loadedRef.current)) refresh();
-    const interval = active ? window.setInterval(refresh, 30000) : null;
+    const refreshAutomatically = () => refresh();
+    const interval = active ? window.setInterval(refreshAutomatically, 30000) : null;
     if (active) {
-      window.addEventListener("focus", refresh);
-      document.addEventListener("visibilitychange", refresh);
+      window.addEventListener("focus", refreshAutomatically);
+      document.addEventListener("visibilitychange", refreshAutomatically);
     }
     return () => {
       disposed = true;
       controller?.abort();
       window.clearInterval(interval);
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refreshAutomatically);
+      document.removeEventListener("visibilitychange", refreshAutomatically);
       if (refreshRef.current === refresh) refreshRef.current = null;
     };
   }, [url, active, viewKey, loadInitially, errorMessage]);
 
-  const refresh = useCallback(() => refreshRef.current?.(), []);
+  const refresh = useCallback(() => refreshRef.current?.(true), []);
   const current = result.url === url ? result : { data: null, updatedAt: null, error: "" };
   return { ...current, refreshing, loading: current.data === null && !current.error, refresh };
 }

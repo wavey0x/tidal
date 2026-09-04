@@ -256,8 +256,11 @@ function formatDeployConfirmation(spec) {
   return lines.join("\n");
 }
 
-async function waitForTransactionReceipt(provider, txHash, attempts = 60, delayMs = 2000) {
+async function waitForTransactionReceipt(provider, txHash, chainId, attempts = 60, delayMs = 2000) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (chainId != null && normalizeChainIdValue(await provider.request({ method: "eth_chainId" })) !== chainId) {
+      throw new Error(`Switch your wallet to chain ${chainId}, then check again.`);
+    }
     const receipt = await provider.request({
       method: "eth_getTransactionReceipt",
       params: [txHash],
@@ -265,15 +268,16 @@ async function waitForTransactionReceipt(provider, txHash, attempts = 60, delayM
     if (receipt) {
       return receipt;
     }
-    await new Promise((resolve) => {
-      window.setTimeout(resolve, delayMs);
-    });
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
   }
   return null;
 }
 
 function normalizeReceiptStatus(value) {
-  const normalized = hexToNumber(value);
+  if (typeof value !== "number" && (typeof value !== "string" || !/^(0x[0-9a-f]+|[0-9]+)$/i.test(value))) return null;
+  const normalized = Number(value);
   if (normalized === 0 || normalized === 1) {
     return normalized;
   }
@@ -884,18 +888,18 @@ function KickHistoryAuctionScanLink({ kick }) {
   );
 }
 
-function MissingAuctionAction({ deployState, onDeploy }) {
+function MissingAuctionAction({ deployState, onDeploy, onCheck }) {
   const status = deployState?.status || "idle";
   const txHash = deployState?.txHash || null;
   const error = deployState?.error || "";
   const isBusy = status === "preparing" || status === "wallet";
-  const txStatusLabel = status === "error" ? "failed" : "submitted";
+  const txStatusLabel = { confirmed: "confirmed", reverted: "failed", checking: "checking…" }[status] || "pending";
 
   return (
     <div className="auction-missing-state" onClick={(event) => event.stopPropagation()}>
       {txHash ? (
         <div className="auction-action-status">
-          <span className="row-secondary mono">{txStatusLabel}</span>
+          <span className={`row-secondary mono ${status === "confirmed" ? "deployment-confirmed" : ""}`}>{txStatusLabel}</span>
           <span className="kick-separator mono">·</span>
           <span onClick={(event) => event.stopPropagation()}>
             <EtherscanTxLink txHash={txHash} />
@@ -924,6 +928,12 @@ function MissingAuctionAction({ deployState, onDeploy }) {
           )}
         </button>
       )}
+      {txHash && (status === "pending" || status === "checking") ? (
+        <button type="button" className="auction-action-link" onClick={onCheck} disabled={status === "checking"}>
+          Check again
+        </button>
+      ) : null}
+      {status === "confirmed" ? <div className="row-secondary">Waiting for scanner mapping.</div> : null}
       {error ? <div className="auction-action-error">{error}</div> : null}
     </div>
   );
@@ -2027,6 +2037,7 @@ function StrategyDetailContent({
   onToggleMode,
   deployState,
   onDeploy,
+  onCheckDeploy,
   initialHistoryExpanded = false,
 }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
@@ -2084,6 +2095,7 @@ function StrategyDetailContent({
               <MissingAuctionAction
                 deployState={deployState}
                 onDeploy={onDeploy}
+                onCheck={onCheckDeploy}
               />
             }
           />
@@ -2126,6 +2138,7 @@ function StrategyDetailPanel({
   onToggleMode,
   deployState,
   onDeploy,
+  onCheckDeploy,
   initialHistoryExpanded = false,
 }) {
   return (
@@ -2137,6 +2150,7 @@ function StrategyDetailPanel({
         onToggleMode={onToggleMode}
         deployState={deployState}
         onDeploy={onDeploy}
+        onCheckDeploy={onCheckDeploy}
         initialHistoryExpanded={initialHistoryExpanded}
       />
     </DetailPanel>
@@ -2150,6 +2164,7 @@ function StrategyDetailModal({
   onToggleMode,
   deployState,
   onDeploy,
+  onCheckDeploy,
   initialHistoryExpanded = false,
   onClose,
 }) {
@@ -2162,6 +2177,7 @@ function StrategyDetailModal({
         onToggleMode={onToggleMode}
         deployState={deployState}
         onDeploy={onDeploy}
+        onCheckDeploy={onCheckDeploy}
         initialHistoryExpanded={initialHistoryExpanded}
       />
     </DetailModal>
@@ -2456,6 +2472,7 @@ export default function App() {
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
   const [deployStates, setDeployStates] = useState({});
   const [deployConfirm, setDeployConfirm] = useState(null);
+  const deployChecksRef = useRef(new Set());
   const auctionFilterMenuRef = useRef(null);
 
   const handlePageChange = (page) => {
@@ -2849,7 +2866,32 @@ export default function App() {
         throw new Error("Deploy defaults payload is incomplete");
       }
 
-      setDeployConfirm({ sourceAddress, payload: deployDefaults, provider });
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const account = Array.isArray(accounts) ? accounts[0] : null;
+      if (!account) throw new Error("No wallet account connected");
+      const prepareResponse = await apiFetch("/auctions/deploy/browser-prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          want: deployDefaults.wantAddress,
+          receiver: deployDefaults.receiverAddress || deployDefaults.strategyAddress || sourceAddress,
+          sender: account,
+          factory: deployDefaults.factoryAddress,
+          governance: deployDefaults.governanceAddress,
+          startingPrice: deployDefaults.startingPrice,
+          salt: deployDefaults.salt,
+        }),
+      });
+      const preparedPayload = await prepareResponse.json();
+      if (!prepareResponse.ok) throw new Error(preparedPayload?.detail || "Unable to prepare deploy transaction");
+      const txRequest = preparedPayload?.data?.transactions?.[0];
+      if (!txRequest?.to || !txRequest?.data) throw new Error("Deploy transaction payload is incomplete");
+      const warnings = [...new Set([
+        ...(Array.isArray(payload.warnings) ? payload.warnings : []),
+        ...(Array.isArray(deployDefaults.warnings) ? deployDefaults.warnings : []),
+        ...(Array.isArray(preparedPayload.warnings) ? preparedPayload.warnings : []),
+      ])];
+      setDeployConfirm({ sourceAddress, payload: { ...deployDefaults, warnings }, provider, account, txRequest });
     } catch (deployError) {
       updateDeployState(sourceAddress, {
         status: "idle",
@@ -2865,52 +2907,51 @@ export default function App() {
     setDeployConfirm(null);
   }
 
+  async function checkDeployment(sourceAddress, provider, txHash, chainId, attempts = 60) {
+    if (deployChecksRef.current.has(sourceAddress)) return;
+    deployChecksRef.current.add(sourceAddress);
+    updateDeployState(sourceAddress, { status: "checking", error: "", txHash, chainId });
+    try {
+      const receipt = await waitForTransactionReceipt(provider, txHash, chainId, attempts);
+      const receiptStatus = normalizeReceiptStatus(receipt?.status);
+      if (receiptStatus === 1) {
+        updateDeployState(sourceAddress, { status: "confirmed", error: "" });
+        dashboard.refresh();
+      } else if (receiptStatus === 0) {
+        updateDeployState(sourceAddress, { status: "reverted", error: "Deployment transaction reverted" });
+      } else {
+        updateDeployState(sourceAddress, { status: "pending", error: "Receipt not yet confirmed. Check again shortly." });
+      }
+    } catch (error) {
+      updateDeployState(sourceAddress, { status: "pending", error: formatDeployError(error) });
+    } finally {
+      deployChecksRef.current.delete(sourceAddress);
+    }
+  }
+
+  async function handleCheckDeployment(sourceAddress) {
+    const state = deployStates[sourceAddress];
+    if (!state?.txHash || deployChecksRef.current.has(sourceAddress)) return;
+    const provider = await getEthereumProvider();
+    if (!provider) {
+      updateDeployState(sourceAddress, { error: "Connect your wallet to check this transaction." });
+      return;
+    }
+    await checkDeployment(sourceAddress, provider, state.txHash, state.chainId, 1);
+  }
+
   async function handleDeployConfirm() {
     if (!deployConfirm) return;
-    const { sourceAddress, payload: deployDefaults, provider } = deployConfirm;
+    const { sourceAddress, provider, account, txRequest } = deployConfirm;
     setDeployConfirm(null);
 
     updateDeployState(sourceAddress, { status: "wallet", error: "" });
     let txHash = null;
 
     try {
-      const accounts = await provider.request({ method: "eth_requestAccounts" });
-      const account = Array.isArray(accounts) ? accounts[0] : null;
-      if (!account) {
-        throw new Error("No wallet account connected");
-      }
-
-      const prepareResponse = await apiFetch("/auctions/deploy/browser-prepare", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          want: deployDefaults.wantAddress,
-          receiver: deployDefaults.receiverAddress || deployDefaults.strategyAddress || sourceAddress,
-          sender: account,
-          factory: deployDefaults.factoryAddress,
-          governance: deployDefaults.governanceAddress,
-          startingPrice: deployDefaults.startingPrice,
-          salt: deployDefaults.salt,
-        }),
-      });
-
-      let preparedPayload = null;
-      try {
-        preparedPayload = await prepareResponse.json();
-      } catch {
-        preparedPayload = null;
-      }
-
-      if (!prepareResponse.ok) {
-        throw new Error(preparedPayload?.detail || "Unable to prepare deploy transaction");
-      }
-
-      const preparedAction = preparedPayload?.data;
-      const txRequest = preparedAction?.transactions?.[0];
-      if (!txRequest?.to || !txRequest?.data) {
-        throw new Error("Deploy transaction payload is incomplete");
+      const accounts = await provider.request({ method: "eth_accounts" });
+      if (!Array.isArray(accounts) || accounts[0]?.toLowerCase() !== account.toLowerCase()) {
+        throw new Error("Wallet account changed; prepare the deployment again.");
       }
 
       const requiredChainId = normalizeChainIdValue(txRequest.chainId);
@@ -2936,15 +2977,10 @@ export default function App() {
         ],
       });
 
-      updateDeployState(sourceAddress, { status: "submitted", error: "", txHash });
-
-      const receipt = await waitForTransactionReceipt(provider, txHash);
-      if (normalizeReceiptStatus(receipt?.status) === 0) {
-        throw new Error("Deployment transaction reverted");
-      }
+      await checkDeployment(sourceAddress, provider, txHash, requiredChainId);
     } catch (deployError) {
       updateDeployState(sourceAddress, {
-        status: txHash ? "error" : "idle",
+        status: txHash ? "pending" : "idle",
         error: formatDeployError(deployError),
         txHash,
       });
@@ -3121,6 +3157,7 @@ export default function App() {
                             <MissingAuctionAction
                               deployState={deployStates[row.sourceAddress]}
                               onDeploy={() => handleDeployStrategy(row)}
+                              onCheck={() => handleCheckDeployment(row.sourceAddress)}
                             />
                           }
                         />
@@ -3151,6 +3188,7 @@ export default function App() {
                         onToggleMode={toggleDisplayMode}
                         deployState={deployStates[row.sourceAddress]}
                         onDeploy={() => handleDeployStrategy(row)}
+                        onCheckDeploy={() => handleCheckDeployment(row.sourceAddress)}
                         initialHistoryExpanded={expandedKickRows.has(row.sourceAddress)}
                       />
                     ) : null}
@@ -3162,6 +3200,7 @@ export default function App() {
                         onToggleMode={toggleDisplayMode}
                         deployState={deployStates[row.sourceAddress]}
                         onDeploy={() => handleDeployStrategy(row)}
+                        onCheckDeploy={() => handleCheckDeployment(row.sourceAddress)}
                         initialHistoryExpanded={expandedKickRows.has(row.sourceAddress)}
                         onClose={() => toggleStrategyExpand(row.sourceAddress)}
                       />

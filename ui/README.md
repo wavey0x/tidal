@@ -12,6 +12,9 @@ React dashboard for the monorepo Tidal control-plane API.
 - Token logos loaded lazily from first-party `tokenLogoUrl` resources, with a bundled placeholder for unavailable images
 - Active views refresh on entry, browser focus, and every 30 seconds while visible, or with Refresh.
   Failed refreshes retain the last good data and show stale/last-updated feedback.
+- Wallet deployments connect the wallet, prepare a preview, and show API warnings before confirmation.
+  Receipts distinguish confirmed, reverted, and pending; Check again only checks the retained hash.
+  Confirmation remains visible until the scanner supplies the auction mapping.
 
 ## Run locally
 

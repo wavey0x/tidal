@@ -616,6 +616,18 @@ def _format_broadcast_at(value: Any) -> str:
     return parsed.strftime("%b %d, %Y %H:%M:%S %Z")
 
 
+def render_execution_result(result) -> None:  # noqa: ANN001
+    lines = [
+        f"Confirmed: {result.confirmed} · Pending: {result.pending} · Failed: {result.failed} · Unsubmitted: {result.unsubmitted}"
+    ]
+    if result.pending:
+        lines.append("Check the retained transaction hash before retrying.")
+    render_status_panel(
+        f"Execution {result.status.title()}", lines,
+        border_style="green" if result.status == "confirmed" else "yellow" if result.status in {"pending", "partial"} else "red",
+    )
+
+
 def render_broadcast_records(records: list[BroadcastRecord]) -> None:
     if not records:
         return

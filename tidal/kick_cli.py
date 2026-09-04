@@ -29,9 +29,11 @@ from tidal.cli_options import (
     TokenAddressOption,
     VerboseOption,
 )
-from tidal.cli_renderers import emit_json, render_kick_inspect, render_kick_submission_summary, render_skip_panel
+from tidal.cli_renderers import emit_json, render_execution_result, render_kick_inspect, render_kick_submission_summary, render_skip_panel
+from tidal.cli_exit_codes import SUCCESS
 from tidal.control_plane.client import ControlPlaneError
 from tidal.errors import ConfigurationError
+from tidal.execution_result import summarize_execution
 from tidal.operator_cli_support import (
     BaseFeeCapSkip,
     execute_prepared_action_sync,
@@ -605,6 +607,7 @@ def kick_run(
     inspect_result: KickInspectResult | None = None
     review_candidates: list[KickInspectEntry] = []
     broadcast_records: list[dict[str, object]] = []
+    expected_transaction_count = 0
     prepared_candidate_count = 0
     prepare_skip_count = 0
     skipped_confirmation_count = 0
@@ -821,18 +824,23 @@ def kick_run(
                         render_broadcast_result(action_records)
                         broadcast_feedback_emitted = True
                     broadcast_records.extend(action_records)
+                    expected_transaction_count += len(tx_intents)
+                    if summarize_execution(action_records, expected_count=len(tx_intents)).pending:
+                        break
                     if action_records:
                         terminal_auction_addresses.add(candidate_auction)
                         if effective_no_confirmation and not headless:
                             break
-    except (ConfigurationError, ControlPlaneError) as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
-    except RuntimeError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    except (ConfigurationError, ControlPlaneError, RuntimeError) as exc:
+        # Preserve earlier confirmed results if a later candidate cannot execute.
+        expected_transaction_count = max(expected_transaction_count, len(broadcast_records) + 1)
+        if headless:
+            _emit_headless_event("kick.error", message=str(exc))
+        else:
+            render_warnings([str(exc)])
 
-    status = "ok" if broadcast_records else "noop"
+    result = summarize_execution(broadcast_records, expected_count=expected_transaction_count)
+    status = result.status
 
     if status == "noop":
         if inspect_result is None or inspect_result.ready_count == 0:
@@ -848,8 +856,12 @@ def kick_run(
         _emit_headless_event(
             "kick.run.complete",
             status=status,
-            reason=(None if status == "ok" else noop_reason),
+            reason=(noop_reason if status == "noop" else None),
             sent=len(broadcast_records),
+            confirmed=result.confirmed,
+            pending=result.pending,
+            failed=result.failed,
+            unsubmitted=result.unsubmitted,
             prepared=prepared_candidate_count,
             skipped=prepare_skip_count + skipped_confirmation_count,
             ready=(inspect_result.ready_count if inspect_result is not None else None),
@@ -861,6 +873,7 @@ def kick_run(
                 render_broadcast_result(broadcast_records)
             if effective_no_confirmation and len(review_candidates) > 1:
                 typer.echo("Kick transaction sent. Ending run after the first submitted candidate.")
+            render_execution_result(result)
         elif inspect_result is None or inspect_result.ready_count == 0:
             typer.echo("No ready kick candidates.")
         elif prepared_candidate_count == 0 and prepare_feedback_emitted:
@@ -869,6 +882,9 @@ def kick_run(
             typer.echo("All prepared kick transactions were skipped.")
         else:
             typer.echo("No kick transactions were sent.")
+        if not broadcast_records and status != "noop":
+            render_execution_result(result)
 
-    if status == "noop" and not headless:
-        raise typer.Exit(code=2)
+    # Timer-driven no-op runs remain successful; mined/unknown outcomes use the
+    # same receipt-based exit code as auction commands.
+    raise typer.Exit(code=SUCCESS if status == "noop" and headless else result.exit_code)

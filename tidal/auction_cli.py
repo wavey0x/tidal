@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+from dataclasses import asdict
+
 import typer
 
 from tidal.cli_context import CLIContext, normalize_cli_address
@@ -15,9 +18,11 @@ from tidal.cli_options import (
     PasswordFileOption,
 )
 from tidal.cli_validation import require_no_confirmation_for_json
-from tidal.cli_renderers import emit_json, format_settlement_reason_lines, render_status_panel
+from tidal.cli_renderers import emit_json, format_settlement_reason_lines, render_execution_result, render_status_panel
+from tidal.cli_exit_codes import EXECUTION_ERROR, NOOP, VALIDATION_ERROR
 from tidal.control_plane.client import ControlPlaneError
 from tidal.errors import ConfigurationError
+from tidal.execution_result import summarize_execution
 from tidal.operator_cli_support import (
     execute_prepared_action_sync,
     progress_status,
@@ -100,17 +105,17 @@ def _handle_prepared_action(
             output = dict(data)
             output["broadcastRecords"] = broadcast_records
             emit_json(command_name, status="error", data=output, warnings=[gas_limit_error])
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=VALIDATION_ERROR)
     try:
         with cli_ctx.control_plane_client() as client:
             if response["status"] == "ok":
                 tx_count = len(transactions)
                 confirmation_prompt = "Send this transaction?" if tx_count == 1 else f"Send {tx_count} transaction(s)?"
                 if not no_confirmation and not typer.confirm(confirmation_prompt, default=False):
-                    raise typer.Exit(code=2)
+                    raise typer.Exit(code=NOOP)
                 if exec_ctx.signer is None or exec_ctx.sender is None:
-                    raise typer.Exit(code=1)
-                with submission_progress("Submitting transaction...") as update_progress:
+                    raise typer.Exit(code=VALIDATION_ERROR)
+                with (nullcontext(None) if json_output else submission_progress("Submitting transaction...")) as update_progress:
                     broadcast_records = execute_prepared_action_sync(
                         settings=cli_ctx.settings,
                         client=client,
@@ -123,14 +128,20 @@ def _handle_prepared_action(
     except RuntimeError as exc:
         if isinstance(exc, typer.Exit):
             raise
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+        if json_output:
+            emit_json(command_name, status="failed", data={**data, "broadcastRecords": broadcast_records}, warnings=[str(exc)])
+        else:
+            render_status_panel("Execution Failed", [str(exc)], border_style="red")
+        raise typer.Exit(code=EXECUTION_ERROR) from exc
 
+    result = summarize_execution(broadcast_records, expected_count=len(tx_intents))
     if json_output:
         output = dict(data)
         output["broadcastRecords"] = broadcast_records
-        emit_json(command_name, status=response["status"], data=output, warnings=response.get("warnings"))
-        return
+        output["execution"] = asdict(result)
+        status = result.status if response["status"] == "ok" else response["status"]
+        emit_json(command_name, status=status, data=output, warnings=response.get("warnings"))
+        raise typer.Exit(code=EXECUTION_ERROR if response["status"] == "error" else result.exit_code)
 
     if response["status"] == "noop":
         render_status_panel(
@@ -146,11 +157,13 @@ def _handle_prepared_action(
         )
     else:
         render_broadcast_result(broadcast_records)
+        render_execution_result(result)
 
     if response["status"] == "noop":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=NOOP)
     if response["status"] == "error":
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXECUTION_ERROR)
+    raise typer.Exit(code=result.exit_code)
 
 
 @app.command("deploy")

@@ -1,12 +1,60 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from tidal.cli import app as operator_app
 from tidal.control_plane.client import ControlPlaneError
+from tidal.cli_exit_codes import EXECUTION_ERROR, PARTIAL_FAILURE, VALIDATION_ERROR
 from tidal.transaction_service.types import TxIntent
 import tidal.auction_cli as operator_auction_cli_module
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize("statuses,expected_count,status,exit_code", [
+    (["CONFIRMED"], 1, "confirmed", 0),
+    (["REVERTED"], 1, "failed", EXECUTION_ERROR),
+    ([None], 1, "pending", EXECUTION_ERROR),
+    (["CONFIRMED", "REVERTED"], 2, "partial", PARTIAL_FAILURE),
+    (["CONFIRMED", None], 3, "partial", PARTIAL_FAILURE),
+])
+def test_auction_text_and_json_agree_on_receipt_outcomes(
+    tmp_path, monkeypatch, json_output, statuses, expected_count, status, exit_code,
+):
+    client = _EnableTokensClient()
+    prepare = client.prepare_enable_tokens
+
+    def prepare_many(auction, payload):
+        response = prepare(auction, payload)
+        response["data"]["transactions"] *= expected_count
+        return response
+
+    monkeypatch.setattr(client, "prepare_enable_tokens", prepare_many)
+    monkeypatch.setattr(operator_auction_cli_module.CLIContext, "verify_authenticated_api_access", lambda _: None)
+    monkeypatch.setattr(operator_auction_cli_module.CLIContext, "control_plane_client", lambda *args, **kwargs: client)
+    monkeypatch.setattr(operator_auction_cli_module.CLIContext, "resolve_execution", lambda *args, **kwargs: SimpleNamespace(
+        signer=SimpleNamespace(), sender="0x" + "9" * 40,
+    ))
+
+    def execute(**kwargs):
+        if json_output:
+            assert kwargs["progress_callback"] is None
+        return [{"txHash": f"0x{index + 1:064x}", "receiptStatus": value} for index, value in enumerate(statuses)]
+
+    monkeypatch.setattr(operator_auction_cli_module, "execute_prepared_action_sync", execute)
+    args = ["auction", "enable-tokens", "0x" + "2" * 40, "--config", str(_write_config(tmp_path)), "--no-confirmation"]
+    result = CliRunner().invoke(operator_app, args + (["--json"] if json_output else []))
+    assert result.exit_code == exit_code, result.output
+    if json_output:
+        payload = json.loads(result.stdout)
+        assert payload["status"] == status
+        assert payload["data"]["execution"]["status"] == status
+        assert payload["data"]["execution"]["unsubmitted"] == expected_count - len(statuses)
+        assert "Submitting" not in result.stdout
+    else:
+        assert f"Execution {status.title()}" in result.output
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -371,7 +419,7 @@ def test_operator_auction_enable_tokens_forwards_repeated_extra_tokens(tmp_path,
     monkeypatch.setattr(
         operator_auction_cli_module,
         "execute_prepared_action_sync",
-        lambda **kwargs: [],
+        lambda **kwargs: [{"txHash": "0x" + "1" * 64, "receiptStatus": "CONFIRMED"}],
     )
 
     runner = CliRunner()
@@ -425,7 +473,7 @@ def test_operator_auction_enable_tokens_forwards_client_gas_cap(tmp_path, monkey
     monkeypatch.setattr(
         operator_auction_cli_module,
         "execute_prepared_action_sync",
-        lambda **kwargs: [],
+        lambda **kwargs: [{"txHash": "0x" + "1" * 64, "receiptStatus": "CONFIRMED"}],
     )
 
     runner = CliRunner()
@@ -492,7 +540,7 @@ def test_operator_auction_enable_tokens_rejects_under_gassed_prepare(tmp_path, m
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == VALIDATION_ERROR
     assert executed is False
     assert "Preparation Failed" in result.output
     assert "gas limit 500,000 is below estimated gas 1,526,206" in result.output
@@ -598,7 +646,7 @@ def test_operator_auction_enable_tokens_error_renders_failure_panel(tmp_path, mo
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == EXECUTION_ERROR
     assert "Preparation Failed" in result.output
     assert "governance mismatch" in result.output
 

@@ -25,6 +25,14 @@ The private key stays with the machine running the CLI.
 
 Read and export-oriented commands may accept `--json` for scripting. Kick execution uses `--headless` for automation logs instead of JSON output.
 
+Auction execution (`--json` or text) and kick execution report receipt-derived
+`confirmed`, `pending`, `failed`, or `partial` outcomes. Exit codes are 0 for fully
+confirmed execution, 4 for failed or still-pending execution, and 5 for partial
+execution. A normal no-op exits 2, except timer-oriented `kick run --headless`,
+which retains its successful no-op exit of 0. Pending is not confirmation: check
+the retained hash before retrying. Auction JSON contains only structured output,
+including the execution counts; preparation success is not execution success.
+
 ### Config overrides
 
 Both executables support path overrides such as `--config` and the `TIDAL_*` environment variables documented in [Configuration](config.md).

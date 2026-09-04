@@ -10,6 +10,44 @@ from tidal.transaction_service.types import TxIntent
 import tidal.kick_cli as operator_kick_cli_module
 
 
+@pytest.mark.parametrize("headless", [False, True])
+@pytest.mark.parametrize("statuses,status,exit_code", [
+    (["REVERTED", "REVERTED"], "failed", 4),
+    ([None, None], "pending", 4),
+    (["CONFIRMED", "REVERTED"], "partial", 5),
+    (["CONFIRMED", None], "partial", 5),
+    (["CONFIRMED", "ERROR"], "partial", 5),
+])
+def test_kick_text_and_headless_agree_on_receipt_outcomes(tmp_path, monkeypatch, headless, statuses, status, exit_code):
+    client = _BroadcastClient()
+    outcomes = iter(statuses)
+    monkeypatch.setattr(operator_kick_cli_module.CLIContext, "control_plane_client", lambda *args, **kwargs: client)
+    monkeypatch.setattr(operator_kick_cli_module.CLIContext, "resolve_execution", lambda *args, **kwargs: SimpleNamespace(
+        signer=SimpleNamespace(), sender="0x" + "9" * 40,
+    ))
+    monkeypatch.setattr(operator_kick_cli_module.typer, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(operator_kick_cli_module, "_resolve_preview_fee_context", lambda *args, **kwargs: None)
+
+    def execute(**kwargs):
+        outcome = next(outcomes)
+        if outcome == "ERROR":
+            raise RuntimeError("later candidate could not be signed")
+        return [{**_broadcast_record(transactions=kwargs["transactions"], sender=kwargs["sender"], tx_hash="0x" + "1" * 64),
+                 "receiptStatus": outcome}]
+
+    monkeypatch.setattr(operator_kick_cli_module, "execute_prepared_action_sync", execute)
+    args = ["kick", "run", "--config", str(_write_config(tmp_path))]
+    result = CliRunner().invoke(operator_app, args + (["--headless"] if headless else []))
+    assert result.exit_code == exit_code, result.output
+    if statuses[0] is None:
+        assert len(client.prepare_calls) == 1
+    if headless:
+        assert f"kick.run.complete status={status}" in result.output
+        assert "status=ok" not in result.output
+    else:
+        assert f"Execution {status.title()}" in result.output
+
+
 def _write_config(tmp_path: Path, *, extra: str = "") -> Path:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(f"db_path: ./test.db\n{extra}", encoding="utf-8")
@@ -980,7 +1018,8 @@ def test_operator_kick_run_continues_across_distinct_auctions_in_interactive_mod
     assert "Confirmed" in result.output
     assert "Gas limit:   252,000" in result.output
     assert "max 7.00 gwei" in result.output
-    assert result.output.count("Confirmed") == 2
+    assert "Execution Confirmed" in result.output
+    assert "Confirmed: 2" in result.output
     assert "Kick transaction sent. Ending run after the first submitted candidate." not in result.output
     assert "No kick transactions were sent." not in result.output
     assert "Explorer:" not in result.output
@@ -1079,7 +1118,7 @@ def test_operator_kick_run_headless_drains_ready_candidates_with_compact_logs(tm
     assert [action_id for action_id, _ in prepared_actions] == ["action-1", "action-2"]
     assert "kick.run.start" in result.output
     assert "kick.broadcast" in result.output
-    assert "kick.run.complete status=ok" in result.output
+    assert "kick.run.complete status=confirmed" in result.output
     assert "sent=2" in result.output
     assert "kick.prepared" not in result.output
     assert "sender=" not in result.output

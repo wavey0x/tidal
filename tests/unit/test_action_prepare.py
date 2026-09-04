@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from threading import get_ident
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1088,6 +1089,8 @@ async def test_prepare_settle_action_returns_noop_when_manual_sweep_is_required(
 
 @pytest.mark.asyncio
 async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypatch) -> None:
+    owner_thread = get_ident()
+    preview_calls = []
     strategy_address = "0x1111111111111111111111111111111111111111"
     want_address = "0x2222222222222222222222222222222222222222"
     factory_address = AUCTION_V105_FACTORY_ADDRESS
@@ -1119,6 +1122,7 @@ async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypat
 
     class _FakeSession:
         def execute(self, stmt, params):  # noqa: ANN001, ANN201
+            assert get_ident() == owner_thread
             del stmt
             assert params["strategy_address"] == strategy_address
             return _FakeExecuteResult()
@@ -1146,23 +1150,29 @@ async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypat
 
     monkeypatch.setattr("tidal.api.services.action_prepare.TokenPriceAggProvider", _FakeQuoteProvider)
     monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
-    monkeypatch.setattr("tidal.api.services.action_prepare.read_token_decimals", lambda w3, token: 6)
-    monkeypatch.setattr("tidal.api.services.action_prepare.default_factory_address", lambda settings: factory_address)
-    monkeypatch.setattr("tidal.api.services.action_prepare.default_governance_address", lambda: governance_address)
-    monkeypatch.setattr("tidal.api.services.action_prepare.read_factory_auction_addresses", lambda w3, factory: [])
-    monkeypatch.setattr("tidal.api.services.action_prepare.read_existing_matches", lambda *args, **kwargs: [])
-    monkeypatch.setattr(
-        "tidal.api.services.action_prepare.preview_deployment",
-        lambda *args, **kwargs: SimpleNamespace(
+    def read_decimals(w3, token):
+        assert get_ident() != owner_thread
+        return 6
+
+    def preview(*args, **kwargs):
+        assert get_ident() != owner_thread
+        preview_calls.append(kwargs)
+        return SimpleNamespace(
             predicted_address=predicted_address,
             predicted_address_exists=False,
-        ),
-    )
+            existing_matches=[{"auction_address": predicted_address}],
+        )
+
+    monkeypatch.setattr("tidal.api.services.action_prepare.read_token_decimals", read_decimals)
+    monkeypatch.setattr("tidal.api.services.action_prepare.default_factory_address", lambda settings: factory_address)
+    monkeypatch.setattr("tidal.api.services.action_prepare.default_governance_address", lambda: governance_address)
+    monkeypatch.setattr("tidal.api.services.action_prepare.preview_deployment", preview)
 
     data = await load_strategy_deploy_defaults(
         _FakeSession(),
         SimpleNamespace(
             chain_id=1,
+            rpc_url="http://offline.test",
             token_price_agg_base_url="https://prices.example.com",
             token_price_agg_key=None,
             price_timeout_seconds=10,
@@ -1180,6 +1190,8 @@ async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypat
     assert data["startingPrice"] == 550_000_000_000_000_000_000
     assert data["startingPriceDisplay"] == "550"
     assert data["predictedAuctionAddress"] == predicted_address
+    assert data["matchingAuctions"] == [{"auction_address": predicted_address}]
+    assert len(preview_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -1227,6 +1239,7 @@ async def test_prepare_deploy_browser_action_is_stateless(monkeypatch) -> None:
     status, warnings, data = await prepare_deploy_browser_action(
         SimpleNamespace(
             chain_id=1,
+            rpc_url="http://offline.test",
             txn_max_gas_limit=500000,
         ),
         want=want_address,
@@ -1259,7 +1272,7 @@ async def test_prepare_deploy_browser_action_rejects_failed_preview(monkeypatch)
 
     with pytest.raises(APIError, match="Deployment preview failed: execution reverted"):
         await prepare_deploy_browser_action(
-            SimpleNamespace(chain_id=1, txn_max_gas_limit=500000),
+            SimpleNamespace(chain_id=1, rpc_url="http://offline.test", txn_max_gas_limit=500000),
             want="0x1111111111111111111111111111111111111111",
             receiver="0x2222222222222222222222222222222222222222",
             sender="0x3333333333333333333333333333333333333333",

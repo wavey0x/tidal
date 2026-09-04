@@ -214,7 +214,7 @@ Important error cases:
 - `401`: bearer token required or invalid
 - `404`: missing run/action
 - `500`: generic database operation failure
-- `503`: SQLite lock contention or no API keys configured
+- `503`: SQLite lock contention, no API keys configured, or deployment previews busy/unavailable
 
 The API explicitly maps SQLite lock errors to:
 
@@ -228,3 +228,6 @@ database is locked; retry the request
 - Mutating routes are authenticated.
 - The server prepares actions, but the CLI client signs locally.
 - The scanner runs one bounded shared receipt-reconciliation pass before evaluating operational alerts.
+- Deployment RPC uses the framework thread pool with at most four admitted jobs per API process.
+  Busy previews fail fast with `503`; cancellation keeps the slot occupied until the RPC finishes.
+  Database work stays in the request context, and existing RPC timeouts still apply.

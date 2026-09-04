@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
 from tidal.api.services.action_audit import create_prepared_action
+from tidal.api.services.deployment_rpc import run_deployment_rpc
 from tidal.auction_price_units import decode_starting_price_amount, encode_starting_price_raw
 from tidal.auction_versions import StartingPriceEncoding, approved_auction_spec_for_factory
 from tidal.auction_settlement import (
@@ -32,8 +33,6 @@ from tidal.ops.deploy import (
     default_factory_address,
     default_governance_address,
     preview_deployment,
-    read_existing_matches,
-    read_factory_auction_addresses,
     read_token_decimals,
     validate_starting_price_raw,
 )
@@ -262,9 +261,11 @@ async def load_strategy_deploy_defaults(
         factory_spec = approved_auction_spec_for_factory(factory_address)
     except ValueError as exc:
         raise APIError(str(exc), status_code=409) from exc
-    w3 = build_sync_web3(settings)
+    w3 = _build_deployment_web3(settings)
     try:
-        want_decimals = read_token_decimals(w3, str(context["wantAddress"]))
+        want_decimals = await run_deployment_rpc(read_token_decimals, w3, str(context["wantAddress"]))
+    except APIError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise APIError(f"Want token decimals read failed: {exc}", status_code=409) from exc
 
@@ -304,18 +305,9 @@ async def load_strategy_deploy_defaults(
         warnings.append(f"Curve quote unavailable for deploy inference (status: {curve_status})")
 
     governance_address = default_governance_address()
-    existing_auctions = read_factory_auction_addresses(w3, factory_address)
-    matches = read_existing_matches(
-        w3,
-        settings,
-        factory_address=factory_address,
-        auction_addresses=existing_auctions,
-        want=str(context["wantAddress"]),
-        receiver=str(context["strategyAddress"]),
-        governance=governance_address,
-    )
     salt = build_default_salt(str(context["wantAddress"]), str(context["strategyAddress"]), governance_address)
-    preview = preview_deployment(
+    preview = await run_deployment_rpc(
+        preview_deployment,
         w3,
         settings,
         factory_address=factory_address,
@@ -359,7 +351,7 @@ async def load_strategy_deploy_defaults(
         },
         "predictedAuctionAddress": preview.predicted_address,
         "predictedAuctionAddressExists": preview.predicted_address_exists,
-        "matchingAuctions": [_serialize(match) for match in matches],
+        "matchingAuctions": [_serialize(match) for match in preview.existing_matches],
     }
 
 
@@ -376,7 +368,8 @@ async def prepare_deploy_action(
     starting_price: int,
     salt: str | None,
 ) -> tuple[str, list[str], dict[str, object]]:
-    warnings, request_payload, preview_payload, tx = _build_deploy_prepare_payload(
+    warnings, request_payload, preview_payload, tx = await run_deployment_rpc(
+        _build_deploy_prepare_payload,
         settings,
         want=want,
         receiver=receiver,
@@ -417,7 +410,8 @@ async def prepare_deploy_browser_action(
     starting_price: int,
     salt: str | None,
 ) -> tuple[str, list[str], dict[str, object]]:
-    warnings, _, preview_payload, tx = _build_deploy_prepare_payload(
+    warnings, _, preview_payload, tx = await run_deployment_rpc(
+        _build_deploy_prepare_payload,
         settings,
         want=want,
         receiver=receiver,
@@ -434,6 +428,12 @@ async def prepare_deploy_browser_action(
     }
 
 
+def _build_deployment_web3(settings: Settings):  # noqa: ANN202
+    if not settings.rpc_url:
+        raise APIError("RPC_URL is required for deployment previews", status_code=503)
+    return build_sync_web3(settings)
+
+
 def _build_deploy_prepare_payload(
     settings: Settings,
     *,
@@ -445,7 +445,7 @@ def _build_deploy_prepare_payload(
     starting_price: int,
     salt: str | None,
 ) -> tuple[list[str], dict[str, object], dict[str, object], dict[str, object]]:
-    w3 = build_sync_web3(settings)
+    w3 = _build_deployment_web3(settings)
     normalized_want = normalize_address(want)
     normalized_receiver = normalize_address(receiver)
     try:

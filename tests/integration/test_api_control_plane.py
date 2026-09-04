@@ -636,6 +636,7 @@ def test_public_browser_deploy_prepare_route_is_unauthenticated(tmp_path: Path, 
 
 def test_public_browser_deploy_prepare_route_does_not_create_action_rows(tmp_path: Path, monkeypatch) -> None:
     settings = _make_settings(tmp_path)
+    settings.rpc_url = "http://offline.test"
     _init_db(settings)
 
     class _FakeCreateNewAuctionFn:

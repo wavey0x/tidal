@@ -87,6 +87,8 @@ kick:
       token: "0x865377367054516e17014CcdED1e7d814EDC9ce4" #CRV
       profile: stable
 
+  default_usd_kick_limit: 3000
+
   usd_kick_limit:
     "0x04ACaF8D2865c0714F79da09645C13FD2888977f": 10000 # WFRAX
     "0x7fE24F1A024D33506966CB7CA48Bab8c65fB632d": 200 # opASF
@@ -102,3 +104,6 @@ kick:
     - auction: "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693"
       token: "0x04ACaF8D2865c0714F79da09645C13FD2888977f"
       minutes: 10
+    - auction: "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693"
+      token: "0x419905009e4656fdC02418C7Df35B1E61Ed5F726" # RSUP
+      minutes: 1440 # 24 hours

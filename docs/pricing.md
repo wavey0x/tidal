@@ -118,9 +118,12 @@ Sell sizing uses:
 
 - the live on-chain source balance
 - the cached sell-token USD price
-- optional per-token `usd_kick_limit`
+- optional global `default_usd_kick_limit`
+- optional per-token `usd_kick_limit` overrides
 
 That means Tidal can cap a large position to a smaller USD amount without fetching any extra live pricing data first.
+An explicit per-token limit takes precedence over the global default.
+If neither limit is configured, Tidal uses the full live balance.
 
 ## Just-In-Time Want Price
 

@@ -46,10 +46,13 @@ class PricingPolicy:
 
 @dataclass(frozen=True, slots=True)
 class TokenSizingPolicy:
+    default_limit: Decimal | None
     token_overrides: dict[str, Decimal]
 
     def resolve(self, token_address: str) -> Decimal | None:
-        return self.token_overrides.get(normalize_address(token_address))
+        return self.token_overrides.get(
+            normalize_address(token_address), self.default_limit
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +235,17 @@ def _build_pricing_policy(raw: Mapping[str, object]) -> PricingPolicy:
 
 
 def _build_token_sizing_policy(raw: Mapping[str, object]) -> TokenSizingPolicy:
+    raw_default_limit = raw.get("default_usd_kick_limit")
+    default_limit = (
+        None
+        if raw_default_limit is None
+        else _coerce_positive_decimal(
+            raw_default_limit,
+            field_name="default_usd_kick_limit",
+            scope_name="kick",
+        )
+    )
+
     raw_limits = raw.get("usd_kick_limit") or {}
     if not isinstance(raw_limits, dict):
         raise ValueError("usd_kick_limit must be a mapping")
@@ -244,7 +258,7 @@ def _build_token_sizing_policy(raw: Mapping[str, object]) -> TokenSizingPolicy:
             scope_name=f"usd_kick_limit[{token_address}]",
         )
 
-    return TokenSizingPolicy(token_overrides=token_overrides)
+    return TokenSizingPolicy(default_limit=default_limit, token_overrides=token_overrides)
 
 
 def _build_ignore_policy(raw: Mapping[str, object]) -> IgnorePolicy:

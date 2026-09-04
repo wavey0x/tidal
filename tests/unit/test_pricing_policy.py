@@ -7,7 +7,7 @@ from tidal.resources import read_template_text
 from tidal.transaction_service.kick_policy import build_kick_config, load_kick_config
 
 
-def test_load_kick_config_reads_token_overrides(tmp_path):
+def test_load_kick_config_reads_default_and_token_overrides(tmp_path):
     kick_path = tmp_path / "kick.yaml"
     kick_path.write_text(
         """
@@ -21,6 +21,8 @@ profiles:
     start_price_buffer_bps: 1000
     min_price_buffer_bps: 500
     step_decay_rate_bps: 50
+
+default_usd_kick_limit: 3000
 
 usd_kick_limit:
   "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": 5000
@@ -40,7 +42,7 @@ cooldown_minutes: 60
 
     assert rule_a == Decimal("5000")
     assert rule_b == Decimal("25000")
-    assert rule_missing is None
+    assert rule_missing == Decimal("3000")
     assert config.pricing_policy.default_profile_name == "volatile"
     assert config.cooldown_policy.default_minutes == 60
 
@@ -68,7 +70,12 @@ cooldown_minutes: 60
 
     config = load_kick_config(kick_path)
 
+    assert config.token_sizing_policy.default_limit is None
     assert config.token_sizing_policy.token_overrides == {}
+    assert (
+        config.token_sizing_policy.resolve("0xcccccccccccccccccccccccccccccccccccccccc")
+        is None
+    )
     assert config.ignore_policy.ignored_sources == frozenset()
     assert config.cooldown_policy.auction_token_overrides_minutes == {}
 
@@ -267,6 +274,11 @@ def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
     assert stable_profile.name == "stable"
     assert stable_profile.outlier_floor_enabled is True
     assert eva_usdt_profile.name == "stable"
+    assert config.token_sizing_policy.default_limit == Decimal("3000")
+    assert (
+        config.token_sizing_policy.resolve("0x0000000000000000000000000000000000000001")
+        == Decimal("3000")
+    )
     assert (
         config.ignore_policy.match(
             source_address="0xC69aA6Cd632A88424ceAf3688F295B856eB82287",
@@ -297,4 +309,11 @@ def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
             token_address="0x04ACaF8D2865c0714F79da09645C13FD2888977f",
         )
         == 10
+    )
+    assert (
+        config.cooldown_policy.resolve_minutes(
+            auction_address="0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693",
+            token_address="0x419905009e4656fdC02418C7Df35B1E61Ed5F726",
+        )
+        == 1440
     )

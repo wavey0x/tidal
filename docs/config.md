@@ -113,6 +113,8 @@ kick:
       token: "0xSellToken"
       profile: stable
 
+  default_usd_kick_limit: 3000
+
   usd_kick_limit:
     "0xToken": 10000
 
@@ -133,6 +135,8 @@ kick:
     retry_delays_minutes: [720, 1440]
 ```
 
+`default_usd_kick_limit` caps tokens without an explicit `usd_kick_limit` entry.
+Per-token limits take precedence over the default.
 `cooldown` applies to the `(auction, token)` pair, not the whole auction or source.
 `no_fill.retry_delays_minutes` is required, strictly increasing, and defines the
 complete automatic retry budget: 12 hours after the first confirmed no-fill and

@@ -22,6 +22,7 @@ from tidal.chain.contracts.abis import (
     AUCTION_KICKER_KICKED_EVENT_ABIS,
 )
 from tidal.normalizers import normalize_address, to_decimal_string
+from tidal.constants import TRUSTED_HISTORICAL_AUCTION_KICKERS
 from tidal.persistence.repositories import APIActionRepository, KickTxRepository, TokenRepository
 from tidal.api.services.action_audit import ensure_action_operations, record_verified_receipt
 from tidal.time import utcnow_iso
@@ -65,6 +66,14 @@ def _event_signature(event_abi: Mapping[str, object]) -> str:
     inputs = cast(Sequence[Mapping[str, object]], event_abi["inputs"])
     parameter_types = ",".join(str(item["type"]) for item in inputs)
     return f"{event_abi['name']}({parameter_types})"
+
+
+def _receipt_from_emitters(receipt: dict[str, object], addresses: Collection[str]) -> dict[str, object]:
+    """Web3 event decoding matches topics, not the contract's bound address."""
+    return {
+        **receipt,
+        "logs": [log for log in receipt.get("logs", []) if str(log.get("address", "")).lower() in addresses],
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,12 +130,16 @@ class OperationReconciler:
         session,
         web3_client,
         auction_kicker_address: str,
+        chain_id: int = 1,
         decode_receipt_fn: Callable[[dict[str, object], Sequence[str]], DecodedReceipt]
         | None = None,
     ) -> None:
         self.session = session
         self.web3_client = web3_client
         self.auction_kicker_address = normalize_address(auction_kicker_address)
+        self.trusted_kicker_addresses = {self.auction_kicker_address}
+        if chain_id == 1:
+            self.trusted_kicker_addresses.update(TRUSTED_HISTORICAL_AUCTION_KICKERS)
         self.kick_repo = KickTxRepository(session)
         self.action_repo = APIActionRepository(session)
         self.token_repo = TokenRepository(session)
@@ -737,14 +750,11 @@ class OperationReconciler:
     def _decode_receipt(
         self, receipt: dict[str, object], auctions: Sequence[str]
     ) -> DecodedReceipt:
-        receipt_destination = receipt.get("to")
-        kicker_address = (
-            normalize_address(str(receipt_destination))
-            if receipt_destination is not None
-            else self.auction_kicker_address
+        kicker_receipt = _receipt_from_emitters(
+            receipt, self.trusted_kicker_addresses,
         )
         kicker = self.web3_client.contract(
-            to_checksum_address(kicker_address),
+            to_checksum_address(self.auction_kicker_address),
             [*AUCTION_KICKER_ABI, *AUCTION_KICKER_KICKED_EVENT_ABIS[1:]],
         )
         kicked_logs = [
@@ -752,30 +762,31 @@ class OperationReconciler:
             for event_abi in AUCTION_KICKER_KICKED_EVENT_ABIS
             for log in kicker.get_event_by_signature(
                 _event_signature(event_abi)
-            )().process_receipt(receipt, errors=DISCARD)
+            )().process_receipt(kicker_receipt, errors=DISCARD)
         ]
         resolved_logs = kicker.events.AuctionResolved().process_receipt(
-            receipt, errors=DISCARD
+            kicker_receipt, errors=DISCARD
         )
         swept_logs = kicker.events.AuctionSwept().process_receipt(
-            receipt, errors=DISCARD
+            kicker_receipt, errors=DISCARD
         )
 
         placed_by_pair: dict[tuple[str, str], list[int]] = {}
         settlements: list[DecodedSettlement] = []
         for auction_address in auctions:
+            auction_receipt = _receipt_from_emitters(receipt, {normalize_address(auction_address)})
             auction = self.web3_client.contract(
                 to_checksum_address(auction_address), AUCTION_ABI
             )
             for log in auction.events.AuctionKicked().process_receipt(
-                receipt, errors=DISCARD
+                auction_receipt, errors=DISCARD
             ):
                 token = normalize_address(str(log["args"]["from"]))
                 placed_by_pair.setdefault(
                     (normalize_address(auction_address), token), []
                 ).append(int(log["args"]["available"]))
             for log in auction.events.AuctionSettled().process_receipt(
-                receipt, errors=DISCARD
+                auction_receipt, errors=DISCARD
             ):
                 settlements.append(
                     DecodedSettlement(

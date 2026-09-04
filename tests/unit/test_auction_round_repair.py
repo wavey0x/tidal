@@ -88,6 +88,7 @@ def _repair(session, web3):
     return AuctionRoundRepair(
         session=session,
         settings=SimpleNamespace(
+            chain_id=1,
             auction_kicker_address=KICKER,
             txn_usd_threshold=1,
             txn_data_freshness_limit_seconds=999_999_999,

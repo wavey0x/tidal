@@ -150,6 +150,7 @@ def build_scanner_service(
         session=session,
         web3_client=web3_client,
         auction_kicker_address=settings.auction_kicker_address,
+        chain_id=settings.chain_id,
     )
 
     signer = None
@@ -374,6 +375,7 @@ def build_txn_service(
             session=session,
             web3_client=web3_client,
             auction_kicker_address=settings.auction_kicker_address,
+            chain_id=settings.chain_id,
         ),
     )
     planner = KickPlanner(

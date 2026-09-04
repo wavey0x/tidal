@@ -25,6 +25,7 @@ async def reconcile_pending_actions(database, settings, web3_client) -> None:
         reconciler = OperationReconciler(
             session=session, web3_client=web3_client,
             auction_kicker_address=settings.auction_kicker_address,
+            chain_id=settings.chain_id,
         )
         for tx_hash in dict.fromkeys(str(row["tx_hash"]) for row in pending):
             # Rotate unresolved hashes through the bounded batch without holding

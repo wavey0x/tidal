@@ -11,6 +11,7 @@ from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError
 from web3 import Web3
 
+from tidal.constants import TRUSTED_HISTORICAL_AUCTION_KICKERS
 from tidal.operation_reconciler import (
     DecodedKick,
     DecodedReceipt,
@@ -29,7 +30,7 @@ TOKEN = "0x00000000000000000000000000000000000000b1"
 TOKEN_2 = "0x00000000000000000000000000000000000000b2"
 SOURCE = "0x00000000000000000000000000000000000000c1"
 KICKER = "0x00000000000000000000000000000000000000d1"
-HISTORICAL_KICKER = "0x00000000000000000000000000000000000000d2"
+HISTORICAL_KICKER = "0x2a76c6ad151af2edbe16755fc3bff67176f01071"
 MINED_AT = datetime.fromtimestamp(1_754_131_200, tz=timezone.utc).isoformat()
 
 
@@ -626,7 +627,7 @@ def test_kicked_event_versions_restore_requested_and_placed_amounts(
     assert decoded.kicks == (DecodedKick(SOURCE, AUCTION, TOKEN, 100, 100),)
 
 
-def test_receipt_destination_selects_the_historical_kicker_contract(session) -> None:
+def test_receipt_destination_does_not_select_a_trusted_kicker(session) -> None:
     captured_addresses: list[str] = []
 
     class EmptyEvent:
@@ -659,7 +660,79 @@ def test_receipt_destination_selects_the_historical_kicker_contract(session) -> 
         auction_kicker_address=KICKER,
     )
 
-    decoded = reconciler._decode_receipt({"to": HISTORICAL_KICKER, "logs": []}, ())
+    decoded = reconciler._decode_receipt({"to": SOURCE, "logs": []}, ())
 
     assert decoded == DecodedReceipt()
-    assert captured_addresses == [HISTORICAL_KICKER]
+    assert captured_addresses == [KICKER]
+
+
+@pytest.mark.parametrize("kicker_address", [KICKER, *sorted(TRUSTED_HISTORICAL_AUCTION_KICKERS)])
+def test_actual_decoder_keeps_multiple_auctions_separate(session, kicker_address):
+    second_auction = "0x00000000000000000000000000000000000000a2"
+    unrelated_auction = "0x00000000000000000000000000000000000000a3"
+    decoder_web3 = Web3()
+    web3 = _web3()
+    web3.contract = lambda address, abi: decoder_web3.eth.contract(address=address, abi=abi)
+    reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER)
+    logs = []
+    for auction, amount in [(AUCTION, 100), (second_auction, 200)]:
+        logs.append(_event_log(
+            address=kicker_address, signature="Kicked(address,address,address,uint256,uint256,uint256)",
+            indexed_addresses=(SOURCE, auction), data_types=("address", "uint256", "uint256", "uint256"),
+            data_values=(TOKEN, amount + 10, 601, 200), log_index=len(logs),
+        ))
+        logs.append(_event_log(
+            address=auction, signature="AuctionKicked(address,uint256)", indexed_addresses=(TOKEN,),
+            data_types=("uint256",), data_values=(amount,), log_index=len(logs),
+        ))
+    for auction in [second_auction, unrelated_auction]:
+        logs.append(_event_log(
+            address=auction, signature="AuctionSettled(address)", indexed_addresses=(TOKEN,),
+            data_types=(), data_values=(), log_index=len(logs),
+        ))
+    receipt = {"to": SOURCE, "logs": logs}
+    decoded = reconciler._decode_receipt(receipt, (AUCTION, second_auction))
+    assert decoded.kicks == (
+        DecodedKick(SOURCE, AUCTION, TOKEN, 110, 100),
+        DecodedKick(SOURCE, second_auction, TOKEN, 210, 200),
+    )
+    assert decoded.settlements == (DecodedSettlement(second_auction, TOKEN),)
+    assert receipt["logs"] == logs  # Filtering must not mutate a shared receipt.
+
+
+def test_actual_decoder_ignores_untrusted_kicker_emitter_even_when_destination_matches(session):
+    decoder_web3 = Web3()
+    web3 = _web3()
+    web3.contract = lambda address, abi: decoder_web3.eth.contract(address=address, abi=abi)
+    reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER)
+    receipt = {"to": SOURCE, "logs": [_event_log(
+        address=SOURCE, signature="Kicked(address,address,address,uint256,uint256,uint256)",
+        indexed_addresses=(SOURCE, AUCTION), data_types=("address", "uint256", "uint256", "uint256"),
+        data_values=(TOKEN, 100, 601, 200), log_index=0,
+    )]}
+    assert reconciler._decode_receipt(receipt, (AUCTION,)) == DecodedReceipt()
+
+
+@pytest.mark.parametrize("chain_id", [1, 2])
+def test_actual_decoder_filters_resolve_and_sweep_emitters_on_their_trusted_chain(session, chain_id):
+    decoder_web3 = Web3()
+    web3 = _web3()
+    web3.contract = lambda address, abi: decoder_web3.eth.contract(address=address, abi=abi)
+    reconciler = OperationReconciler(
+        session=session, web3_client=web3, auction_kicker_address=KICKER, chain_id=chain_id,
+    )
+    logs = []
+    for address in [HISTORICAL_KICKER, SOURCE]:
+        logs.append(_event_log(
+            address=address, signature="AuctionResolved(address,address,uint8,address,uint256)",
+            indexed_addresses=(AUCTION, TOKEN), data_types=("uint8", "address", "uint256"),
+            data_values=(5, SOURCE, 100), log_index=len(logs),
+        ))
+        logs.append(_event_log(
+            address=address, signature="AuctionSwept(address,address,address,uint256)",
+            indexed_addresses=(AUCTION, TOKEN), data_types=("address", "uint256"),
+            data_values=(SOURCE, 100), log_index=len(logs),
+        ))
+    decoded = reconciler._decode_receipt({"to": SOURCE, "logs": logs}, (AUCTION,))
+    assert decoded.resolves == ((DecodedResolve(AUCTION, TOKEN, 5, 100),) if chain_id == 1 else ())
+    assert decoded.sweeps == ((DecodedSweep(AUCTION, TOKEN, 100),) if chain_id == 1 else ())

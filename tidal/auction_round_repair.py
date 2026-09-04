@@ -52,6 +52,7 @@ class AuctionRoundRepair:
             session=session,
             web3_client=web3_client,
             auction_kicker_address=settings.auction_kicker_address,
+            chain_id=settings.chain_id,
         )
 
     async def run(self, *, apply: bool) -> RepairReport:

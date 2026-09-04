@@ -89,7 +89,7 @@ async def test_pending_deploy_recovers_after_lookup_failure_without_kick_rows(da
         action_id = seed(session, operation="deploy", sender=None)
     web3, receipt, _ = rpc()
     web3.get_transaction_receipt.side_effect = [TimeoutError(), receipt]
-    settings = SimpleNamespace(tidal_api_receipt_reconcile_threshold_seconds=0, auction_kicker_address=KICKER)
+    settings = SimpleNamespace(tidal_api_receipt_reconcile_threshold_seconds=0, auction_kicker_address=KICKER, chain_id=1)
     await reconcile_pending_actions(database, settings, web3)
     with database.session() as session:
         assert get_action(session, action_id)["status"] == "BROADCAST_REPORTED"
@@ -205,7 +205,7 @@ async def test_finalization_repairs_missing_operations_before_verifying_action(d
         session.execute(models.kick_txs.delete())
         session.commit()
     web3, _, _ = rpc()
-    settings = SimpleNamespace(tidal_api_receipt_reconcile_threshold_seconds=0, auction_kicker_address=KICKER)
+    settings = SimpleNamespace(tidal_api_receipt_reconcile_threshold_seconds=0, auction_kicker_address=KICKER, chain_id=1)
     # A reverted receipt needs no event decoding but must materialize its operation.
     web3.get_transaction_receipt.return_value["status"] = 0
     await reconcile_pending_actions(database, settings, web3)

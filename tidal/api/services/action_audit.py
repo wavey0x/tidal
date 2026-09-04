@@ -209,6 +209,7 @@ def ensure_action_operations(
 
     repo = KickTxRepository(session)
     run_id = f"api-action:{action_row['action_id']}"
+    existing_operations = repo.list_by_tx_hash(str(tx_hash))
     operation_ids: set[int] = set()
     for operation in _prepared_log_operations(
         session,
@@ -216,14 +217,14 @@ def ensure_action_operations(
         operation_type=operation_type,
         tx_index=int(tx_row["tx_index"]),
     ):
-        existing = repo.find_by_run_and_identity(
-            run_id=run_id,
-            operation_type=operation_type,
-            auction_address=operation["auction_address"],
-            token_address=operation["token_address"],
-            tx_hash=str(tx_hash),
-        )
-        if existing is None:
+        existing = [
+            row for row in existing_operations
+            if row["run_id"] == run_id
+            and _normalize_operation_type(row["operation_type"]) == operation_type
+            and row["auction_address"] == operation["auction_address"]
+            and row["token_address"] == operation["token_address"]
+        ]
+        if not existing:
             row: dict[str, object] = {
                 "run_id": run_id,
                 "operation_type": operation_type,
@@ -264,9 +265,15 @@ def ensure_action_operations(
                 )
                 if round_kick is not None:
                     row["round_kick_id"] = int(round_kick["id"])
-            operation_ids.add(repo.insert(row, commit=False))
+            row_id = repo.insert(row, commit=False)
+            existing_operations.append({**row, "id": row_id})
+            operation_ids.add(row_id)
         else:
-            operation_ids.add(int(existing["id"]))
+            for row in existing:
+                row_id = int(row["id"])
+                if row["operation_type"] != operation_type:
+                    repo.update_fields(row_id, operation_type=operation_type)
+                operation_ids.add(row_id)
     return operation_ids
 
 
@@ -296,6 +303,27 @@ def _prepared_preview_operations(
 ) -> list[dict[str, object]]:
     preview = _decode_json(action_row.get("preview_json"))
     prepared = preview.get("preparedOperations")
+    if "preparedOperations" not in preview and action_row.get("action_type") == "settle":
+        # Pre-resolver settlement previews describe one transaction, not a batch.
+        # Do not infer a tx-index association for multi-transaction actions.
+        transactions = APIActionRepository(session).get_action_transactions(str(action_row["action_id"]))
+        inspection, decision = preview.get("inspection"), preview.get("decision")
+        if (
+            tx_index != 0 or len(transactions) != 1
+            or operation_type not in {"resolve_auction", "sweep_auction"}
+            or not isinstance(inspection, dict) or not isinstance(decision, dict)
+        ):
+            return []
+        prepared = [{
+            "operation": decision.get("operation_type") or decision.get("operationType"),
+            "auctionAddress": action_row.get("auction_address") or inspection.get("auction_address"),
+            "tokenAddress": action_row.get("token_address") or decision.get("token_address")
+                or decision.get("tokenAddress") or inspection.get("active_token") or inspection.get("activeToken"),
+            "sourceAddress": action_row.get("source_address"),
+            "wantAddress": inspection.get("want_address") or inspection.get("wantAddress"),
+            "reason": decision.get("reason"),
+            "txIndex": 0,
+        }]
     if not isinstance(prepared, list):
         return []
 

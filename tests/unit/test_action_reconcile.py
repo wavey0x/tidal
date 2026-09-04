@@ -12,7 +12,7 @@ from tidal.api.app import create_app
 from tidal.api.dependencies import get_operator
 from tidal.api.services.action_audit import create_prepared_action, get_action, record_broadcast
 from tidal.api.services.action_reconcile import reconcile_pending_actions
-from tidal.operation_reconciler import DecodedKick, DecodedReceipt, OperationReconciler, _matches_prepared_transaction
+from tidal.operation_reconciler import DecodedKick, DecodedReceipt, DecodedResolve, DecodedSweep, OperationReconciler, _matches_prepared_transaction
 from tidal.persistence import models
 from tidal.persistence.db import Database
 from tidal.persistence.repositories import APIActionRepository
@@ -297,3 +297,101 @@ def test_matching_accepts_web3_bytes_and_unspecified_sender():
     receipt["transactionHash"] = HexBytes(TX_HASH)
     prepared = {"chain_id": 1, "to_address": KICKER, "data": "0x1234", "value": "0x00", "sender": None}
     assert _matches_prepared_transaction(prepared, transaction, receipt, TX_HASH, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy,canonical", [("settle", "resolve_auction"), ("sweep-and-settle", "sweep_auction")])
+@pytest.mark.parametrize("existing", [True, False])
+@pytest.mark.parametrize("status,expected", [(1, "CONFIRMED"), (0, "REVERTED")])
+async def test_legacy_single_settlement_preview_converges_without_duplicate_rows(database, legacy, canonical, existing, status, expected):
+    with database.session() as session:
+        action_id = create_prepared_action(
+            session, operator_id="operator", action_type="settle", sender=SENDER,
+            request_payload={}, auction_address=AUCTION, token_address=TOKEN,
+            preview_payload={
+                "inspection": {"auction_address": AUCTION, "active_token": TOKEN},
+                "decision": {"operation_type": legacy.replace("-", "_"), "token_address": TOKEN},
+            },
+            transactions=[{"operation": legacy, "to": KICKER, "data": "0x1234", "value": "0x0", "chainId": 1}],
+        )
+        session.execute(models.api_action_transactions.update().values(tx_hash=TX_HASH, broadcast_at=NOW))
+        if existing:
+            session.execute(models.kick_txs.insert().values(
+                id=123, run_id=f"api-action:{action_id}", operation_type=legacy.replace("-", "_"),
+                auction_address=AUCTION, token_address=TOKEN, status="SUBMITTED", tx_hash=TX_HASH, created_at=NOW,
+            ))
+        session.commit()
+        web3, receipt, _ = rpc(status=status)
+        reconciler = OperationReconciler(
+            session=session, web3_client=web3, auction_kicker_address=KICKER,
+            decode_receipt_fn=lambda *_: DecodedReceipt(
+                resolves=(DecodedResolve(AUCTION, TOKEN, 0, 7),), sweeps=(DecodedSweep(AUCTION, TOKEN, 7),),
+            ),
+        )
+        for _ in range(2):
+            assert await reconciler.finalize_receipt(TX_HASH, receipt) is None
+            record_broadcast(session, action_id, tx_index=0, tx_hash=TX_HASH, broadcast_at=NOW)
+            operation = session.execute(select(models.kick_txs)).mappings().one()
+            assert operation["operation_type"] == canonical
+            assert operation["status"] == expected
+            assert get_action(session, action_id)["status"] == expected
+            if existing:
+                assert operation["id"] == 123
+            if status == 1:
+                assert operation["sell_amount"] == "7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["modern_empty", "multiple_transactions", "wrong_decision", "foreign_row", "mismatched_transaction"])
+async def test_legacy_preview_cannot_widen_verified_operation_scope(database, shape):
+    with database.session() as session:
+        preview = {"inspection": {"auction_address": AUCTION},
+                   "decision": {"operation_type": "sweep_and_settle", "token_address": TOKEN}}
+        if shape == "modern_empty":
+            preview["preparedOperations"] = []
+        if shape == "wrong_decision":
+            preview["decision"]["operation_type"] = "kick"
+        transactions = [{"operation": "sweep-and-settle", "to": KICKER, "data": "0x1234", "chainId": 1}]
+        if shape == "multiple_transactions":
+            transactions.append({**transactions[0], "data": "0x5678"})
+        action_id = create_prepared_action(
+            session, operator_id="operator", action_type="settle", sender=SENDER,
+            request_payload={}, preview_payload=preview, transactions=transactions,
+        )
+        session.execute(models.api_action_transactions.update().where(
+            models.api_action_transactions.c.tx_index == 0,
+        ).values(tx_hash=TX_HASH, broadcast_at=NOW))
+        session.execute(models.kick_txs.insert().values(
+            id=123, run_id=f"api-action:{action_id}", operation_type="sweep_and_settle",
+            auction_address=AUCTION, token_address=SENDER if shape == "foreign_row" else TOKEN,
+            status="SUBMITTED", tx_hash=TX_HASH, created_at=NOW,
+        ))
+        session.commit()
+        web3, receipt, transaction = rpc(status=0)
+        if shape == "mismatched_transaction":
+            transaction["input"] = "0x5678"
+        reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER)
+        await reconciler.finalize_receipt(TX_HASH, receipt)
+        old = session.execute(select(models.kick_txs).where(models.kick_txs.c.id == 123)).mappings().one()
+        assert old["status"] == "SUBMITTED"
+        assert old["operation_type"] == "sweep_and_settle"
+
+
+@pytest.mark.asyncio
+async def test_legacy_sweep_does_not_treat_preview_balance_as_event_evidence(database):
+    with database.session() as session:
+        action_id = create_prepared_action(
+            session, operator_id="operator", action_type="settle", sender=SENDER, request_payload={},
+            preview_payload={"inspection": {"auction_address": AUCTION, "active_available_raw": 999},
+                             "decision": {"operation_type": "sweep_and_settle", "token_address": TOKEN}},
+            transactions=[{"operation": "sweep-and-settle", "to": KICKER, "data": "0x1234", "chainId": 1}],
+        )
+        record_broadcast(session, action_id, tx_index=0, tx_hash=TX_HASH, broadcast_at=NOW)
+        web3, receipt, _ = rpc()
+        reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER,
+                                        decode_receipt_fn=lambda *_: DecodedReceipt())
+        await reconciler.finalize_receipt(TX_HASH, receipt)
+        operation = session.execute(select(models.kick_txs)).mappings().one()
+        assert operation["status"] == "CONFIRMED"
+        assert operation["sell_amount"] is None
+        assert operation["error_message"] == "confirmed AuctionSwept event missing"

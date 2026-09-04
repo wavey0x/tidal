@@ -8,6 +8,7 @@ from typing import Callable, Collection, Mapping, Sequence, cast
 
 import structlog
 from eth_utils import to_checksum_address
+from hexbytes import HexBytes
 from web3.logs import DISCARD
 
 from tidal.auction_rounds import (
@@ -21,10 +22,43 @@ from tidal.chain.contracts.abis import (
     AUCTION_KICKER_KICKED_EVENT_ABIS,
 )
 from tidal.normalizers import normalize_address, to_decimal_string
-from tidal.persistence.repositories import KickTxRepository, TokenRepository
+from tidal.persistence.repositories import APIActionRepository, KickTxRepository, TokenRepository
+from tidal.api.services.action_audit import ensure_action_operations, record_verified_receipt
+from tidal.time import utcnow_iso
 
 logger = structlog.get_logger(__name__)
 SETTLEMENT_LOG_BLOCK_SPAN = 50_000
+
+
+def _rpc_int(value: object) -> int:
+    return int(str(value), 16 if str(value).lower().startswith("0x") else 10)
+
+
+def _matches_prepared_transaction(
+    prepared: Mapping[str, object],
+    transaction: Mapping[str, object],
+    receipt: Mapping[str, object],
+    tx_hash: str,
+    chain_id: int,
+) -> bool:
+    """No reported outcome is evidence unless the mined transaction matches."""
+    try:
+        return (
+            int(prepared["chain_id"]) == chain_id
+            and _rpc_int(transaction.get("chainId", chain_id)) == chain_id
+            and HexBytes(transaction["hash"]) == HexBytes(tx_hash)
+            and HexBytes(receipt["transactionHash"]) == HexBytes(tx_hash)
+            and str(transaction["to"]).lower() == str(prepared["to_address"]).lower()
+            and HexBytes(transaction["input"]) == HexBytes(prepared["data"])
+            and _rpc_int(transaction["value"]) == _rpc_int(prepared["value"])
+            and (
+                prepared.get("sender") is None
+                or str(transaction["from"]).lower() == str(prepared["sender"]).lower()
+            )
+            and _rpc_int(receipt["status"]) in {0, 1}
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _event_signature(event_abi: Mapping[str, object]) -> str:
@@ -94,6 +128,7 @@ class OperationReconciler:
         self.web3_client = web3_client
         self.auction_kicker_address = normalize_address(auction_kicker_address)
         self.kick_repo = KickTxRepository(session)
+        self.action_repo = APIActionRepository(session)
         self.token_repo = TokenRepository(session)
         self.decode_receipt_fn = decode_receipt_fn or self._decode_receipt
 
@@ -123,14 +158,16 @@ class OperationReconciler:
 
         errors: list[ReconciliationError] = []
         for tx_hash in sorted(set(tx_hashes)):
-            if not self.kick_repo.list_by_tx_hash(tx_hash):
+            if not self.kick_repo.list_by_tx_hash(tx_hash) and not self.action_repo.list_by_tx_hash(tx_hash):
                 continue
             try:
                 receipt = await self.web3_client.get_transaction_receipt(
                     tx_hash,
                     timeout_seconds=timeout_seconds,
                 )
+                error_code = await self.finalize_receipt(tx_hash, receipt)
             except Exception as exc:  # noqa: BLE001
+                self.session.rollback()
                 if exc.__class__.__name__ in {"TransactionNotFound", "TimeExhausted"}:
                     continue
                 errors.append(
@@ -146,13 +183,12 @@ class OperationReconciler:
                     error_type=exc.__class__.__name__,
                 )
                 continue
-            error_code = await self.finalize_receipt(tx_hash, receipt)
             if error_code is not None:
                 errors.append(
                     ReconciliationError(
                         tx_hash=tx_hash,
                         error_code=error_code,
-                        error_message="confirmed receipt could not be decoded",
+                        error_message="receipt reconciliation incomplete",
                     )
                 )
         return errors
@@ -213,7 +249,47 @@ class OperationReconciler:
     async def finalize_receipt(
         self, tx_hash: str, receipt: dict[str, object]
     ) -> str | None:
-        rows = self.kick_repo.list_by_tx_hash(tx_hash)
+        """Verify API intent and commit all receipt-derived state together."""
+        action_rows = self.action_repo.list_by_tx_hash(tx_hash)
+        valid_actions: list[dict[str, object]] = []
+        if action_rows:
+            transaction = await self.web3_client.get_transaction(tx_hash)
+            chain_id = await self.web3_client.get_chain_id()
+            valid_actions = [
+                row for row in action_rows
+                if _matches_prepared_transaction(row, transaction, receipt, tx_hash, chain_id)
+            ]
+        if not valid_actions and not self.kick_repo.list_by_tx_hash(tx_hash):
+            return "transaction_intent_mismatch" if action_rows else None
+        # Complete RPC reads before staging any writes in the shared transaction.
+        block = await self.web3_client.get_block(int(receipt["blockNumber"]))
+        try:
+            valid_operation_ids: set[int] = set()
+            for row in valid_actions:
+                action = self.action_repo.get_action(str(row["action_id"]))
+                assert action is not None
+                valid_operation_ids.update(ensure_action_operations(self.session, action_row=action, tx_row=row))
+            rows = [
+                row for row in self.kick_repo.list_by_tx_hash(tx_hash)
+                if not str(row["run_id"]).startswith("api-action:") or int(row["id"]) in valid_operation_ids
+            ]
+            error = self._finalize_operations(tx_hash, receipt, rows, block)
+            for row in valid_actions:
+                record_verified_receipt(
+                    self.session, str(row["action_id"]), tx_index=int(row["tx_index"]),
+                    receipt=receipt, observed_at=utcnow_iso(),
+                )
+            self.session.commit()
+        except BaseException:
+            self.session.rollback()
+            raise
+        if len(valid_actions) != len(action_rows):
+            return "transaction_intent_mismatch"
+        return error
+
+    def _finalize_operations(
+        self, tx_hash: str, receipt: dict[str, object], rows: list[dict[str, object]], block: Mapping[str, object]
+    ) -> str | None:
         if not rows:
             return None
 
@@ -229,7 +305,6 @@ class OperationReconciler:
             if effective_gas_price
             else None
         )
-        block = await self.web3_client.get_block(block_number)
         mined_at = datetime.fromtimestamp(
             int(block["timestamp"]), tz=timezone.utc
         ).isoformat()
@@ -243,8 +318,7 @@ class OperationReconciler:
         }
         if receipt_status != 1:
             for row in rows:
-                self.kick_repo.update_fields(int(row["id"]), **common)
-            self.session.commit()
+                self.kick_repo.update_fields(int(row["id"]), **common, error_message=None)
             return None
 
         auctions = sorted(
@@ -259,7 +333,6 @@ class OperationReconciler:
                     **common,
                     error_message="confirmed receipt event decode failed",
                 )
-            self.session.commit()
             logger.warning(
                 "operation_receipt_event_decode_failed",
                 tx_hash=tx_hash,
@@ -398,9 +471,9 @@ class OperationReconciler:
                     "mined_at": mined_at,
                     "round_kick_id": int(round_kick["id"]),
                     "created_at": mined_at,
-                }
+                },
+                commit=False,
             )
-        self.session.commit()
         return reconciliation_error
 
     async def discover_direct_settlements(

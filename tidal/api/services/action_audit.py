@@ -122,98 +122,65 @@ def record_broadcast(
     if current_tx_hash is not None and current_tx_hash != tx_hash:
         raise APIError("Broadcast already recorded with a different tx hash", status_code=409)
 
-    if current_tx_hash is None or tx_row.get("broadcast_at") is None:
-        repo.update_transaction_broadcast(
-            action_id,
-            tx_index=tx_index,
-            tx_hash=tx_hash,
-            broadcast_at=broadcast_at,
+    try:
+        if current_tx_hash is None or tx_row.get("broadcast_at") is None:
+            repo.update_transaction_broadcast(
+                action_id,
+                tx_index=tx_index,
+                tx_hash=tx_hash,
+                broadcast_at=broadcast_at,
+            )
+        transactions = repo.get_action_transactions(action_id)
+        repo.update_action_status(
+            action_id, status=_calculate_action_status(transactions), updated_at=utcnow_iso(), commit=False,
         )
-    transactions = repo.get_action_transactions(action_id)
-    repo.update_action_status(action_id, status=_calculate_action_status(transactions), updated_at=broadcast_at)
-    current_tx_row = _transaction_for_index(transactions, tx_index=tx_index)
-    _sync_kick_log_rows(
-        session,
-        action_row=action_row,
-        tx_row=current_tx_row,
-        status="SUBMITTED",
-        observed_at=broadcast_at,
-    )
+        ensure_action_operations(
+            session, action_row=action_row,
+            tx_row=_transaction_for_index(transactions, tx_index=tx_index),
+        )
+        session.commit()
+    except BaseException:
+        session.rollback()
+        raise
     row = repo.get_action(action_id)
     assert row is not None
     return _action_detail(row, transactions)
 
 
-def record_receipt(
+def record_verified_receipt(
     session: Session,
     action_id: str,
     *,
     tx_index: int,
-    receipt_status: str,
-    block_number: int | None,
-    gas_used: int | None,
-    gas_price_gwei: str | None,
+    receipt: dict[str, object],
     observed_at: str,
-    error_message: str | None = None,
-) -> dict[str, object]:
+) -> None:
+    """Stage chain-derived API state; the shared finalizer commits both ledgers."""
     repo = APIActionRepository(session)
-    action_row, tx_row = _require_action_transaction(repo, action_id, tx_index=tx_index)
-
-    current_receipt_status = str(tx_row["receipt_status"]) if tx_row.get("receipt_status") is not None else None
-    if current_receipt_status is not None and current_receipt_status != receipt_status:
-        raise APIError("Receipt already recorded with a different status", status_code=409)
-    if current_receipt_status is not None and _receipt_conflicts(
-        tx_row,
-        block_number=block_number,
-        gas_used=gas_used,
-        gas_price_gwei=gas_price_gwei,
-        error_message=error_message,
-    ):
-        raise APIError("Receipt already recorded with different details", status_code=409)
-
-    if current_receipt_status is None or _receipt_backfill_needed(
-        tx_row,
-        block_number=block_number,
-        gas_used=gas_used,
-        gas_price_gwei=gas_price_gwei,
-        error_message=error_message,
-    ):
-        repo.update_transaction_receipt(
-            action_id,
-            tx_index=tx_index,
-            receipt_status=receipt_status,
-            block_number=block_number,
-            gas_used=gas_used,
-            gas_price_gwei=gas_price_gwei,
-            observed_at=observed_at,
-            error_message=error_message,
-        )
-    transactions = repo.get_action_transactions(action_id)
+    gas_price = receipt.get("effectiveGasPrice")
+    repo.update_transaction_receipt(
+        action_id,
+        tx_index=tx_index,
+        receipt_status="CONFIRMED" if int(receipt["status"]) == 1 else "REVERTED",
+        block_number=int(receipt["blockNumber"]),
+        gas_used=int(receipt["gasUsed"]) if receipt.get("gasUsed") is not None else None,
+        gas_price_gwei=str(round(int(gas_price) / 1e9, 4)) if gas_price else None,
+        observed_at=observed_at,
+        verified_at=observed_at,
+        error_message=None,
+        commit=False,
+    )
     repo.update_action_status(
         action_id,
-        status=_calculate_action_status(transactions),
+        status=_calculate_action_status(repo.get_action_transactions(action_id)),
         updated_at=observed_at,
-        error_message=error_message if receipt_status in {"FAILED", "REVERTED"} else None,
+        error_message=None,
+        commit=False,
     )
-    current_tx_row = _transaction_for_index(transactions, tx_index=tx_index)
-    _sync_kick_log_rows(
-        session,
-        action_row=action_row,
-        tx_row=current_tx_row,
-        status=receipt_status,
-        observed_at=observed_at,
-        block_number=block_number,
-        gas_used=gas_used,
-        gas_price_gwei=gas_price_gwei,
-        error_message=error_message,
-    )
-    row = repo.get_action(action_id)
-    assert row is not None
-    return _action_detail(row, repo.get_action_transactions(action_id))
 
 
 def _calculate_action_status(transactions: list[dict[str, object]]) -> str:
-    receipt_statuses = [row.get("receipt_status") for row in transactions]
+    receipt_statuses = [row.get("receipt_status") if row.get("verified_at") else None for row in transactions]
     if any(status == "FAILED" for status in receipt_statuses):
         return "FAILED"
     if any(status == "REVERTED" for status in receipt_statuses):
@@ -225,28 +192,24 @@ def _calculate_action_status(transactions: list[dict[str, object]]) -> str:
     return "PREPARED"
 
 
-def _sync_kick_log_rows(
+def ensure_action_operations(
     session: Session,
     *,
     action_row: dict[str, object],
     tx_row: dict[str, object],
-    status: str,
-    observed_at: str,
-    block_number: int | None = None,
-    gas_used: int | None = None,
-    gas_price_gwei: str | None = None,
-    error_message: str | None = None,
-) -> None:
+) -> set[int]:
+    """Stage missing operation rows for this exact transaction; never downgrade existing rows."""
     operation_type = _normalize_operation_type(tx_row.get("operation"))
     if operation_type not in {"kick", "resolve_auction", "sweep_auction", "enable_tokens"}:
-        return
+        return set()
 
     tx_hash = tx_row.get("tx_hash")
     if tx_hash is None:
-        return
+        return set()
 
     repo = KickTxRepository(session)
     run_id = f"api-action:{action_row['action_id']}"
+    operation_ids: set[int] = set()
     for operation in _prepared_log_operations(
         session,
         action_row,
@@ -258,6 +221,7 @@ def _sync_kick_log_rows(
             operation_type=operation_type,
             auction_address=operation["auction_address"],
             token_address=operation["token_address"],
+            tx_hash=str(tx_hash),
         )
         if existing is None:
             row: dict[str, object] = {
@@ -278,12 +242,8 @@ def _sync_kick_log_rows(
                 "minimum_price": operation["minimum_price"],
                 "minimum_quote": operation["minimum_quote"],
                 "usd_value": operation["usd_value"],
-                "status": status,
+                "status": "SUBMITTED",
                 "tx_hash": str(tx_hash),
-                "gas_used": gas_used,
-                "gas_price_gwei": gas_price_gwei,
-                "block_number": block_number,
-                "error_message": error_message,
                 "quote_amount": operation["quote_amount"],
                 "quote_response_json": operation["quote_response_json"],
                 "start_price_buffer_bps": operation["start_price_buffer_bps"],
@@ -295,7 +255,7 @@ def _sync_kick_log_rows(
                 "want_address": operation["want_address"],
                 "want_symbol": operation["want_symbol"],
                 "normalized_balance": None,
-                "created_at": str(tx_row.get("broadcast_at") or observed_at),
+                "created_at": str(tx_row.get("broadcast_at") or utcnow_iso()),
             }
             if operation_type in {"resolve_auction", "sweep_auction"}:
                 round_kick = repo.latest_confirmed_unclosed_kick(
@@ -304,18 +264,10 @@ def _sync_kick_log_rows(
                 )
                 if round_kick is not None:
                     row["round_kick_id"] = int(round_kick["id"])
-            repo.insert(row)
-            continue
-
-        repo.update_status(
-            int(existing["id"]),
-            status=status,
-            tx_hash=str(tx_hash),
-            gas_used=gas_used,
-            gas_price_gwei=gas_price_gwei,
-            block_number=block_number,
-            error_message=error_message,
-        )
+            operation_ids.add(repo.insert(row, commit=False))
+        else:
+            operation_ids.add(int(existing["id"]))
+    return operation_ids
 
 
 def _prepared_log_operations(
@@ -484,46 +436,11 @@ def _transaction_for_index(transactions: list[dict[str, object]], *, tx_index: i
     raise APIError("Action transaction not found", status_code=404)
 
 
-def _receipt_conflicts(
-    tx_row: dict[str, object],
-    *,
-    block_number: int | None,
-    gas_used: int | None,
-    gas_price_gwei: str | None,
-    error_message: str | None,
-) -> bool:
-    if block_number is not None and tx_row.get("block_number") is not None and int(tx_row["block_number"]) != block_number:
-        return True
-    if gas_used is not None and tx_row.get("gas_used") is not None and int(tx_row["gas_used"]) != gas_used:
-        return True
-    if gas_price_gwei is not None and tx_row.get("gas_price_gwei") is not None and str(tx_row["gas_price_gwei"]) != gas_price_gwei:
-        return True
-    if error_message is not None and tx_row.get("error_message") is not None and str(tx_row["error_message"]) != error_message:
-        return True
-    return False
-
-
-def _receipt_backfill_needed(
-    tx_row: dict[str, object],
-    *,
-    block_number: int | None,
-    gas_used: int | None,
-    gas_price_gwei: str | None,
-    error_message: str | None,
-) -> bool:
-    return (
-        (block_number is not None and tx_row.get("block_number") is None)
-        or (gas_used is not None and tx_row.get("gas_used") is None)
-        or (gas_price_gwei is not None and tx_row.get("gas_price_gwei") is None)
-        or (error_message is not None and tx_row.get("error_message") is None)
-    )
-
-
 def _action_summary(action_row: dict[str, object], transactions: list[dict[str, object]]) -> dict[str, object]:
     return {
         "actionId": action_row["action_id"],
         "actionType": action_row["action_type"],
-        "status": action_row["status"],
+        "status": _calculate_action_status(transactions),
         "operatorId": action_row["operator_id"],
         "sender": action_row["sender"],
         "auctionAddress": action_row["auction_address"],
@@ -542,7 +459,7 @@ def _action_detail(action_row: dict[str, object], transactions: list[dict[str, o
         "resourceAddress": action_row["resource_address"],
         "request": _decode_json(action_row.get("request_json")),
         "preview": _decode_json(action_row.get("preview_json")),
-        "errorMessage": action_row.get("error_message"),
+        "errorMessage": action_row.get("error_message") if all(row.get("verified_at") for row in transactions) else None,
     }
 
 
@@ -559,11 +476,12 @@ def _transaction_payload(row: dict[str, object]) -> dict[str, object]:
         "gasLimit": row["gas_limit"],
         "txHash": row["tx_hash"],
         "broadcastAt": row["broadcast_at"],
-        "receiptStatus": row["receipt_status"],
-        "blockNumber": row["block_number"],
-        "gasUsed": row["gas_used"],
-        "gasPriceGwei": row["gas_price_gwei"],
-        "errorMessage": row["error_message"],
+        "receiptStatus": row["receipt_status"] if row.get("verified_at") else None,
+        "verifiedAt": row.get("verified_at"),
+        "blockNumber": row["block_number"] if row.get("verified_at") else None,
+        "gasUsed": row["gas_used"] if row.get("verified_at") else None,
+        "gasPriceGwei": row["gas_price_gwei"] if row.get("verified_at") else None,
+        "errorMessage": row["error_message"] if row.get("verified_at") else None,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }

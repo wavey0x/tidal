@@ -715,7 +715,7 @@ def test_audited_deploy_prepare_route_still_requires_bearer_token(tmp_path: Path
     assert response.json()["detail"] == "Bearer token required"
 
 
-def test_actions_broadcast_and_receipt_routes_update_status(tmp_path: Path) -> None:
+def test_client_receipt_hint_does_not_confirm_without_rpc(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)
     app = create_app(settings)
@@ -770,7 +770,9 @@ def test_actions_broadcast_and_receipt_routes_update_status(tmp_path: Path) -> N
         },
     )
     assert receipt_response.status_code == 200
-    assert receipt_response.json()["data"]["status"] == "CONFIRMED"
+    assert receipt_response.json()["data"]["status"] == "BROADCAST_REPORTED"
+    assert receipt_response.json()["data"]["transactions"][0]["receiptStatus"] is None
+    assert receipt_response.json()["warnings"]
 
     list_response = client.get("/api/v1/tidal/actions", headers=headers)
     assert list_response.status_code == 200
@@ -832,12 +834,12 @@ def test_actions_broadcast_and_receipt_routes_are_idempotent(tmp_path: Path) -> 
         json={**broadcast_payload, "broadcastAt": "2026-03-28T00:03:00+00:00"},
     )
     assert replay_broadcast.status_code == 200
-    assert replay_broadcast.json()["data"]["status"] == "CONFIRMED"
+    assert replay_broadcast.json()["data"]["status"] == "BROADCAST_REPORTED"
     assert replay_broadcast.json()["data"]["transactions"][0]["txHash"] == "0xabc"
 
     replay_receipt = client.post(f"/api/v1/tidal/actions/{action_id}/receipt", headers=headers, json=receipt_payload)
     assert replay_receipt.status_code == 200
-    assert replay_receipt.json()["data"]["status"] == "CONFIRMED"
+    assert replay_receipt.json()["data"]["status"] == "BROADCAST_REPORTED"
 
 
 def test_actions_broadcast_route_rejects_conflicting_hash(tmp_path: Path) -> None:
@@ -1058,8 +1060,8 @@ def test_legacy_kick_action_without_tx_index_materializes_through_logs_kicks(tmp
     payload = logs_response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["total"] == 1
-    # Receipt lifecycle propagates even when canonical event evidence is still absent.
-    assert payload["data"]["kicks"][0]["status"] == "CONFIRMED"
+    # Client reports cannot manufacture mined evidence without RPC verification.
+    assert payload["data"]["kicks"][0]["status"] == "SUBMITTED"
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
     assert payload["data"]["kicks"][0]["wantSymbol"] == "USDC"
@@ -1404,7 +1406,7 @@ def test_settle_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Pat
     payload = logs_response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["total"] == 1
-    assert payload["data"]["kicks"][0]["status"] == "CONFIRMED"
+    assert payload["data"]["kicks"][0]["status"] == "SUBMITTED"
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["operationType"] == "resolve_auction"
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
@@ -1498,7 +1500,7 @@ def test_kick_logs_endpoint_falls_back_to_cached_token_symbols(tmp_path: Path) -
     assert payload["kicks"][0]["wantSymbol"] == "USDC"
 
 
-def test_failed_api_receipt_propagates_to_operation_log(tmp_path: Path) -> None:
+def test_client_failure_hint_cannot_change_operation_outcome(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)
     app = create_app(settings)
@@ -1559,8 +1561,8 @@ def test_failed_api_receipt_propagates_to_operation_log(tmp_path: Path) -> None:
     )
 
     assert receipt.status_code == 200
-    assert receipt.json()["data"]["status"] == "FAILED"
+    assert receipt.json()["data"]["status"] == "BROADCAST_REPORTED"
     with Session(engine, future=True) as session:
         operation = session.execute(select(models.kick_txs)).mappings().one()
-    assert operation["status"] == "FAILED"
-    assert operation["error_message"] == "wallet stopped tracking transaction"
+    assert operation["status"] == "SUBMITTED"
+    assert operation["error_message"] is None

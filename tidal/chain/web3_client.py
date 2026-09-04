@@ -38,6 +38,12 @@ class Web3Client:
 
         return int(await call_with_retries(_call, attempts=self.retry_attempts))
 
+    async def get_chain_id(self) -> int:
+        return int(await asyncio.wait_for(self.w3.eth.chain_id, timeout=self.timeout_seconds))
+
+    async def get_transaction(self, tx_hash: str) -> dict[str, Any]:
+        return dict(await asyncio.wait_for(self.w3.eth.get_transaction(HexBytes(tx_hash)), timeout=self.timeout_seconds))
+
     async def get_latest_block_timestamp(self) -> int:
         async def _call() -> int:
             block = await asyncio.wait_for(

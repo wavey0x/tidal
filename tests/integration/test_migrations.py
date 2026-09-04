@@ -107,7 +107,7 @@ def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
         "SUCCESS",
         "run-1",
     )
-    assert revision == ("0026_add_kick_prepare_status_latest",)
+    assert revision == ("0027_verify_api_receipts",)
 
     command.downgrade(config, "0023_bounded_retry_alerts")
 
@@ -129,6 +129,52 @@ def test_source_and_packaged_logo_migrations_are_identical() -> None:
     packaged = root / "tidal/_resources/alembic/versions/0024_drop_token_logo_state.py"
 
     assert source.read_bytes() == packaged.read_bytes()
+
+
+def test_receipt_verification_migration_requeues_retained_api_hashes_only(tmp_path: Path) -> None:
+    db_path = tmp_path / "tidal.db"
+    config = _alembic_config(db_path)
+    command.upgrade(config, "0026_add_kick_prepare_status_latest")
+    with sqlite3.connect(db_path) as connection:
+        for action_id, tx_hash in [("retained", "0x1234"), ("unsent", None)]:
+            connection.execute(
+                """INSERT INTO api_actions
+                (action_id, action_type, status, operator_id, request_json, preview_json, created_at, updated_at)
+                VALUES (?, 'kick', 'CONFIRMED', 'operator', '{}', '{}', '2026', '2026')""", (action_id,),
+            )
+            connection.execute(
+                """INSERT INTO api_action_transactions
+                (action_id, tx_index, operation, to_address, data, value, chain_id, tx_hash,
+                 receipt_status, block_number, created_at, updated_at)
+                VALUES (?, 0, 'kick', '0x1234', '0x', '0', 1, ?, 'CONFIRMED', 123, '2026', '9999-invalid')""",
+                (action_id, tx_hash),
+            )
+        for run_id in ["api-action:retained", "native-scanner"]:
+            connection.execute(
+                """INSERT INTO kick_txs (run_id, operation_type, token_address, auction_address, status, tx_hash, created_at)
+                VALUES (?, 'kick', '0x1234', '0x5678', 'CONFIRMED', '0x1234', '2026')""", (run_id,),
+            )
+    command.upgrade(config, "0027_verify_api_receipts")
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM api_action_transactions WHERE tx_hash IS NOT NULL AND updated_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', '+1 second')"
+        ).fetchone() == (1,)
+        assert connection.execute("SELECT action_id, status FROM api_actions ORDER BY action_id").fetchall() == [
+            ("retained", "BROADCAST_REPORTED"), ("unsent", "PREPARED"),
+        ]
+        assert connection.execute("SELECT receipt_status, block_number, verified_at FROM api_action_transactions").fetchall() == [
+            ("CONFIRMED", 123, None), ("CONFIRMED", 123, None),
+        ]
+        assert connection.execute("SELECT run_id, status FROM kick_txs ORDER BY run_id").fetchall() == [
+            ("api-action:retained", "SUBMITTED"), ("native-scanner", "CONFIRMED"),
+        ]
+    command.downgrade(config, "0026_add_kick_prepare_status_latest")
+    with sqlite3.connect(db_path) as connection:
+        assert "verified_at" not in {row[1] for row in connection.execute("PRAGMA table_info(api_action_transactions)")}
+    root = Path(__file__).resolve().parents[2]
+    assert (root / "alembic/versions/0027_verify_api_receipts.py").read_bytes() == (
+        root / "tidal/_resources/alembic/versions/0027_verify_api_receipts.py"
+    ).read_bytes()
 
 
 def test_auction_history_baseline_migration_defaults_existing_rows(

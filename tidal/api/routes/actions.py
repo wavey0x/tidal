@@ -9,7 +9,7 @@ from tidal.api.auth import OperatorIdentity
 from tidal.api.dependencies import get_operator, get_session, get_settings
 from tidal.api.errors import APIError
 from tidal.api.schemas.actions import ActionBroadcastRequest, ActionReceiptRequest
-from tidal.api.services.action_audit import get_action, list_actions, record_broadcast, record_receipt
+from tidal.api.services.action_audit import get_action, list_actions, record_broadcast
 from tidal.security import redact_sensitive_data
 from tidal.config import Settings
 from tidal.operation_reconciler import OperationReconciler
@@ -73,36 +73,32 @@ async def post_action_receipt(
     settings: Settings = Depends(get_settings),
     _operator: OperatorIdentity = Depends(get_operator),
 ) -> dict[str, object]:
-    data = record_receipt(
-        session,
-        action_id,
-        tx_index=payload.tx_index,
-        receipt_status=payload.receipt_status,
-        block_number=payload.block_number,
-        gas_used=payload.gas_used,
-        gas_price_gwei=payload.gas_price_gwei,
-        observed_at=payload.observed_at,
-        error_message=payload.error_message,
+    data = get_action(session, action_id)
+    if data is None:
+        raise APIError("Action not found", status_code=404)
+    transaction = next(
+        (tx for tx in data["transactions"] if tx["txIndex"] == payload.tx_index), None
     )
-    transactions = data.get("transactions")
-    tx_hash = None
-    if isinstance(transactions, list):
-        for transaction in transactions:
-            if isinstance(transaction, dict) and transaction.get("txIndex") == payload.tx_index:
-                tx_hash = transaction.get("txHash")
-                break
+    if transaction is None:
+        raise APIError("Action transaction not found", status_code=404)
+    tx_hash = transaction.get("txHash")
+    warnings: list[str] = []
     if tx_hash and settings.rpc_url:
         web3_client = build_web3_client(settings)
         try:
             receipt = await web3_client.get_transaction_receipt(str(tx_hash), timeout_seconds=2)
             reconciler = OperationReconciler(
-                session=session,
-                web3_client=web3_client,
+                session=session, web3_client=web3_client,
                 auction_kicker_address=settings.auction_kicker_address,
             )
-            await reconciler.finalize_receipt(str(tx_hash), receipt)
+            error = await reconciler.finalize_receipt(str(tx_hash), receipt)
+            if error:
+                warnings.append(f"Receipt verification needs attention: {error}.")
         except Exception:  # noqa: BLE001
-            pass
+            session.rollback()
+            warnings.append("Receipt verification pending; the server will retry.")
         finally:
             await web3_client.close()
-    return {"status": "ok", "warnings": [], "data": redact_sensitive_data(data)}
+    elif tx_hash:
+        warnings.append("Receipt verification pending; configure server RPC.")
+    return {"status": "ok", "warnings": warnings, "data": redact_sensitive_data(get_action(session, action_id))}

@@ -9,6 +9,7 @@ from dataclasses import asdict
 from sqlalchemy import and_, delete, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
+from tidal.time import utcnow_iso
 
 from tidal.auction_rounds import operation_closes_round
 from tidal.persistence import models
@@ -789,9 +790,10 @@ class KickTxRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def insert(self, row: dict[str, object]) -> int:
+    def insert(self, row: dict[str, object], *, commit: bool = True) -> int:
         result = self.session.execute(insert(models.kick_txs).values(**row))
-        self.session.commit()
+        if commit:
+            self.session.commit()
         return result.lastrowid  # type: ignore[return-value]
 
     def get(self, kick_tx_id: int) -> dict[str, object] | None:
@@ -811,6 +813,7 @@ class KickTxRepository:
         operation_type: str,
         auction_address: str,
         token_address: str,
+        tx_hash: str,
     ) -> dict[str, object] | None:
         row = (
             self.session.execute(
@@ -819,6 +822,7 @@ class KickTxRepository:
                     models.kick_txs.c.operation_type == operation_type,
                     models.kick_txs.c.auction_address == auction_address,
                     models.kick_txs.c.token_address == token_address,
+                    models.kick_txs.c.tx_hash == tx_hash,
                 )
             )
             .mappings()
@@ -1076,6 +1080,14 @@ class APIActionRepository:
         )
         return [dict(row) for row in self.session.execute(stmt).mappings().all()]
 
+    def list_by_tx_hash(self, tx_hash: str) -> list[dict[str, object]]:
+        stmt = (
+            select(models.api_action_transactions, models.api_actions.c.sender)
+            .join(models.api_actions, models.api_actions.c.action_id == models.api_action_transactions.c.action_id)
+            .where(models.api_action_transactions.c.tx_hash == tx_hash)
+        )
+        return [dict(row) for row in self.session.execute(stmt).mappings().all()]
+
     def get_action_transaction(
         self, action_id: str, *, tx_index: int
     ) -> dict[str, object] | None:
@@ -1110,10 +1122,9 @@ class APIActionRepository:
             .values(
                 tx_hash=tx_hash,
                 broadcast_at=broadcast_at,
-                updated_at=broadcast_at,
+                updated_at=utcnow_iso(),
             )
         )
-        self.session.commit()
 
     def update_transaction_receipt(
         self,
@@ -1126,6 +1137,8 @@ class APIActionRepository:
         gas_price_gwei: str | None,
         observed_at: str,
         error_message: str | None = None,
+        verified_at: str | None = None,
+        commit: bool = True,
     ) -> None:
         values: dict[str, object] = {
             "receipt_status": receipt_status,
@@ -1133,9 +1146,9 @@ class APIActionRepository:
             "gas_used": gas_used,
             "gas_price_gwei": gas_price_gwei,
             "updated_at": observed_at,
+            "verified_at": verified_at,
+            "error_message": error_message,
         }
-        if error_message is not None:
-            values["error_message"] = error_message
         self.session.execute(
             models.api_action_transactions.update()
             .where(
@@ -1144,7 +1157,8 @@ class APIActionRepository:
             )
             .values(**values)
         )
-        self.session.commit()
+        if commit:
+            self.session.commit()
 
     def update_action_status(
         self,
@@ -1153,34 +1167,43 @@ class APIActionRepository:
         status: str,
         updated_at: str,
         error_message: str | None = None,
+        commit: bool = True,
     ) -> None:
         values: dict[str, object] = {
             "status": status,
             "updated_at": updated_at,
+            "error_message": error_message,
         }
-        if error_message is not None:
-            values["error_message"] = error_message
         self.session.execute(
             models.api_actions.update()
             .where(models.api_actions.c.action_id == action_id)
             .values(**values)
         )
-        self.session.commit()
+        if commit:
+            self.session.commit()
 
     def pending_receipt_transactions(
-        self, *, older_than: str
+        self, *, older_than: str, limit: int = 20
     ) -> list[dict[str, object]]:
         stmt = (
             select(models.api_action_transactions)
             .where(
                 models.api_action_transactions.c.tx_hash.is_not(None),
-                models.api_action_transactions.c.receipt_status.is_(None),
-                models.api_action_transactions.c.broadcast_at.is_not(None),
-                models.api_action_transactions.c.broadcast_at <= older_than,
+                models.api_action_transactions.c.verified_at.is_(None),
+                models.api_action_transactions.c.updated_at <= older_than,
             )
-            .order_by(models.api_action_transactions.c.broadcast_at.asc())
+            .order_by(models.api_action_transactions.c.updated_at.asc(), models.api_action_transactions.c.id.asc())
+            .limit(limit)
         )
         return [dict(row) for row in self.session.execute(stmt).mappings().all()]
+
+    def mark_receipt_checked(self, tx_hash: str, *, checked_at: str) -> None:
+        self.session.execute(
+            models.api_action_transactions.update()
+            .where(models.api_action_transactions.c.tx_hash == tx_hash)
+            .values(updated_at=checked_at)
+        )
+        self.session.commit()
 
     @staticmethod
     def decode_json_field(value: object) -> dict[str, object]:

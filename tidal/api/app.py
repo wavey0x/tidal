@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from tidal.api.routes.auctions import router as auctions_router
 from tidal.api.routes.dashboard import router as dashboard_router
 from tidal.api.routes.kick import router as kick_router
 from tidal.api.routes.logs import router as logs_router
+from tidal.api.services.action_reconcile import run_action_reconciler
 from tidal.config import Settings
 from tidal.persistence.db import Database
 from tidal.security import redact_sensitive_text
@@ -35,7 +37,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ANN202
-        yield
+        task = asyncio.create_task(run_action_reconciler(database, resolved_settings)) if resolved_settings.rpc_url else None
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            database.engine.dispose()
 
     app = FastAPI(title="Tidal Control Plane", version="1.0.0", lifespan=lifespan)
     app.state.settings = resolved_settings

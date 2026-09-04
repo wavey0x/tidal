@@ -331,6 +331,7 @@ api_action_transactions = Table(
     Column("tx_hash", String, nullable=True),
     Column("broadcast_at", String, nullable=True),
     Column("receipt_status", String, nullable=True),
+    Column("verified_at", String, nullable=True),
     Column("block_number", Integer, nullable=True),
     Column("gas_used", Integer, nullable=True),
     Column("gas_price_gwei", Text, nullable=True),
@@ -367,6 +368,7 @@ Index("ix_api_actions_status_created", api_actions.c.status, api_actions.c.creat
 Index("ix_api_actions_operator_created", api_actions.c.operator_id, api_actions.c.created_at.desc())
 Index("ix_api_action_transactions_action_tx_index", api_action_transactions.c.action_id, api_action_transactions.c.tx_index, unique=True)
 Index("ix_api_action_transactions_receipt_pending", api_action_transactions.c.tx_hash, api_action_transactions.c.receipt_status, api_action_transactions.c.broadcast_at)
+Index("ix_api_action_transactions_verification_pending", api_action_transactions.c.verified_at, api_action_transactions.c.updated_at)
 
 api_keys = Table(
     "api_keys",

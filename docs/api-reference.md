@@ -71,7 +71,7 @@ Auth behavior:
 | `GET` | `/api/v1/tidal/actions` | List prepared actions and audit state |
 | `GET` | `/api/v1/tidal/actions/{action_id}` | Fetch one action |
 | `POST` | `/api/v1/tidal/actions/{action_id}/broadcast` | Report a locally broadcast transaction |
-| `POST` | `/api/v1/tidal/actions/{action_id}/receipt` | Report or reconcile receipt data |
+| `POST` | `/api/v1/tidal/actions/{action_id}/receipt` | Request chain receipt reconciliation |
 
 ## Query Parameters
 
@@ -177,15 +177,23 @@ bypasses only an exhausted no-fill retry budget for that one preparation.
 
 ```json
 {
-  "txIndex": 0,
-  "receiptStatus": "confirmed",
-  "blockNumber": 12345678,
-  "gasUsed": 210000,
-  "gasPriceGwei": "0.24",
-  "observedAt": "2026-03-29T17:02:00+00:00",
-  "errorMessage": null
+  "txIndex": 0
 }
 ```
+
+This is a reconciliation hint, not a client assertion of success or failure.
+Legacy receipt fields are accepted but ignored. The server looks up the retained
+broadcast hash and checks its chain, prepared sender (when specified), destination,
+calldata and value before committing chain-derived action and operation outcomes.
+`receiptStatus` and mined details remain null until `verifiedAt` is populated.
+Lookup failures leave the action pending and return a warning; broadcast replay
+does not downgrade verified outcomes.
+
+With server RPC configured, one API background task retries up to 20 pending
+transactions per pass, using `TIDAL_API_RECEIPT_RECONCILE_INTERVAL_SECONDS` and
+`TIDAL_API_RECEIPT_RECONCILE_THRESHOLD_SECONDS`. This also covers API-only deployment
+actions. Migration 0027 requeues retained historical hashes for verification while
+preserving reported fields in the database for audit. It does not send transactions.
 
 ## Errors
 

@@ -35,6 +35,16 @@
   padding-top: 18px;
 }
 
+.refresh-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .alerts-heading {
   display: flex;
   align-items: flex-start;

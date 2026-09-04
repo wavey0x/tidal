@@ -10,6 +10,8 @@ React dashboard for the monorepo Tidal control-plane API.
 - Token filter + address/symbol search
 - Balances formatted to 2 decimals
 - Token logos loaded lazily from first-party `tokenLogoUrl` resources, with a bundled placeholder for unavailable images
+- Active views refresh on entry, browser focus, and every 30 seconds while visible, or with Refresh.
+  Failed refreshes retain the last good data and show stale/last-updated feedback.
 
 ## Run locally
 
@@ -46,6 +48,21 @@ All current browser endpoints are public, including wallet deployment preparatio
 The browser never needs an operator API key. Keep operator credentials in the CLI;
 do not put secrets in frontend environment variables. Only the two documented
 public API base URL variables are exposed to browser code, in development and production.
+The legacy `VITE_FACTORY_DASHBOARD_API_BASE_URL` alias remains supported, as does
+the server-only `FACTORY_DASHBOARD_API_PROXY_TARGET` proxy alias.
+
+## Verify
+
+```bash
+npm test
+npm run build
+npx playwright install chromium
+npm run test:browser
+```
+
+Browser tests use local API and wallet fixtures, not production services. To use
+an installed Chrome instead of Playwright's Chromium, run
+`TIDAL_TEST_BROWSER_CHANNEL=chrome npm run test:browser`.
 
 ## Endpoints
 

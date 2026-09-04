@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { createPortal } from "react-dom";
 import Big from "big.js";
 import { keccak_256 } from "js-sha3";
+import { useLiveData } from "./useLiveData";
 
 const ALL_TOKENS = "__all__";
 const MIN_USD_VISIBLE = new Big("0.01");
@@ -1677,6 +1678,21 @@ function KickLogPager({
   );
 }
 
+function RefreshStatus({ state }) {
+  const stale = state.error || (state.updatedAt && Date.now() - state.updatedAt > 65000);
+  return (
+    <div className="refresh-status">
+      <span role="status">
+        {stale ? "Data may be stale · " : ""}
+        {state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
+      </span>
+      <button type="button" className="kick-log-page-btn" onClick={state.refresh} disabled={state.refreshing}>
+        {state.refreshing ? "Refreshing…" : "Refresh"}
+      </button>
+    </div>
+  );
+}
+
 function KickLogPage({
   nowMs,
   initialRunId,
@@ -1685,20 +1701,14 @@ function KickLogPage({
   initialStatus = "all",
   initialSearch = "",
 }) {
-  const [kicks, setKicks] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState(initialStatus);
   const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(initialSearch);
   const [offset, setOffset] = useState(initialOffset);
-  const [hasMore, setHasMore] = useState(false);
   const [expandedRows, setExpandedRows] = useState(() => new Set());
   const [focusedKickId, setFocusedKickId] = useState(initialKickId);
   const [focusedRunId, setFocusedRunId] = useState(initialRunId);
   const highlightedRowRef = useRef(null);
-  const pageCacheRef = useRef(new Map());
   const filterResetRef = useRef(true);
   const isMobile = useMediaQuery("(max-width: 600px)");
   const focusedView = Boolean(focusedKickId || focusedRunId);
@@ -1719,116 +1729,16 @@ function KickLogPage({
     setExpandedRows(new Set());
   }, [statusFilter, debouncedSearchTerm]);
 
-  useEffect(() => {
-    let isMounted = true;
-    const controller = new AbortController();
-
-    const normalizedQuery = debouncedSearchTerm.trim();
-    const requestKey = JSON.stringify({
-      kickId: focusedKickId || null,
-      runId: focusedRunId || null,
-      offset,
-      status: statusFilter,
-      q: normalizedQuery,
-    });
-
-    function applyPayload(data) {
-      setKicks(Array.isArray(data.kicks) ? data.kicks.map(normalizeKick) : []);
-      setTotal(data.total || 0);
-      setHasMore(Boolean(data.hasMore));
-    }
-
-    async function prefetchNextPage(data) {
-      if (focusedView || !data?.hasMore) {
-        return;
-      }
-      const nextOffset = offset + KICK_LOG_PAGE_SIZE;
-      const nextKey = JSON.stringify({
-        kickId: null,
-        runId: null,
-        offset: nextOffset,
-        status: statusFilter,
-        q: normalizedQuery,
-      });
-      if (pageCacheRef.current.has(nextKey)) {
-        return;
-      }
-      const params = new URLSearchParams({
-        limit: String(KICK_LOG_PAGE_SIZE),
-        offset: String(nextOffset),
-      });
-      if (statusFilter !== "all") {
-        params.set("status", statusFilter);
-      }
-      if (normalizedQuery) {
-        params.set("q", normalizedQuery);
-      }
-      try {
-        const response = await apiFetch(`/logs/kicks?${params.toString()}`);
-        if (!response.ok) {
-          return;
-        }
-        const payload = await response.json();
-        pageCacheRef.current.set(nextKey, payload?.data || {});
-      } catch {
-        // Ignore background prefetch failures.
-      }
-    }
-
-    async function loadKicks() {
-      const cached = pageCacheRef.current.get(requestKey);
-      if (cached) {
-        setError("");
-        applyPayload(cached);
-        setLoading(false);
-        prefetchNextPage(cached);
-        return;
-      }
-
-      setLoading(true);
-      setError("");
-      try {
-        const params = new URLSearchParams({
-          limit: String(KICK_LOG_PAGE_SIZE),
-          offset: String(offset),
-        });
-        if (statusFilter !== "all") {
-          params.set("status", statusFilter);
-        }
-        if (normalizedQuery) {
-          params.set("q", normalizedQuery);
-        }
-        if (focusedKickId) {
-          params.set("kick_id", String(focusedKickId));
-        } else if (focusedRunId) {
-          params.set("run_id", focusedRunId);
-        }
-
-        const response = await apiFetch(`/logs/kicks?${params.toString()}`, {
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error("Unable to load logs");
-        const payload = await response.json();
-        const data = payload?.data || {};
-        if (!isMounted) return;
-        pageCacheRef.current.set(requestKey, data);
-        applyPayload(data);
-        prefetchNextPage(data);
-      } catch (err) {
-        if (isMounted && err.name !== "AbortError") {
-          setError(err.message || "Unable to load logs");
-        }
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-
-    loadKicks();
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
-  }, [debouncedSearchTerm, focusedKickId, focusedRunId, offset, statusFilter, focusedView]);
+  const params = new URLSearchParams({ limit: String(KICK_LOG_PAGE_SIZE), offset: String(offset) });
+  if (statusFilter !== "all") params.set("status", statusFilter);
+  if (debouncedSearchTerm.trim()) params.set("q", debouncedSearchTerm.trim());
+  if (focusedKickId) params.set("kick_id", String(focusedKickId));
+  else if (focusedRunId) params.set("run_id", focusedRunId);
+  const logs = useLiveData(apiUrl(`/logs/kicks?${params.toString()}`), { errorMessage: "Unable to load logs" });
+  const { loading, error } = logs;
+  const kicks = useMemo(() => Array.isArray(logs.data?.kicks) ? logs.data.kicks.map(normalizeKick) : [], [logs.data]);
+  const total = logs.data?.total || 0;
+  const hasMore = Boolean(logs.data?.hasMore);
 
   useEffect(() => {
     if (loading || (!focusedKickId && !focusedRunId) || !kicks.length) return;
@@ -1917,6 +1827,8 @@ function KickLogPage({
           </select>
         </label>
       </section>
+
+      <RefreshStatus state={logs} />
 
       {focusedView ? (
         <div className="kick-log-focusbar">
@@ -2522,13 +2434,21 @@ export default function App() {
   const [showZeroBalance, setShowZeroBalance] = useState(false);
   const [showClosedVaults, setShowClosedVaults] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [rows, setRows] = useState([]);
-  const [summary, setSummary] = useState(null);
-  const [loadingRows, setLoadingRows] = useState(true);
-  const [error, setError] = useState("");
-  const [alertsData, setAlertsData] = useState(null);
-  const [alertsLoading, setAlertsLoading] = useState(true);
-  const [alertsError, setAlertsError] = useState("");
+  const dashboard = useLiveData(apiUrl("/dashboard"), {
+    active: activePage === "strategies" || activePage === "fee-burner",
+    viewKey: activePage,
+    errorMessage: "Unable to load dashboard",
+  });
+  const alerts = useLiveData(apiUrl("/alerts"), {
+    active: activePage === "alerts", loadInitially: true, errorMessage: "Unable to load alerts",
+  });
+  const rows = useMemo(() => dashboard.data?.rows || [], [dashboard.data]);
+  const summary = useMemo(() => ({
+    ...dashboard.data?.summary,
+    latestScanAt: dashboard.data?.latestScanAt || dashboard.data?.summary?.latestScanAt || null,
+  }), [dashboard.data]);
+  const { loading: loadingRows, error } = dashboard;
+  const { data: alertsData, loading: alertsLoading, error: alertsError } = alerts;
   const [displayMode, setDisplayMode] = useState("usd");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isMobile = useMediaQuery("(max-width: 600px)");
@@ -2550,42 +2470,6 @@ export default function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-
-  const loadAlerts = useCallback(async (signal) => {
-    setAlertsError("");
-    try {
-      const response = await apiFetch("/alerts", { signal });
-      if (!response.ok) throw new Error("Unable to load alerts");
-      const payload = await response.json();
-      setAlertsData(payload?.data || { items: [], needsActionCount: 0 });
-    } catch (loadError) {
-      if (loadError.name !== "AbortError") {
-        setAlertsError(loadError.message || "Unable to load alerts");
-      }
-    } finally {
-      if (!signal.aborted) setAlertsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    loadAlerts(controller.signal);
-    return () => controller.abort();
-  }, [loadAlerts]);
-
-  useEffect(() => {
-    if (activePage !== "alerts") return undefined;
-    let controller = new AbortController();
-    const intervalId = window.setInterval(() => {
-      controller.abort();
-      controller = new AbortController();
-      loadAlerts(controller.signal);
-    }, 60000);
-    return () => {
-      controller.abort();
-      window.clearInterval(intervalId);
-    };
-  }, [activePage, loadAlerts]);
 
   const resolvedTheme = themePreference || systemTheme;
   const headerLogoSrc = resolvedTheme === "dark" ? "/tidal-logo-dark.svg" : "/tidal-logo-light.svg";
@@ -2677,64 +2561,6 @@ export default function App() {
     const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
     window.history.replaceState({}, "", nextUrl);
   }, [selectedToken]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const controller = new AbortController();
-
-    async function loadDashboard() {
-      setLoadingRows(true);
-      setError("");
-
-      try {
-        const response = await apiFetch("/dashboard", {
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error("Unable to load dashboard");
-        }
-
-        const payload = await response.json();
-        const data = payload?.data || {};
-
-        if (!isMounted) {
-          return;
-        }
-
-        const summaryPayload = data.summary
-          ? {
-              ...data.summary,
-              latestScanAt: data.latestScanAt || data.summary.latestScanAt || null,
-            }
-          : {
-              strategyCount: Array.isArray(data.rows) ? data.rows.length : 0,
-              tokenCount: Array.isArray(data.tokens) ? data.tokens.length : 0,
-              latestScanAt: data.latestScanAt || null,
-            };
-
-        setSummary(summaryPayload);
-        setRows(data.rows || []);
-      } catch (loadError) {
-        if (isMounted && loadError.name !== "AbortError") {
-          setError(loadError.message || "Unable to load dashboard");
-          setSummary(null);
-          setRows([]);
-        }
-      } finally {
-        if (isMounted) {
-          setLoadingRows(false);
-        }
-      }
-    }
-
-    loadDashboard();
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
-  }, []);
 
   const decoratedRows = useMemo(() => {
     return rows
@@ -3152,6 +2978,8 @@ export default function App() {
           />
         </div>
       </header>
+
+      {activePage !== "kicks" ? <RefreshStatus state={activePage === "alerts" ? alerts : dashboard} /> : null}
 
       {activePage === "kicks" ? (
         <KickLogPage

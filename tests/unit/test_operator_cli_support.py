@@ -119,7 +119,7 @@ async def test_send_identity_is_durable_before_rpc_and_survives_process_exit(mon
     async def send(_):
         # Open a separate connection: the write must already be committed.
         reopened = ActionReportOutbox(args["outbox"].path)
-        report = reopened.pending_reports(base_url=args["client"].base_url)[0]
+        report = reopened.pending_reports(base_url=args["client"].base_url, submissions=True)[0]
         assert report.payload["txHash"] == SIGNED_TX_HASH
         assert report.payload["nonce"] == 7
         assert report.payload["chainId"] == 1
@@ -130,6 +130,13 @@ async def test_send_identity_is_durable_before_rpc_and_survives_process_exit(mon
         await broadcast_prepared_action(**args)
     assert args["outbox"].pending_count(base_url=args["client"].base_url) == 1
     assert web3.closed
+    web3.send_raw_transaction = AsyncMock()
+    web3.get_transaction_receipt = AsyncMock(side_effect=TimeoutError())
+    restarted = {**args, "outbox": ActionReportOutbox(args["outbox"].path), "action_id": "fresh-action"}
+    with pytest.raises(RuntimeError, match="unresolved"):
+        await broadcast_prepared_action(**restarted)
+    web3.send_raw_transaction.assert_not_awaited()
+    assert len(args["signer"].seen_txs) == 1
 
 
 @pytest.mark.asyncio
@@ -141,7 +148,7 @@ async def test_outbox_failure_prevents_network_submission(monkeypatch, tmp_path)
     def fail(**kwargs):
         raise OSError("disk unavailable")
 
-    monkeypatch.setattr(args["outbox"], "queue_broadcast", fail)
+    monkeypatch.setattr(args["outbox"], "queue_submission", fail)
     with pytest.raises(RuntimeError, match="nothing was broadcast"):
         await broadcast_prepared_action(**args)
     web3.send_raw_transaction.assert_not_awaited()
@@ -172,6 +179,66 @@ async def test_lost_send_response_can_still_confirm_by_deterministic_hash(monkey
     assert records[0]["receiptStatus"] == "CONFIRMED"
     assert records[0]["txHash"] == SIGNED_TX_HASH
     assert args["client"].receipt_reports[0]["receiptStatus"] == "CONFIRMED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reporting_available", [False, True])
+async def test_unresolved_submission_prevents_a_fresh_action_after_restart(monkeypatch, tmp_path, reporting_available):
+    web3 = _FakeWeb3Client()
+    web3.send_raw_transaction = AsyncMock(side_effect=ConnectionError("lost response"))
+    web3.get_transaction_receipt = AsyncMock(side_effect=TimeoutError())
+    args = _broadcast_args(monkeypatch, tmp_path, web3)
+    args["client"].fail_broadcast = not reporting_available
+    await broadcast_prepared_action(**args)
+    restarted = {**args, "outbox": ActionReportOutbox(args["outbox"].path), "action_id": "fresh-action"}
+    with pytest.raises(RuntimeError, match="unresolved"):
+        await broadcast_prepared_action(**restarted)
+    assert len(args["signer"].seen_txs) == 1
+    web3.send_raw_transaction.assert_awaited_once()
+    assert restarted["outbox"].pending_count(base_url=args["client"].base_url, report_type="submission") == 1
+
+
+@pytest.mark.asyncio
+async def test_recovered_saved_receipt_allows_new_action_without_resending_old_bytes(monkeypatch, tmp_path):
+    web3 = _FakeWeb3Client()
+    web3.send_raw_transaction = AsyncMock()
+    web3.get_transaction_receipt = AsyncMock(side_effect=[TimeoutError(), {"status": 1, "blockNumber": 123}, {"status": 1, "blockNumber": 124}])
+    args = _broadcast_args(monkeypatch, tmp_path, web3)
+    await broadcast_prepared_action(**args)
+    restarted = {**args, "outbox": ActionReportOutbox(args["outbox"].path), "action_id": "fresh-action"}
+    result = await broadcast_prepared_action(**restarted)
+    assert result[0]["receiptStatus"] == "CONFIRMED"
+    assert len(args["signer"].seen_txs) == 2
+    assert web3.send_raw_transaction.await_count == 2
+    assert restarted["outbox"].pending_count(base_url=args["client"].base_url) == 0
+
+
+@pytest.mark.asyncio
+async def test_old_undelivered_broadcast_is_retained_before_report_flush(monkeypatch, tmp_path):
+    web3 = _FakeWeb3Client()
+    web3.send_raw_transaction = AsyncMock()
+    web3.get_transaction_receipt = AsyncMock(side_effect=TimeoutError())
+    args = _broadcast_args(monkeypatch, tmp_path, web3)
+    args["outbox"].queue_broadcast(
+        base_url=args["client"].base_url, action_id="old-action",
+        payload={"txIndex": 0, "txHash": SIGNED_TX_HASH, "sender": args["sender"], "broadcastAt": "2026-01-01"},
+    )
+    with pytest.raises(RuntimeError, match="unresolved"):
+        await broadcast_prepared_action(**args)
+    assert not args["signer"].seen_txs
+    web3.send_raw_transaction.assert_not_awaited()
+    assert args["outbox"].pending_count(base_url=args["client"].base_url, report_type="submission") == 1
+
+
+@pytest.mark.asyncio
+async def test_receipt_without_outcome_remains_pending(monkeypatch, tmp_path):
+    web3 = _FakeWeb3Client()
+    web3.get_transaction_receipt = AsyncMock(return_value={"blockNumber": 123})
+    args = _broadcast_args(monkeypatch, tmp_path, web3)
+    result = await broadcast_prepared_action(**args)
+    assert "receiptStatus" not in result[0]
+    assert args["client"].receipt_reports == []
+    assert args["outbox"].pending_count(base_url=args["client"].base_url, report_type="submission") == 1
 
 
 @pytest.mark.asyncio

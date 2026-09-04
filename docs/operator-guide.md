@@ -110,6 +110,15 @@ The CLI will:
 5. send locally
 6. report broadcast and receipt data back to the API
 
+The client saves the signed transaction's hash in its local outbox before sending.
+A lost send response or a crash does not authorize another attempt. The identity
+remains saved independently of API report delivery until a receipt confirms or
+reverts it. Later executions first reconcile saved hashes and refuse to sign
+while an earlier submission remains unresolved. This can include a crash before
+the transaction reached the RPC: investigate the retained hash rather than
+automatically replacing it or deleting the outbox. Report-delivery retries never
+resubmit signed transactions.
+
 Because preparation happens through the API, the confirmation panel reflects server-side `config/server.yaml` policy.
 The client also enforces a local age limit for prepared transactions. If you wait longer than `prepared_action_max_age_seconds` before sending, that prepared transaction is skipped and you need to re-run.
 

@@ -58,6 +58,13 @@ class ActionReportOutbox:
             payload=payload,
         )
 
+    def queue_submission(self, *, base_url: str, action_id: str, payload: dict[str, Any]) -> None:
+        """Retain local send identity until chain evidence resolves it, independently of report delivery."""
+        self._upsert(
+            base_url=base_url, action_id=action_id, tx_index=int(payload["txIndex"]),
+            report_type="submission", payload=payload,
+        )
+
     def queue_receipt(self, *, base_url: str, action_id: str, payload: dict[str, Any]) -> None:
         self._upsert(
             base_url=base_url,
@@ -84,17 +91,18 @@ class ActionReportOutbox:
                 (self._normalize_base_url(base_url), action_id, tx_index, report_type),
             )
 
-    def pending_reports(self, *, base_url: str, limit: int = 100) -> list[PendingActionReport]:
+    def pending_reports(self, *, base_url: str, limit: int = 100, submissions: bool = False) -> list[PendingActionReport]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT id, action_id, tx_index, report_type, payload_json, attempt_count, last_error
                 FROM action_report_outbox
                 WHERE base_url = ?
+                  AND (report_type = 'submission') = ?
                 ORDER BY created_at ASC, id ASC
                 LIMIT ?
                 """,
-                (self._normalize_base_url(base_url), limit),
+                (self._normalize_base_url(base_url), int(submissions), limit),
             ).fetchall()
 
         pending: list[PendingActionReport] = []
@@ -116,11 +124,11 @@ class ActionReportOutbox:
             )
         return pending
 
-    def pending_count(self, *, base_url: str) -> int:
+    def pending_count(self, *, base_url: str, report_type: str | None = None) -> int:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) AS count FROM action_report_outbox WHERE base_url = ?",
-                (self._normalize_base_url(base_url),),
+                "SELECT COUNT(*) AS count FROM action_report_outbox WHERE base_url = ? AND (? IS NULL OR report_type = ?)",
+                (self._normalize_base_url(base_url), report_type, report_type),
             ).fetchone()
         return int(row["count"]) if row is not None else 0
 

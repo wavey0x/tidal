@@ -167,11 +167,17 @@ async def broadcast_prepared_action(
     validate_prepared_gas_limits(transactions)
     report_outbox = outbox or ActionReportOutbox()
     try:
+        # Upgrade retained reports from clients that only kept undelivered
+        # broadcasts. Delivery must not erase an unresolved send identity.
+        for report in report_outbox.pending_reports(base_url=client.base_url):
+            if report.report_type == "broadcast":
+                report_outbox.queue_submission(base_url=client.base_url, action_id=report.action_id, payload=report.payload)
         report_outbox.flush_pending(client)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Could not check saved submissions; nothing was broadcast.") from exc
     web3_client = build_web3_client(settings)
     try:
+        await _reconcile_saved_submissions(report_outbox, client, web3_client)
         checksum_sender = to_checksum_address(sender)
 
         try:
@@ -254,7 +260,7 @@ async def broadcast_prepared_action(
                 "nonce": nonce,
             }
             try:
-                report_outbox.queue_broadcast(
+                report_outbox.queue_submission(
                     base_url=client.base_url, action_id=action_id, payload=broadcast_payload,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -291,6 +297,10 @@ async def broadcast_prepared_action(
                     record["errorMessage"] = "Submission outcome unknown; reconcile this hash before retrying."
                 results.append(record)
                 break
+            if receipt.get("status") not in {0, 1}:
+                record["errorMessage"] = "Receipt outcome unknown; reconcile this hash before retrying."
+                results.append(record)
+                break
 
             effective_gas_price = receipt.get("effectiveGasPrice")
             gas_price_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
@@ -311,6 +321,9 @@ async def broadcast_prepared_action(
                 },
                 warning_label=f"control-plane receipt report for transaction {tx_index + 1}",
             )
+            report_outbox.mark_delivered(
+                base_url=client.base_url, action_id=action_id, tx_index=tx_index, report_type="submission",
+            )
             record.update(
                 {
                     "receiptStatus": receipt_status,
@@ -325,6 +338,39 @@ async def broadcast_prepared_action(
         return results
     finally:
         await web3_client.close()
+
+
+async def _reconcile_saved_submissions(outbox, client, web3_client) -> None:  # noqa: ANN001
+    """A restart may look up a retained hash, but must never sign its replacement."""
+    for report in outbox.pending_reports(base_url=client.base_url, submissions=True, limit=20):
+        tx_hash = str(report.payload["txHash"])
+        _send_action_report(
+            outbox=outbox, client=client, action_id=report.action_id, report_type="broadcast",
+            payload=report.payload, warning_label="saved submission report",
+        )
+        try:
+            receipt = await web3_client.get_transaction_receipt(tx_hash, timeout_seconds=2)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Prior submission {tx_hash} is unresolved; check it before sending again.") from exc
+        if receipt.get("status") not in {0, 1}:
+            raise RuntimeError(f"Prior submission {tx_hash} has no verified outcome; check it before sending again.")
+        _send_action_report(
+            outbox=outbox, client=client, action_id=report.action_id, report_type="receipt",
+            payload={
+                "txIndex": report.tx_index,
+                "receiptStatus": "CONFIRMED" if receipt["status"] == 1 else "REVERTED",
+                "blockNumber": receipt.get("blockNumber"), "gasUsed": receipt.get("gasUsed"),
+                "observedAt": utcnow_iso(),
+            },
+            warning_label="saved receipt report",
+        )
+        outbox.mark_delivered(
+            base_url=client.base_url, action_id=report.action_id, tx_index=report.tx_index, report_type="submission",
+        )
+    if outbox.pending_count(base_url=client.base_url, report_type="submission") or outbox.pending_count(
+        base_url=client.base_url, report_type="broadcast"
+    ):
+        raise RuntimeError("Saved submission reconciliation is incomplete; retry reconciliation before sending.")
 
 
 def execute_prepared_action_sync(

@@ -138,11 +138,9 @@ To point at a local API instead:
 TIDAL_API_PROXY_TARGET=http://127.0.0.1:8787 npm run dev
 ```
 
-If you want authenticated UI actions locally:
-
-```bash
-VITE_TIDAL_API_KEY=$TIDAL_API_KEY npm run dev
-```
+Browser reads and wallet-deployment preparation use public endpoints. Do not add
+operator keys to frontend environment variables; authenticated operator actions
+belong in the CLI.
 
 ## Run Tests
 

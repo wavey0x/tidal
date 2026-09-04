@@ -59,6 +59,7 @@ Auth behavior:
 | `POST` | `/api/v1/tidal/kick/inspect` | Candidate inspection using cached shortlist data plus optional live inspection |
 | `GET` | `/api/v1/tidal/kicks/{kick_id}/auctionscan` | Resolve AuctionScan auction/round links for a kick row |
 | `GET` | `/api/v1/tidal/strategies/{strategy}/deploy-defaults` | Load deploy defaults for a strategy |
+| `POST` | `/api/v1/tidal/auctions/deploy/browser-prepare` | Prepare an unsigned wallet deployment without an operator action record |
 
 ## Authenticated Endpoints
 

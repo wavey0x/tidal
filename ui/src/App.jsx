@@ -8,7 +8,6 @@ const MIN_USD_VISIBLE = new Big("0.01");
 const THEME_SEQUENCE = ["light", "dark"];
 const THEME_STORAGE_KEY = "tidal_theme_preference";
 const LEGACY_THEME_STORAGE_KEY = "factory_dashboard_theme_preference";
-const API_TOKEN = import.meta.env.VITE_TIDAL_API_KEY || import.meta.env.VITE_TIDAL_API_TOKEN || "";
 const API_BASE_URL = (
   import.meta.env.VITE_TIDAL_API_BASE_URL
   || import.meta.env.VITE_FACTORY_DASHBOARD_API_BASE_URL
@@ -30,14 +29,7 @@ function apiUrl(path) {
 }
 
 async function apiFetch(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (API_TOKEN) {
-    headers.set("Authorization", `Bearer ${API_TOKEN}`);
-  }
-  return fetch(apiUrl(path), {
-    ...options,
-    headers,
-  });
+  return fetch(apiUrl(path), options);
 }
 
 function parseLocation() {

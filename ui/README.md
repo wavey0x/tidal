@@ -42,14 +42,15 @@ Or point the dev server at a local API proxy:
 TIDAL_API_PROXY_TARGET=http://localhost:8787 npm run dev
 ```
 
-Dashboard and log reads are public. To call authenticated endpoints (prepare/broadcast), set:
-
-```bash
-VITE_TIDAL_API_KEY=your-key npm run dev
-```
+All current browser endpoints are public, including wallet deployment preparation.
+The browser never needs an operator API key. Keep operator credentials in the CLI;
+do not put secrets in frontend environment variables. Only the two documented
+public API base URL variables are exposed to browser code, in development and production.
 
 ## Endpoints
 
 - `GET /api/v1/tidal/dashboard`
 - `GET /api/v1/tidal/logs/kicks`
-- `POST /api/v1/tidal/auctions/deploy/prepare`
+- `GET /api/v1/tidal/alerts`
+- `GET /api/v1/tidal/strategies/{strategy}/deploy-defaults`
+- `POST /api/v1/tidal/auctions/deploy/browser-prepare`

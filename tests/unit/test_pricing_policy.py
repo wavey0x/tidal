@@ -276,6 +276,12 @@ def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
     assert eva_usdt_profile.name == "stable"
     assert config.token_sizing_policy.default_limit == Decimal("3000")
     assert (
+        config.token_sizing_policy.token_overrides[
+            "0x419905009e4656fdc02418c7df35b1e61ed5f726"
+        ]
+        == Decimal("3000")
+    )
+    assert (
         config.token_sizing_policy.resolve("0x0000000000000000000000000000000000000001")
         == Decimal("3000")
     )

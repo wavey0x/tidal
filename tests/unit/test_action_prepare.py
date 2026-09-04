@@ -1049,7 +1049,7 @@ async def test_prepare_settle_action_returns_noop_when_manual_sweep_is_required(
         data="0xdeadbeef",
     )
 
-    monkeypatch.setattr("tidal.api.services.action_prepare.build_web3_client", lambda settings: object())
+    monkeypatch.setattr("tidal.api.services.action_prepare.build_web3_client", lambda settings: SimpleNamespace(close=AsyncMock()))
     monkeypatch.setattr("tidal.api.services.action_prepare.inspect_auction_settlement", AsyncMock(return_value=inspection))
     monkeypatch.setattr("tidal.api.services.action_prepare.decide_auction_settlement", lambda *args, **kwargs: decision)
     monkeypatch.setattr(

@@ -80,7 +80,7 @@ def test_inspect_kick_candidates_marks_dirty_auction_as_resolve_first(monkeypatc
         limited_candidates=[],
     )
     monkeypatch.setattr("tidal.ops.kick_inspect.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr("tidal.ops.kick_inspect.build_web3_client", lambda settings: object())
+    monkeypatch.setattr("tidal.ops.kick_inspect.build_web3_client", lambda settings: SimpleNamespace(close=AsyncMock()))
     monkeypatch.setattr(
         "tidal.ops.kick_inspect.inspect_auction_settlements",
         AsyncMock(
@@ -121,7 +121,7 @@ def test_inspect_kick_candidates_marks_live_lot_as_blocked_live(monkeypatch) -> 
         limited_candidates=[],
     )
     monkeypatch.setattr("tidal.ops.kick_inspect.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr("tidal.ops.kick_inspect.build_web3_client", lambda settings: object())
+    monkeypatch.setattr("tidal.ops.kick_inspect.build_web3_client", lambda settings: SimpleNamespace(close=AsyncMock()))
     monkeypatch.setattr(
         "tidal.ops.kick_inspect.inspect_auction_settlements",
         AsyncMock(
@@ -162,7 +162,7 @@ def test_inspect_kick_candidates_marks_preview_failures(monkeypatch) -> None:
         limited_candidates=[],
     )
     monkeypatch.setattr("tidal.ops.kick_inspect.build_shortlist", lambda *args, **kwargs: shortlist)
-    monkeypatch.setattr("tidal.ops.kick_inspect.build_web3_client", lambda settings: object())
+    monkeypatch.setattr("tidal.ops.kick_inspect.build_web3_client", lambda settings: SimpleNamespace(close=AsyncMock()))
     monkeypatch.setattr(
         "tidal.ops.kick_inspect.inspect_auction_settlements",
         AsyncMock(

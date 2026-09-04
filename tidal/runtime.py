@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
+
 from tidal.alerts.base import NullAlertSink
 from tidal.alerts.dispatcher import AlertDispatcher
 from tidal.alerts.service import AlertService
 from tidal.alerts.telegram import TelegramAlertSink
+from tidal.async_resources import close_client
 from tidal.automation_scope import current_automation_pairs
 from tidal.auctionscan import AuctionScanService
 from tidal.chain.contracts.fee_burner import FeeBurnerReader
@@ -286,6 +289,7 @@ def build_txn_service(
     skip_base_fee_check: bool = False,
     web3_client: Web3Client | None = None,
     signer: TransactionSigner | None = None,
+    owned_clients: AsyncExitStack | None = None,
 ):
     from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
     from tidal.transaction_service.signer import TransactionSigner
@@ -294,6 +298,8 @@ def build_txn_service(
 
     if web3_client is None:
         web3_client = build_web3_client(settings)
+        if owned_clients is not None:
+            owned_clients.push_async_callback(close_client, web3_client)
     txn_run_repository = TxnRunRepository(session)
     kick_tx_repository = KickTxRepository(session)
     kick_guard_status_repository = KickGuardStatusRepository(session)
@@ -340,6 +346,8 @@ def build_txn_service(
         timeout_seconds=settings.price_timeout_seconds,
         retry_attempts=settings.price_retry_attempts,
     )
+    if owned_clients is not None:
+        owned_clients.push_async_callback(close_client, price_provider)
 
     tx_builder = KickTxBuilder(
         web3_client=web3_client,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
@@ -10,6 +9,7 @@ from eth_abi import decode as abi_decode
 from eth_utils import to_checksum_address
 from hexbytes import HexBytes
 
+from tidal.async_resources import gather_reads
 from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.chain.contracts.multicall import MulticallClient, MulticallRequest
 from tidal.normalizers import normalize_address
@@ -110,7 +110,7 @@ async def inspect_auction_settlements(  # noqa: ANN001
         multicall_auction_batch_calls=settings.multicall_auction_batch_calls,
     )
 
-    active_flags, enabled_tokens_result = await asyncio.gather(
+    active_flags, enabled_tokens_result = await gather_reads(
         reader.read_bool_noargs_many(normalized_auctions, "isAnActiveAuction"),
         reader.read_address_array_noargs_many(normalized_auctions, "getAllEnabledAuctions"),
     )

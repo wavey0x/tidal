@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Callable
 from decimal import Decimal
@@ -10,6 +9,7 @@ from typing import Any
 
 import structlog
 
+from tidal.async_resources import gather_reads
 from tidal.auction_price_units import (
     compute_minimum_price_scaled_1e18,
     compute_minimum_quote_unscaled,
@@ -211,7 +211,7 @@ class KickPreparer:
                     "conflicting stored auction versions for the same auction address"
                 )
         if approved_addresses:
-            active_flags, auction_lengths, step_durations = await asyncio.gather(
+            active_flags, auction_lengths, step_durations = await gather_reads(
                 reader.read_bool_noargs_many(approved_addresses, "isAnActiveAuction"),
                 reader.read_uint_noargs_many(approved_addresses, "auctionLength"),
                 reader.read_uint_noargs_many(approved_addresses, "stepDuration"),
@@ -301,7 +301,7 @@ class KickPreparer:
 
         erc20_reader = self._resolve_erc20_reader()
         try:
-            live_balance_raw, sell_decimals, want_decimals = await asyncio.gather(
+            live_balance_raw, sell_decimals, want_decimals = await gather_reads(
                 erc20_reader.read_balance(candidate.token_address, candidate.source_address),
                 erc20_reader.read_decimals(candidate.token_address),
                 erc20_reader.read_decimals(candidate.want_address),

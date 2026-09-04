@@ -15,6 +15,7 @@ from tidal.auction_settlement import (
     path_reason,
 )
 from tidal.auction_rounds import NoFillGuard
+from tidal.async_resources import close_client
 from tidal.normalizers import normalize_address
 from tidal.persistence.repositories import KickTxRepository, TokenRepository
 from tidal.runtime import build_web3_client
@@ -88,6 +89,14 @@ class KickInspectResult:
     no_fill_skips: list[KickInspectEntry] = field(default_factory=list)
 
 
+async def _inspect_with_owned_client(settings, auctions_to_inspect):  # noqa: ANN001, ANN202
+    web3_client = build_web3_client(settings)
+    try:
+        return await inspect_auction_settlements(web3_client, settings, auctions_to_inspect)
+    finally:
+        await close_client(web3_client)
+
+
 def inspect_kick_candidates(
     session,
     settings,
@@ -133,13 +142,8 @@ def inspect_kick_candidates(
             }
         )
         if auctions_to_inspect:
-            web3_client = build_web3_client(settings)
             inspections_by_auction = asyncio.run(
-                inspect_auction_settlements(
-                    web3_client,
-                    settings,
-                    auctions_to_inspect,
-                )
+                _inspect_with_owned_client(settings, auctions_to_inspect)
             )
 
     # Avoid repeated lot_previews passes per candidate.

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
 import typer
-from eth_utils import to_checksum_address
+from eth_utils import keccak, to_checksum_address
 from rich.console import Console
 
 from tidal.cli_renderers import (
@@ -238,25 +238,34 @@ async def broadcast_prepared_action(
             }
             try:
                 signed_tx = signer.sign_transaction(full_tx)
-                tx_hash = await web3_client.send_raw_transaction(signed_tx)
             except Exception as exc:  # noqa: BLE001
-                observed_at = utcnow_iso()
-                _send_action_report(
-                    outbox=report_outbox,
-                    client=client,
-                    action_id=action_id,
-                    report_type="receipt",
-                    payload={
-                        "txIndex": tx_index,
-                        "receiptStatus": "FAILED",
-                        "observedAt": observed_at,
-                        "errorMessage": str(exc),
-                    },
-                    warning_label=f"control-plane failure report for transaction {tx_index + 1}",
-                )
-                raise RuntimeError(f"transaction {tx_index + 1} failed: {exc}") from exc
+                raise RuntimeError(f"transaction {tx_index + 1} could not be signed") from exc
 
+            # A send response can be lost after acceptance. Retain the identity
+            # before touching the network, and always reconcile this exact hash.
+            tx_hash = "0x" + keccak(signed_tx).hex()
             broadcast_at = utcnow_iso()
+            broadcast_payload = {
+                "txIndex": tx_index,
+                "sender": sender,
+                "txHash": tx_hash,
+                "broadcastAt": broadcast_at,
+                "chainId": settings.chain_id,
+                "nonce": nonce,
+            }
+            try:
+                report_outbox.queue_broadcast(
+                    base_url=client.base_url, action_id=action_id, payload=broadcast_payload,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError("Could not retain transaction identity; nothing was broadcast") from exc
+
+            submission_unknown = False
+            try:
+                await web3_client.send_raw_transaction(signed_tx)
+            except Exception:  # noqa: BLE001
+                submission_unknown = True
+
             if progress_callback is not None:
                 progress_callback(f"Awaiting confirmation {tx_hash[:10]}...{tx_hash[-6:]}")
             _send_action_report(
@@ -264,12 +273,7 @@ async def broadcast_prepared_action(
                 client=client,
                 action_id=action_id,
                 report_type="broadcast",
-                payload={
-                    "txIndex": tx_index,
-                    "sender": sender,
-                    "txHash": tx_hash,
-                    "broadcastAt": broadcast_at,
-                },
+                payload=broadcast_payload,
                 warning_label=f"control-plane broadcast report for transaction {tx_index + 1}",
             )
             record: dict[str, Any] = {
@@ -283,9 +287,10 @@ async def broadcast_prepared_action(
             try:
                 receipt = await web3_client.get_transaction_receipt(tx_hash, timeout_seconds=receipt_timeout_seconds)
             except Exception:
+                if submission_unknown:
+                    record["errorMessage"] = "Submission outcome unknown; reconcile this hash before retrying."
                 results.append(record)
-                nonce += 1
-                continue
+                break
 
             effective_gas_price = receipt.get("effectiveGasPrice")
             gas_price_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None

@@ -238,6 +238,13 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Enter");
     await expect(alert.locator(".alert-expand")).toHaveAttribute("aria-expanded", "true");
     await expect(alert.locator(".alert-expanded-content")).toBeVisible();
+    await expect(alert.locator(".alert-expanded-content")).toHaveCSS("border-top-width", "0px");
+    await expect(alert.locator(".alert-expanded-content")).toHaveCSS("padding-top", "0px");
+    await expect(alert.locator(".alert-addresses")).toHaveCSS("border-left-width", "0px");
+    await expect(alert).toHaveCSS("border-bottom-width", "1px");
+    const headerBox = await alert.locator(".alert-card-header").boundingBox();
+    const expandedBox = await alert.locator(".alert-expanded-content").boundingBox();
+    expect(expandedBox.y - headerBox.y - headerBox.height).toBe(8);
     await expect(alert.locator(".alert-next-action")).toContainText(issue.nextAction.instruction);
     await expect(alert.locator(".alert-age dt")).toHaveText("Opened");
     await expect(alert.locator(".alert-age time")).toHaveText("3 days ago");

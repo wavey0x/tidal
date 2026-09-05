@@ -358,7 +358,7 @@ for (const theme of ["light", "dark"]) {
     await expect(inventory.locator(".fee-burner-context .entity-cell")).toContainText("yCRV Fee Burner");
     await expect(inventory.locator(".fee-burner-auction a")).toHaveAttribute("href", `https://etherscan.io/address/${AUCTION}`);
     const boxes = await Promise.all([table, inventory.locator(".fee-burner-context"), inventory.locator(".fee-burner-activity")].map(node => node.boundingBox()));
-    expect(boxes[0].width).toBe(700);
+    expect(boxes[0].width).toBe(480);
     expect(boxes[0].x).toBe(boxes[1].x);
     expect(boxes[2].x).toBe(boxes[0].x);
     expect(boxes[2].width).toBe(boxes[0].width);
@@ -368,10 +368,14 @@ for (const theme of ["light", "dark"]) {
     const identity = await inventory.locator(".fee-burner-identity").boundingBox();
     const auction = await inventory.locator(".fee-burner-auction").boundingBox();
     expect(identity.y).toBe(auction.y);
-    expect(auction.x - identity.x).toBeCloseTo(320, 0);
+    expect(auction.x - identity.x).toBeCloseTo(200, 0);
     await expect(page.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0);
     const columns = await table.locator("thead th").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
-    for (const [index, width] of [320, 190, 190].entries()) expect(columns[index]).toBeCloseTo(width, 0);
+    for (const [index, width] of [200, 150, 130].entries()) expect(columns[index]).toBeCloseTo(width, 0);
+    // Collapsed header/total borders can add a half-pixel to the adjacent row.
+    expect((await table.locator(".fee-token-row").first().boundingBox()).height).toBeLessThanOrEqual(33);
+    for (const cell of await table.locator(".fee-token-row td").all()) await expect(cell).toHaveCSS("border-bottom-width", "0px");
+    for (const cell of await table.locator("thead th:last-child, .fee-token-usd, .fee-inventory-total").all()) await expect(cell).toHaveCSS("padding-right", "18px");
     expect(boxes[1].y + boxes[1].height).toBeLessThanOrEqual(boxes[0].y);
     expect(boxes[2].y).toBeGreaterThanOrEqual(boxes[0].y + boxes[0].height);
     expect((await table.locator(".fee-token-name").first().boundingBox()).x).toBe(boxes[0].x);
@@ -389,7 +393,7 @@ for (const theme of ["light", "dark"]) {
       const bounds = await table.boundingBox();
       const region = await inventory.boundingBox();
       expect(bounds.x).toBe(region.x);
-      expect(bounds.width).toBe(Math.min(700, region.width));
+      expect(bounds.width).toBe(Math.min(480, region.width));
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -414,6 +418,8 @@ for (const theme of ["light", "dark"]) {
     const usdHeading = await table.locator("thead th").last().boundingBox();
     const usdCell = await table.locator(".fee-token-usd").first().boundingBox();
     expect(usdHeading.x + usdHeading.width).toBe(usdCell.x + usdCell.width);
+    for (const cell of await table.locator("thead th:last-child, .fee-token-usd, .fee-inventory-total").all()) await expect(cell).toHaveCSS("padding-right", "18px");
+    for (const row of await table.locator(".fee-token-row").all()) await expect(row).toHaveCSS("border-bottom-width", "0px");
     expect(await table.locator(".fee-token-amount").first().evaluate(node => getComputedStyle(node).textAlign)).toBe("left");
     await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-inventory-mobile.png`) });
     state.failed = true;

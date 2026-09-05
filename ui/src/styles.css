@@ -53,7 +53,7 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.inventory-page { --fee-inventory-width: 700px; padding-top: 14px; }
+.inventory-page { --fee-inventory-width: 480px; --fee-value-inset: 18px; padding-top: 14px; }
 
 /* Fee Burner: inventory first, context above and activity below. */
 .fee-burner-inventory + .fee-burner-inventory {
@@ -64,7 +64,7 @@
 .fee-burner-context {
   display: grid;
   width: min(100%, var(--fee-inventory-width));
-  grid-template-columns: minmax(0, 320fr) minmax(0, 380fr);
+  grid-template-columns: minmax(0, 200fr) minmax(0, 280fr);
   align-items: start;
   gap: 12px 0;
   padding: 4px 0 16px;
@@ -76,14 +76,15 @@
 .fee-context-label { color: var(--text-secondary); font-size: 11px; }
 .fee-token-table { width: min(100%, var(--fee-inventory-width)); table-layout: fixed; }
 .fee-token-table thead th { position: sticky; top: 0; z-index: 2; background: var(--bg); }
-/* At the desktop cap: Token 320px, Amount 190px, USD 190px. */
-.fee-token-table th:first-child { width: 45.714%; }
-.fee-token-table th:nth-child(2), .fee-token-table th:nth-child(3) { width: 27.143%; }
-.fee-token-table th, .fee-token-table td { padding: 10px 12px; }
+/* At the desktop cap: Token 200px, Amount 150px, USD 130px. */
+.fee-token-table th:first-child { width: 41.667%; }
+.fee-token-table th:nth-child(2) { width: 31.25%; }
+.fee-token-table th:nth-child(3) { width: 27.083%; }
+.fee-token-table th, .fee-token-table td { padding: 7px 12px; }
 .fee-token-table th:first-child, .fee-token-table td:first-child { padding-left: 0; }
-.fee-token-table th:last-child, .fee-token-table td:last-child { padding-right: 0; }
-.fee-token-row { height: 42px; }
-.fee-token-row td { vertical-align: middle; }
+.fee-token-table th:last-child, .fee-token-table td:last-child { padding-right: var(--fee-value-inset); }
+.fee-token-row { height: 32px; }
+.fee-token-row td { vertical-align: middle; border-bottom: 0; }
 .fee-token-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fee-token-name .token-symbol { color: var(--text-primary); font-weight: 500; white-space: normal; overflow-wrap: anywhere; }
 .fee-token-warnings { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 0 calc(var(--token-icon-size) + 8px); color: var(--warning); font-size: 11px; }
@@ -111,8 +112,9 @@
   .fee-token-table thead th:first-child, .fee-token-table thead th:last-child { width: auto; }
   .fee-token-table .fee-amount-heading { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
   .fee-token-table thead th:last-child { grid-column: 2; }
-  .fee-token-table .fee-token-row { height: auto; padding: 10px 0; border-bottom: 1px solid var(--divider-subtle); row-gap: 3px; }
+  .fee-token-table .fee-token-row { height: auto; padding: 8px 0; row-gap: 3px; }
   .fee-token-table .fee-token-row > td { border: 0; padding: 0; min-width: 0; background: transparent; }
+  .fee-token-table .fee-token-row > td:last-child { padding-right: var(--fee-value-inset); }
   .fee-token-row:hover, .fee-token-row:focus-within { background: var(--hover); }
   .fee-token-identity { grid-column: 1; grid-row: 1; }
   .fee-token-table .fee-token-amount { grid-column: 1; grid-row: 2; text-align: left; font-size: 11px; }

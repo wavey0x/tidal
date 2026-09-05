@@ -632,7 +632,7 @@ function useMediaQuery(query) {
 
 function SkeletonRows() {
   return [...Array(10)].map((_, index) => (
-    <tr key={`skeleton-${index}`} className="strategy-skeleton">
+    <tr key={`skeleton-${index}`} className="strategy-skeleton ledger-skeleton">
       <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
@@ -2329,109 +2329,53 @@ function StrategyDetailModal({
   );
 }
 
-function FeeBurnerPage({
-  rows,
-  loading,
-  error,
-  nowMs,
-  displayMode,
-  onToggleMode,
-  expandedKickRows,
-  onToggleExpand,
-}) {
-  const latestScanAt = rows.reduce((latest, row) => {
-    if (!row.scannedAt) {
-      return latest;
-    }
-    if (!latest || row.scannedAt > latest) {
-      return row.scannedAt;
-    }
-    return latest;
-  }, null);
-
+function FeeBurnerPage({ rows, state, nowMs, displayMode, onToggleMode, expandedKickRows, onToggleExpand,
+  collapsedRewards, onToggleRewards }) {
+  const latestScanAt = rows.reduce((latest, row) => row.scannedAt > (latest || "") ? row.scannedAt : latest, null);
   return (
-    <>
-      <div className="toolbar-meta">
-        <span>Showing {rows.length.toLocaleString()} fee burner{rows.length === 1 ? "" : "s"}</span>
-        <span className="meta-sep" aria-hidden="true">&middot;</span>
-        <span>Scanned {formatTimestamp(latestScanAt)}</span>
+    <section className="inventory-page" aria-label="Fee burner inventory">
+      <div className="toolbar-meta page-meta">
+        <span className="result-count" role="status"><strong>{rows.length}</strong> fee burner{rows.length === 1 ? "" : "s"}</span>
+        <RefreshStatus state={state} scannedAt={latestScanAt} nowMs={nowMs} />
       </div>
-
-      {error ? <p className="error">{error}</p> : null}
-
-      {loading ? (
-        <div className="fee-burner-empty">Loading fee burner rows...</div>
-      ) : !rows.length ? (
-        <div className="fee-burner-empty">No fee burner rows are available.</div>
-      ) : (
-        <section className="fee-burner-grid">
-          {rows.map((row) => (
-            <article key={row.sourceAddress} className="fee-burner-card">
-              <div className="fee-burner-meta-row">
-                <div className="fee-burner-top-item">
-                  <div className="fee-burner-label">Last Scan</div>
-                  <div className="fee-burner-value mono">
-                    {row.scannedAt ? formatRelativeTimestamp(row.scannedAt, nowMs) : "—"}
-                  </div>
-                </div>
-                <div className="fee-burner-top-item fee-burner-source">
-                  <div className="fee-burner-label">Fee Burner</div>
-                  <EntityIdentity
-                    primary={row.sourceName || "Unnamed Fee Burner"}
-                    address={row.sourceAddress}
-                  />
-                </div>
-                <div className="fee-burner-top-item fee-burner-auction">
-                  <div className="fee-burner-label">Auction</div>
-                  <div className="fee-burner-value">
-                    <AuctionAddressCell
-                      address={row.auctionAddress}
-                      version={row.auctionVersion}
-                      wantAddress={row.wantAddress}
-                      wantSymbol={row.wantSymbol}
-                    />
-                  </div>
-                </div>
-                <div className="fee-burner-top-item fee-burner-history">
-                  <div className="fee-burner-label">History</div>
-                  <div className="fee-burner-value">
-                    <KickHistoryCell
-                      kicks={row.kicks}
-                      nowMs={nowMs}
-                      isExpanded={expandedKickRows.has(row.sourceAddress)}
-                      onToggleExpand={() => onToggleExpand(row.sourceAddress)}
-                      fallbackAuctionAddress={row.auctionAddress}
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="fee-burner-balance-panel">
-                <div className="fee-burner-balance-header">
-                  <div className="fee-burner-label">Token Balances</div>
-                  {row.balances.length ? (
-                    <div className="fee-burner-balance-total">
-                      <span className="fee-burner-balance-total-label">Total</span>
-                      <span className="mono fee-burner-balance-total-value">
-                        {row.totalUsdValue ? `$${formatBalance(row.totalUsdValue)}` : "?"}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-                {row.balances.length ? (
-                  <TokenBalances
-                    balances={row.balances}
-                    displayMode={displayMode}
-                    onToggleMode={onToggleMode}
-                  />
-                ) : (
-                  <div className="row-secondary">No balances above the visibility threshold.</div>
-                )}
-              </div>
-            </article>
-          ))}
-        </section>
-      )}
-    </>
+      {state.error ? <p className="error">{state.error}</p> : null}
+      <div className="table-shell ledger-table-shell">
+        <table className="ledger-table fee-burner-table">
+          <colgroup><col className="strategy-col" /><col className="auction-col" /><col className="history-col" /><col className="token-col" /></colgroup>
+          <thead><tr>
+            <th id="burner-heading" scope="col">Burner</th>
+            <th id="burner-auction-heading" scope="col">Auction</th>
+            <th id="burner-activity-heading" scope="col">Last activity</th>
+            <th id="burner-balances-heading" scope="col"><div className="rewards-heading"><span>Balances</span><span>USD</span></div></th>
+          </tr></thead>
+          <tbody>
+            {state.loading ? <SkeletonRows /> : null}
+            {!state.loading && !rows.length ? <tr><td colSpan={4} className="empty">No fee burners are available.</td></tr> : null}
+            {rows.map(row => <tr className="ledger-row fee-burner-row" key={row.sourceAddress}>
+              <td headers="burner-heading">
+                <EntityIdentity primary={row.sourceName || "Unnamed fee burner"} address={row.sourceAddress} />
+                <RowScanStatus row={row} latestScanAt={latestScanAt} />
+              </td>
+              <td className="auction-cell" headers="burner-auction-heading" data-label="Auction">
+                <AuctionAddressCell address={row.auctionAddress} version={row.auctionVersion}
+                  wantAddress={row.wantAddress} wantSymbol={row.wantSymbol}
+                  emptyContent={<span className="row-secondary">No auction</span>} />
+              </td>
+              <td className="history-cell" headers="burner-activity-heading" data-label="Last activity">
+                <KickHistoryCell kicks={row.kicks} nowMs={nowMs}
+                  isExpanded={expandedKickRows.has(row.sourceAddress)}
+                  onToggleExpand={() => onToggleExpand(row.sourceAddress)} fallbackAuctionAddress={row.auctionAddress} />
+              </td>
+              <td className="balances-cell" headers="burner-balances-heading">
+                <RewardSummary row={row} expanded={!collapsedRewards.has(row.sourceAddress)}
+                  onToggleExpand={() => onToggleRewards(row.sourceAddress)}
+                  displayMode={displayMode} onToggleMode={onToggleMode} />
+              </td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -2614,6 +2558,7 @@ export default function App() {
   const [expandedStrategyRows, setExpandedStrategyRows] = useState(() => new Set());
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
   const [expandedRewardRows, setExpandedRewardRows] = useState(() => new Set());
+  const [collapsedFeeRewards, setCollapsedFeeRewards] = useState(() => new Set());
   const [deployStates, setDeployStates] = useState({});
   const [deployConfirm, setDeployConfirm] = useState(null);
   const deployChecksRef = useRef(new Set());
@@ -3103,7 +3048,7 @@ export default function App() {
         </div>
       </header>
 
-      {activePage === "alerts" || activePage === "fee-burner" ? <RefreshStatus state={activePage === "alerts" ? alerts : dashboard} nowMs={nowMs} /> : null}
+      {activePage === "alerts" ? <RefreshStatus state={alerts} nowMs={nowMs} /> : null}
 
       {activePage === "kicks" ? (
         <KickLogPage
@@ -3173,19 +3118,19 @@ export default function App() {
 
       </section>
 
-      <div className="toolbar-meta strategy-meta">
+      <div className="toolbar-meta page-meta">
         <span className="result-count" role="status"><strong>{filteredStrategyRows.length.toLocaleString()}</strong> of {strategyRows.length.toLocaleString()} strategies</span>
         <RefreshStatus state={dashboard} scannedAt={latestVisibleScan} nowMs={nowMs} />
       </div>
 
       {error ? <p className="error">{error}</p> : null}
 
-      <div className="table-shell strategy-table-shell"
+      <div className="table-shell ledger-table-shell"
         onPointerEnter={(event) => { if (event.pointerType !== "touch") setTableHovered(true); }}
         onPointerLeave={() => setTableHovered(false)}
         onFocusCapture={() => setTableFocused(true)}
         onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTableFocused(false); }}>
-        <table className="strategies-table">
+        <table className="strategies-table ledger-table">
           <colgroup><col className="strategy-col" /><col className="auction-col" /><col className="history-col" /><col className="token-col" /></colgroup>
           <thead>
             <tr>
@@ -3221,7 +3166,7 @@ export default function App() {
               ? orderedStrategyRows.map((row) => (
                   <Fragment key={row.sourceAddress}>
                     <tr
-                      className={`strategy-row ${expandedStrategyRows.has(row.sourceAddress) ? "is-expanded" : ""}`}
+                      className={`strategy-row ledger-row ${expandedStrategyRows.has(row.sourceAddress) ? "is-expanded" : ""}`}
                       data-strategy={row.sourceAddress}
                     >
                       <td data-label="Strategy" headers="strategy-heading" className="strategy-identity-cell">
@@ -3304,13 +3249,18 @@ export default function App() {
       {activePage === "fee-burner" ? (
         <FeeBurnerPage
           rows={feeBurnerRows}
-          loading={loadingRows}
-          error={error}
+          state={dashboard}
           nowMs={nowMs}
           displayMode={displayMode}
           onToggleMode={toggleDisplayMode}
           expandedKickRows={expandedKickRows}
           onToggleExpand={toggleKickExpand}
+          collapsedRewards={collapsedFeeRewards}
+          onToggleRewards={(address) => setCollapsedFeeRewards(previous => {
+            const next = new Set(previous);
+            if (next.has(address)) next.delete(address); else next.add(address);
+            return next;
+          })}
         />
       ) : null}
       {deployConfirm ? (

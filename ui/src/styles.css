@@ -1370,11 +1370,22 @@ tbody tr:focus-within > td {
 .log-result { margin-left: 18px; font-size: 11px; }
 .log-usd-cell { white-space: nowrap; font-weight: 500; }
 .log-detail-content { padding: 4px 12px 12px; }
-.log-detail-group { padding: 12px 0; border-top: 1px solid var(--divider-subtle); }
-.log-detail-group h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 500; color: var(--text-secondary); }
-.log-detail-group .kick-detail-grid { margin: 0; padding: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 24px; }
+.log-detail-columns { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 28px; }
+.log-detail-support { min-width: 0; }
+.log-detail-group { min-width: 0; padding: 10px 0; border-top: 1px solid var(--divider-subtle); }
+.log-detail-group h3 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 500; color: var(--text-secondary); }
+.log-detail-group .kick-detail-grid { margin: 0; padding: 0; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.log-detail-group .kick-detail-item { display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: baseline; gap: 12px; }
+.log-detail-group .kick-detail-label { margin: 0; font-size: 11px; text-transform: none; letter-spacing: 0; }
+.log-detail-group .row-primary { white-space: normal; overflow-wrap: anywhere; }
+.log-detail-group .provider-ledger dt { min-width: 0; overflow-wrap: anywhere; }
 .log-detail-group dd { margin: 0; overflow-wrap: anywhere; word-break: normal; }
-.log-detail-links { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-top: 4px; }
+.log-detail-links { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-top: 10px; border-top: 1px solid var(--divider-subtle); }
+.quote-provider-count { margin-bottom: 4px; }
+.quote-summary-ledger { display: grid; gap: 2px; margin: 0; }
+.quote-summary-ledger > div { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px; }
+.quote-summary-ledger dt { color: var(--text-secondary); }
+.quote-summary-ledger dd { font-variant-numeric: tabular-nums; }
 .provider-details summary { cursor: pointer; color: var(--text-secondary); }
 .provider-ledger { display: grid; gap: 4px; margin: 8px 0 0; }
 .provider-ledger > div { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(0, 2fr); gap: 8px; }
@@ -1988,6 +1999,7 @@ tbody tr:focus-within > td {
 }
 
 @media (max-width: 960px) {
+  .log-detail-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .kick-detail-grid, .log-detail-group .kick-detail-grid { grid-template-columns: 1fr; }
   .kick-log-table, .kick-log-table tbody { display: block; }
   .kick-log-table thead {
@@ -2021,6 +2033,8 @@ tbody tr:focus-within > td {
     flex-basis: 100%; order: 3; margin: 0; flex-wrap: wrap;
   }
   .log-detail-content { padding: 0; }
+  .log-detail-group .kick-detail-item { grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
+  .quote-summary-ledger > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
 @media (pointer: coarse) {
   .log-open, .timestamp-toggle, .kick-log-page-btn, .provider-details summary { min-height: 44px; align-items: center; }

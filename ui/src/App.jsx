@@ -857,9 +857,7 @@ function AuctionScanTextLink({ kick }) {
       className="kick-external-link"
       onClick={(event) => event.stopPropagation()}
     >
-      <span>view on</span>
-      <AuctionScanFavicon />
-      <span>auctionscan.info</span>
+      AuctionScan <OutboundLinkGlyph />
     </a>
   );
 }
@@ -1266,51 +1264,57 @@ function KickDetailContent({ kick }) {
   const tokenValue = (address, symbol) => address ? <WantTokenValue address={address} symbol={symbol} /> : symbol || "—";
 
   return <div className="log-detail-content">
-    <DetailGroup title="Execution">
-      <DetailField label="Operation">{operationMeta.detailLabel}</DetailField>
-      <DetailField label="Timestamp">
-        <button type="button" className="timestamp-toggle" onClick={() => setShowRelativeTimestamp(value => !value)}
-          title={kick.createdAt || undefined} aria-label="Toggle timestamp format">
-          {showRelativeTimestamp ? formatRelativeTimestamp(kick.createdAt, Date.now()) : formatUtcTimestamp(kick.createdAt)}
-        </button>
-      </DetailField>
-      <DetailField label="Source"><EntityIdentity primary={kick.sourceName || "Unknown source"} address={kick.sourceAddress} /></DetailField>
-      <DetailField label={operationMeta.primaryTokenLabel}>{tokenValue(kick.tokenAddress, kick.tokenSymbol)}</DetailField>
-      <DetailField label={operationMeta.secondaryTokenLabel}>{tokenValue(kick.wantAddress, kick.wantSymbol)}</DetailField>
-      {kick.normalizedBalance != null ? <DetailField label="Balance">{formatBalance(kick.normalizedBalance)} {kick.tokenSymbol}</DetailField> : null}
-      {kick.txHash ? <DetailField label="Transaction"><EtherscanTxLink txHash={kick.txHash} /></DetailField> : null}
-      {kick.blockNumber != null ? <DetailField label="Block">{kick.blockNumber}</DetailField> : null}
-      {kick.gasUsed != null ? <DetailField label="Gas used">{Number(kick.gasUsed).toLocaleString()}</DetailField> : null}
-      {kick.gasPriceGwei != null ? <DetailField label="Gas price">{kick.gasPriceGwei} gwei</DetailField> : null}
-      {identifier ? <DetailField label={actionId ? "Action ID" : "Run ID"}>{identifier}</DetailField> : null}
-    </DetailGroup>
-    {operationMeta.showKickPricing ? <DetailGroup title="Pricing">
-      <DetailField label="Start quote">{kick.startingPriceDisplay || kick.startingPrice || "—"}
-        {!kick.startingPriceDisplay && kick.startPriceBufferBps != null ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)` : ""}</DetailField>
-      <DetailField label="Minimum quote">{kick.minimumQuote ?? "—"}{kick.minPriceBufferBps != null ? ` (-${bpsToPercent(kick.minPriceBufferBps)} buffer)` : ""}</DetailField>
-      <DetailField label="Minimum price · scaled">{kick.minimumPrice ?? "—"}</DetailField>
-      <DetailField label="Quote amount">{kick.quoteAmount ?? "—"}</DetailField>
-      {kick.stepDecayRateBps != null ? <DetailField label="Step decay">{bpsToPercent(kick.stepDecayRateBps)}</DetailField> : null}
-      {kick.settleToken ? <DetailField label="Pre-kick settle">{tokenValue(kick.settleToken, kick.settleToken === kick.tokenAddress ? kick.tokenSymbol : null)}</DetailField> : null}
-    </DetailGroup> : null}
-    {hasDiagnostics ? <DetailGroup title="Diagnostics">
-      {kick.stuckAbortReason ? <DetailField label="Reason">{kick.stuckAbortReason}</DetailField> : null}
-      {kick.errorMessage ? <DetailField label="Error" error>{kick.errorMessage}</DetailField> : null}
-      {summary ? <DetailField label="Quote summary">
-        {summary.requested_providers != null ? <div>Providers {summary.successful_providers ?? 0}/{summary.requested_providers}</div> : null}
-        {summary.high_amount_out != null ? <div>High {providerAmount(summary.high_amount_out)}</div> : null}
-        {summary.low_amount_out != null ? <div>Low {providerAmount(summary.low_amount_out)}</div> : null}
-        {summary.median_amount_out != null ? <div>Median {providerAmount(summary.median_amount_out)}</div> : null}
-      </DetailField> : null}
-      {providers.length ? <DetailField label="Provider responses">
-        <details className="provider-details"><summary>{providers.length} providers</summary>
-          <dl className="provider-ledger">{providers.map(([name, entry]) => <div key={name}>
-            <dt>{name}</dt><dd>{providerAmount(entry?.amount_out, entry?.status)}</dd>
-          </div>)}</dl>
-        </details>
-      </DetailField> : null}
-      {quote?.requestUrl ? <DetailField label="Quote request"><a className="kick-external-link" href={quote.requestUrl} target="_blank" rel="noopener noreferrer">View quote via API <OutboundLinkGlyph /></a></DetailField> : null}
-    </DetailGroup> : null}
+    <div className="log-detail-columns">
+      <DetailGroup title="Execution">
+        <DetailField label="Operation">{operationMeta.detailLabel}</DetailField>
+        <DetailField label="Timestamp">
+          <button type="button" className="timestamp-toggle" onClick={() => setShowRelativeTimestamp(value => !value)}
+            title={kick.createdAt || undefined} aria-label="Toggle timestamp format">
+            {showRelativeTimestamp ? formatRelativeTimestamp(kick.createdAt, Date.now()) : formatUtcTimestamp(kick.createdAt)}
+          </button>
+        </DetailField>
+        <DetailField label="Source"><EntityIdentity primary={kick.sourceName || "Unknown source"} address={kick.sourceAddress} /></DetailField>
+        <DetailField label={operationMeta.primaryTokenLabel}>{tokenValue(kick.tokenAddress, kick.tokenSymbol)}</DetailField>
+        <DetailField label={operationMeta.secondaryTokenLabel}>{tokenValue(kick.wantAddress, kick.wantSymbol)}</DetailField>
+        {kick.normalizedBalance != null ? <DetailField label="Balance">{formatBalance(kick.normalizedBalance)} {kick.tokenSymbol}</DetailField> : null}
+        {kick.txHash ? <DetailField label="Transaction"><EtherscanTxLink txHash={kick.txHash} /></DetailField> : null}
+        {kick.blockNumber != null ? <DetailField label="Block">{kick.blockNumber}</DetailField> : null}
+        {kick.gasUsed != null ? <DetailField label="Gas used">{Number(kick.gasUsed).toLocaleString()}</DetailField> : null}
+        {kick.gasPriceGwei != null ? <DetailField label="Gas price">{kick.gasPriceGwei} gwei</DetailField> : null}
+        {identifier ? <DetailField label={actionId ? "Action ID" : "Run ID"}>{identifier}</DetailField> : null}
+      </DetailGroup>
+      <div className="log-detail-support">
+        {operationMeta.showKickPricing ? <DetailGroup title="Pricing">
+          <DetailField label="Start quote">{kick.startingPriceDisplay || kick.startingPrice || "—"}
+            {!kick.startingPriceDisplay && kick.startPriceBufferBps != null ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)` : ""}</DetailField>
+          <DetailField label="Minimum quote">{kick.minimumQuote ?? "—"}{kick.minPriceBufferBps != null ? ` (-${bpsToPercent(kick.minPriceBufferBps)} buffer)` : ""}</DetailField>
+          <DetailField label="Min. price · scaled">{kick.minimumPrice ?? "—"}</DetailField>
+          <DetailField label="Quote amount">{kick.quoteAmount ?? "—"}</DetailField>
+          {kick.stepDecayRateBps != null ? <DetailField label="Step decay">{bpsToPercent(kick.stepDecayRateBps)}</DetailField> : null}
+          {kick.settleToken ? <DetailField label="Pre-kick settle">{tokenValue(kick.settleToken, kick.settleToken === kick.tokenAddress ? kick.tokenSymbol : null)}</DetailField> : null}
+        </DetailGroup> : null}
+        {hasDiagnostics ? <DetailGroup title="Diagnostics">
+          {kick.stuckAbortReason ? <DetailField label="Reason">{kick.stuckAbortReason}</DetailField> : null}
+          {kick.errorMessage ? <DetailField label="Error" error>{kick.errorMessage}</DetailField> : null}
+          {summary ? <DetailField label="Quote summary">
+            {summary.requested_providers != null ? <div className="quote-provider-count">{summary.successful_providers ?? 0}/{summary.requested_providers} providers</div> : null}
+            <dl className="quote-summary-ledger">
+              {summary.high_amount_out != null ? <div><dt>High</dt><dd>{providerAmount(summary.high_amount_out)}</dd></div> : null}
+              {summary.low_amount_out != null ? <div><dt>Low</dt><dd>{providerAmount(summary.low_amount_out)}</dd></div> : null}
+              {summary.median_amount_out != null ? <div><dt>Median</dt><dd>{providerAmount(summary.median_amount_out)}</dd></div> : null}
+            </dl>
+          </DetailField> : null}
+          {providers.length ? <DetailField label="Provider responses">
+            <details className="provider-details"><summary>{providers.length} providers</summary>
+              <dl className="provider-ledger">{providers.map(([name, entry]) => <div key={name}>
+                <dt>{name}</dt><dd>{providerAmount(entry?.amount_out, entry?.status)}</dd>
+              </div>)}</dl>
+            </details>
+          </DetailField> : null}
+          {quote?.requestUrl ? <DetailField label="Quote request"><a className="kick-external-link" href={quote.requestUrl} target="_blank" rel="noopener noreferrer">View quote via API <OutboundLinkGlyph /></a></DetailField> : null}
+        </DetailGroup> : null}
+      </div>
+    </div>
     {(getAuctionScanHref(kick) || kick.auctionAddress) ? <div className="log-detail-links">
       {getAuctionScanHref(kick) ? <AuctionScanTextLink kick={kick} /> : null}
       {kick.auctionAddress ? <a href={`${COW_EXPLORER_URL}${kick.auctionAddress}`} target="_blank" rel="noopener noreferrer" className="kick-external-link">CoW Explorer <OutboundLinkGlyph /></a> : null}

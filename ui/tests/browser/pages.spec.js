@@ -54,7 +54,18 @@ for (const theme of ["light", "dark"]) {
     await expect(detail).toContainText("run-1");
     await expect(detail).toContainText("StrategyCurveBoostedFactory-BOLDUSDC");
     await expect(detail).toContainText("1500000000000000000");
-    await expect(detail).toContainText("High 1.25 crvUSD");
+    await expect(detail.locator(".quote-summary-ledger dt")).toHaveText(["High", "Low", "Median"]);
+    await expect(detail.locator(".quote-summary-ledger dd")).toHaveText(["1.25 crvUSD", "1.25 crvUSD", "1.25 crvUSD"]);
+    const execution = await detail.locator(".log-detail-group").first().boundingBox();
+    const support = await detail.locator(".log-detail-support").boundingBox();
+    expect(execution.y).toBe(support.y);
+    expect(support.x).toBeGreaterThan(execution.x + execution.width);
+    expect((await detail.boundingBox()).height).toBeLessThan(410);
+    const fields = await detail.locator(".log-detail-group").first().locator(".kick-detail-value").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+    expect(new Set(fields).size).toBe(1);
+    expect(await contrastRatio(detail.locator(".kick-detail-label").first())).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(detail.locator(".kick-detail-value").first())).toBeGreaterThanOrEqual(4.5);
+    await expect(detail.getByRole("link", { name: "AuctionScan", exact: true })).toHaveAttribute("href", /auctionscan\.info/);
     await detail.locator(".provider-details summary").click();
     await expect(detail.locator(".provider-ledger")).toContainText("1.25 crvUSD · ok");
     await expect(detail.locator(".provider-ledger")).toContainText("timeout");
@@ -75,11 +86,43 @@ for (const theme of ["light", "dark"]) {
     await page.screenshot({ path: testInfo.outputPath(`${theme}-logs-mobile.png`) });
     await first.getByRole("button", { name: "Show details for log 1", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Activity details" })).toBeVisible();
+    expect(await page.locator(".kick-modal-body").evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-log-details-mobile.png`), animations: "disabled" });
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(first.getByRole("button", { name: "Show details for log 1", exact: true })).toBeFocused();
   });
 }
+
+test("compact log details preserve failures, raw units and long values on touch screens", async ({ browser }, testInfo) => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 1000 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+  try {
+    const page = await context.newPage();
+    const state = await mockPublicApi(page);
+    state.logsData = { total: 2, hasMore: false, kicks: [
+      log(1, { operationType: "settle", status: "ERROR", errorMessage: "Receipt reverted", quoteResponseJson: "malformed", txHash: null }),
+      log(2, { sourceName: "A-very-long-strategy-name-".repeat(4), normalizedBalance: "12345678901234567890.12", runId: "api-action:" + "a".repeat(80),
+        quoteResponseJson: JSON.stringify({ providers: { ["long-provider-name-".repeat(4)]: { amount_out: "123456789012345678901234567890", status: "ok" } },
+          summary: { high_amount_out: "123456789012345678901234567890" } }) }),
+    ] };
+    await page.goto("/logs");
+    await page.getByRole("button", { name: "Show details for log 1", exact: true }).click();
+    const detail = page.locator(".log-detail-content");
+    await expect(detail.locator("h3")).toHaveText(["Execution", "Diagnostics"]);
+    await expect(detail.locator(".error-text")).toHaveText("Receipt reverted");
+    await expect(detail.locator(".transaction-link")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Show details for log 2", exact: true }).click();
+    await expect(detail).toContainText("12,345,678,901,234,567,890.12 CRV");
+    await expect(detail).toContainText("123456789012345678901234567890 raw units");
+    await expect(detail).toContainText("a".repeat(80));
+    await detail.locator(".provider-details summary").click();
+    await expect(detail.locator(".provider-ledger")).toContainText("raw units · ok");
+    expect(await page.locator(".kick-modal-body").evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    for (const button of await detail.locator(".copy-trigger").all()) expect((await button.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({ path: testInfo.outputPath("log-details-touch-edge-cases.png"), animations: "disabled" });
+  } finally { await context.close(); }
+});
 
 test("log refresh pins the visible page during interaction and preserves open details, filters and deep links", async ({ page }) => {
   const state = await mockPublicApi(page);

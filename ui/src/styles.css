@@ -55,7 +55,7 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.inventory-page { padding-top: 14px; }
+.inventory-page { --fee-inventory-width: 700px; padding-top: 14px; }
 
 /* Fee Burner: inventory first, context above and activity below. */
 .fee-burner-inventory + .fee-burner-inventory {
@@ -75,10 +75,11 @@
 .fee-burner-identity .row-primary { white-space: normal; overflow-wrap: anywhere; }
 .fee-burner-auction { display: flex; align-items: baseline; gap: 10px; }
 .fee-context-label { color: var(--text-secondary); font-size: 11px; }
-.fee-token-table { width: 100%; table-layout: fixed; }
+.fee-token-table { width: min(100%, var(--fee-inventory-width)); table-layout: fixed; }
 .fee-token-table thead th { position: sticky; top: 0; z-index: 2; background: var(--bg); }
-.fee-token-table th:first-child { width: 50%; }
-.fee-token-table th:nth-child(2), .fee-token-table th:nth-child(3) { width: 25%; }
+/* At the desktop cap: Token 320px, Amount 190px, USD 190px. */
+.fee-token-table th:first-child { width: 45.714%; }
+.fee-token-table th:nth-child(2), .fee-token-table th:nth-child(3) { width: 27.143%; }
 .fee-token-table th, .fee-token-table td { padding: 10px 12px; }
 .fee-token-table th:first-child, .fee-token-table td:first-child { padding-left: 0; }
 .fee-token-table th:last-child, .fee-token-table td:last-child { padding-right: 0; }
@@ -93,7 +94,7 @@
 .fee-token-usd, .fee-inventory-total { font-weight: 500; }
 .fee-token-table tfoot th, .fee-token-table tfoot td { border-top: 1px solid var(--divider-strong); text-align: right; }
 .fee-token-table tfoot th { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
-.fee-burner-activity { margin-top: 12px; color: var(--text-secondary); font-size: 11px; }
+.fee-burner-activity { width: min(100%, var(--fee-inventory-width)); margin-top: 12px; color: var(--text-secondary); font-size: 11px; }
 .fee-activity-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
 .fee-activity-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 4px 0; background: transparent; font: inherit; color: var(--text-secondary); cursor: pointer; }
 .fee-activity-toggle:hover { color: var(--text-primary); }

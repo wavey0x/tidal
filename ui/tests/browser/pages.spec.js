@@ -248,7 +248,7 @@ test("alerts never show healthy empty results for stale, missing, failed or inco
 });
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme}: fee burner prioritizes a full-width token inventory with supporting context and activity`, async ({ page, context }, testInfo) => {
+  test(`${theme}: fee burner keeps values close in a bounded left-aligned inventory`, async ({ page, context }, testInfo) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.emulateMedia({ colorScheme: theme });
     const state = await mockPublicApi(page);
@@ -270,7 +270,15 @@ for (const theme of ["light", "dark"]) {
     await expect(inventory.locator(".fee-burner-context .entity-cell")).toContainText("yCRV Fee Burner");
     await expect(inventory.locator(".fee-burner-auction a")).toHaveAttribute("href", `https://etherscan.io/address/${AUCTION}`);
     const boxes = await Promise.all([table, inventory.locator(".fee-burner-context"), inventory.locator(".fee-burner-activity")].map(node => node.boundingBox()));
-    expect(boxes[0].width).toBeGreaterThan(1000);
+    expect(boxes[0].width).toBe(700);
+    expect(boxes[0].x).toBe(boxes[1].x);
+    expect(boxes[2].x).toBe(boxes[0].x);
+    expect(boxes[2].width).toBe(boxes[0].width);
+    expect(boxes[1].width).toBeGreaterThan(1000);
+    const refresh = await page.locator(".refresh-status").boundingBox();
+    expect(refresh.x + refresh.width).toBe(boxes[1].x + boxes[1].width);
+    const columns = await table.locator("thead th").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+    for (const [index, width] of [320, 190, 190].entries()) expect(columns[index]).toBeCloseTo(width, 0);
     expect(boxes[1].y + boxes[1].height).toBeLessThanOrEqual(boxes[0].y);
     expect(boxes[2].y).toBeGreaterThanOrEqual(boxes[0].y + boxes[0].height);
     expect((await table.locator(".fee-token-name").first().boundingBox()).x).toBe(boxes[0].x);
@@ -283,6 +291,15 @@ for (const theme of ["light", "dark"]) {
     expect(await contrastRatio(copy.locator(".copy-icon"))).toBeGreaterThanOrEqual(4.5);
     expect(await contrastRatio(table.locator(".fee-token-amount").first())).toBeGreaterThanOrEqual(4.5);
     await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-inventory.png`) });
+    for (const width of [900, 700]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const bounds = await table.boundingBox();
+      const region = await inventory.boundingBox();
+      expect(bounds.x).toBe(region.x);
+      expect(bounds.width).toBe(Math.min(700, region.width));
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const activity = inventory.getByRole("button", { name: "Show recent activity for yCRV Fee Burner", exact: true });
     await activity.focus();
     await page.keyboard.press("Enter");

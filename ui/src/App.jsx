@@ -641,7 +641,7 @@ function SkeletonRows() {
   ));
 }
 
-function CopyIconButton({ valueToCopy, title, ariaLabel, className = "" }) {
+function CopyIconButton({ valueToCopy, title, ariaLabel, className = "", children }) {
   const [copied, setCopied] = useState(false);
   const resetTimerRef = useRef(null);
 
@@ -691,6 +691,7 @@ function CopyIconButton({ valueToCopy, title, ariaLabel, className = "" }) {
           <path d="M3 8.5L6.5 12L13 4.5" />
         </svg>
       </span>
+      {children}
     </button>
   );
 }
@@ -1489,6 +1490,8 @@ function KickLogPager({
 
 function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
   const evaluationStale = evaluatedAt !== undefined && (!Number.isFinite(Date.parse(evaluatedAt)) || Math.abs(nowMs - Date.parse(evaluatedAt)) > 65000);
+  // An evaluation has already happened; tolerate small server/client clock skew in its label.
+  const evaluationAge = Math.abs(nowMs - Date.parse(evaluatedAt)) < 60000 ? "just now" : formatRelativeTimestamp(evaluatedAt, nowMs);
   const stale = state.error || evaluationStale || (state.updatedAt && nowMs - state.updatedAt > 65000);
   const scanOverdue = scannedAt && nowMs - new Date(scannedAt).getTime() > SCAN_STALE_AFTER_MS;
   return (
@@ -1504,7 +1507,7 @@ function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
           </>
         ) : null}
         <span className="refresh-updated" title={formatUtcTimestamp(evaluatedAt !== undefined ? evaluatedAt : state.updatedAt)}>
-          {evaluatedAt !== undefined ? evaluatedAt ? `Evaluated ${formatRelativeTimestamp(evaluatedAt, nowMs)}` : "No evaluation available" : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
+          {evaluatedAt !== undefined ? evaluatedAt ? `Evaluated ${evaluationAge}` : "No evaluation available" : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
         </span>
       </span>
     </div>
@@ -2435,7 +2438,7 @@ function AlertRoundTimeline({ rounds = [], nowMs }) {
   );
 }
 
-function AlertCard({ item, nowMs, lastObservedAt }) {
+function AlertCard({ item, nowMs }) {
   const sourceLabel = item.scope?.sourceType === "fee_burner" ? "Fee burner" : "Strategy";
   const retryLabel = item.retryAt
     ? new Date(item.retryAt).getTime() <= nowMs
@@ -2445,68 +2448,65 @@ function AlertCard({ item, nowMs, lastObservedAt }) {
   const otherEvidence = Object.entries(item.evidence || {}).filter(([key]) => key !== "rounds");
   return (
     <article className={`alert-card alert-${item.severity}`} aria-label={item.title}>
-      <div className="alert-card-header">
-        <div className="alert-title">
-          <span className="alert-kicker">{item.severity}</span>
-          <h3>{item.title}</h3>
-        </div>
-        <div className="alert-age">
-          <time dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>
-            Opened {formatRelativeTimestamp(item.openedAt, nowMs)}
-          </time>
-          {lastObservedAt ? (
-            <time dateTime={lastObservedAt} title={formatUtcTimestamp(lastObservedAt)}>
-              Observed {formatRelativeTimestamp(lastObservedAt, nowMs)}
-            </time>
-          ) : null}
-        </div>
+      <div className="alert-body">
+        <header className="alert-card-header">
+          <div className="alert-title">
+            <span className="alert-kicker">{item.severity}</span>
+            <h3>{item.title}</h3>
+          </div>
+        </header>
+        <p className="alert-summary">{item.summary}</p>
+        {item.nextAction?.instruction || item.nextAction?.command ? (
+          <div className="alert-next-action">
+            {item.nextAction?.instruction ? (
+              <div>
+                <span className="next-action-label">Next step</span>
+                <p>{item.nextAction.instruction}</p>
+              </div>
+            ) : null}
+            {item.nextAction?.command ? (
+              <CopyIconButton
+                className="alert-command"
+                valueToCopy={item.nextAction.command}
+                title={item.nextAction.command}
+                ariaLabel="Copy retry command"
+              >
+                Copy retry command
+              </CopyIconButton>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      <p className="alert-summary">{item.summary}</p>
-      <div className="alert-addresses">
+      <dl className="alert-addresses">
         {item.scope?.sourceAddress ? (
           <div>
-            <span>{sourceLabel}</span>
-            <AddressLinkCopy address={item.scope.sourceAddress} />
+            <dt>{sourceLabel}</dt>
+            <dd><AddressLinkCopy address={item.scope.sourceAddress} /></dd>
           </div>
         ) : null}
         {item.scope?.auctionAddress ? (
           <div>
-            <span>Auction</span>
-            <AddressLinkCopy address={item.scope.auctionAddress} />
+            <dt>Auction</dt>
+            <dd><AddressLinkCopy address={item.scope.auctionAddress} /></dd>
           </div>
         ) : null}
         {item.scope?.tokenAddress ? (
           <div>
-            <span>Token</span>
-            <AddressLinkCopy address={item.scope.tokenAddress} />
+            <dt>Token</dt>
+            <dd><AddressLinkCopy address={item.scope.tokenAddress} /></dd>
           </div>
         ) : null}
-        {retryLabel ? (
-          <time className="alert-retry" dateTime={item.retryAt} title={formatUtcTimestamp(item.retryAt)}>
-            {retryLabel}
-          </time>
-        ) : null}
-      </div>
-      {item.nextAction?.instruction || item.nextAction?.command ? (
-        <div className="alert-next-action">
-          {item.nextAction?.instruction ? (
-            <p>
-              <span className="next-action-label">Next</span>
-              {item.nextAction.instruction}
-            </p>
-          ) : null}
-          {item.nextAction?.command ? (
-            <span className="alert-command" title={item.nextAction.command}>
-              Copy retry command
-              <CopyIconButton
-                valueToCopy={item.nextAction.command}
-                title="Copy retry command"
-                ariaLabel="Copy retry command"
-              />
-            </span>
-          ) : null}
+        <div className="alert-age">
+          <dt>Opened</dt>
+          <dd><time dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>{formatRelativeTimestamp(item.openedAt, nowMs)}</time></dd>
         </div>
-      ) : null}
+        {retryLabel ? (
+          <div>
+            <dt>Retry</dt>
+            <dd><time className="alert-retry" dateTime={item.retryAt} title={formatUtcTimestamp(item.retryAt)}>{retryLabel.replace(/^Retry /, "")}</time></dd>
+          </div>
+        ) : null}
+      </dl>
       <div className="alert-actions">
         <div className="alert-links">
           {item.links?.logs ? <a href={item.links.logs}>Logs</a> : null}
@@ -2624,7 +2624,7 @@ function AlertsPage({ state, nowMs }) {
       {needsAction.length ? (
         <section className="alert-section" aria-label="Needs action">
           {needsAction.map((item) => (
-            <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.evaluatedAt} />
+            <AlertCard key={item.id} item={item} nowMs={nowMs} />
           ))}
         </section>
       ) : null}
@@ -2632,7 +2632,7 @@ function AlertsPage({ state, nowMs }) {
         <section className="alert-section" aria-label="Watching">
           <h2>Watching</h2>
           {watching.map((item) => (
-            <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.evaluatedAt} />
+            <AlertCard key={item.id} item={item} nowMs={nowMs} />
           ))}
         </section>
       ) : null}

@@ -184,8 +184,17 @@ for (const theme of ["light", "dark"]) {
     await expect(page.locator(".refresh-status")).toContainText("Evaluated just now");
     const alert = page.getByRole("article", { name: issue.title, exact: true });
     await expect(alert.locator(".alert-next-action")).toContainText(issue.nextAction.instruction);
-    await expect(alert.locator(".alert-age")).toContainText("Opened 3 days ago");
-    await expect(alert.locator(".alert-age")).toContainText("Observed just now");
+    await expect(alert.locator(".alert-age dt")).toHaveText("Opened");
+    await expect(alert.locator(".alert-age time")).toHaveText("3 days ago");
+    await expect(alert).not.toContainText("Observed");
+    expect((await page.locator(".alerts-page").boundingBox()).width).toBe(960);
+    const bodyBox = await alert.locator(".alert-body").boundingBox();
+    const contextBox = await alert.locator(".alert-addresses").boundingBox();
+    expect(contextBox.y).toBe(bodyBox.y);
+    expect(contextBox.x).toBeGreaterThan(bodyBox.x + bodyBox.width);
+    expect((await alert.boundingBox()).height).toBeLessThan(260);
+    const addressColumns = await alert.locator(".alert-addresses dd").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+    expect(new Set(addressColumns).size).toBe(1);
     await expect(alert.getByRole("link", { name: "Logs", exact: true })).toHaveAttribute("href", "/logs?kick_id=42");
     const copy = alert.getByRole("button", { name: "Copy retry command", exact: true });
     await copy.click();
@@ -232,6 +241,10 @@ test("alerts never show healthy empty results for stale, missing, failed or inco
   state.alertsData = { needsActionCount: 0, items: [], evaluatedAt: now(), latestSuccessfulScanAt: now() };
   await page.goto("/alerts");
   await expect(page.getByText("No operator action needed", { exact: true })).toBeVisible();
+  state.alertsData.evaluatedAt = new Date(Date.now() + 20000).toISOString();
+  await refreshOnFocus(page);
+  await expect(page.locator(".refresh-status")).toContainText("Evaluated just now");
+  await expect(page.locator(".refresh-updated")).toHaveAttribute("title", /UTC$/);
   for (const invalid of [
     { evaluatedAt: "2020-01-01T00:00:00Z" }, { latestSuccessfulScanAt: "2020-01-01T00:00:00Z" },
     { latestSuccessfulScanAt: null }, { evaluatedAt: "invalid" }, { items: null }, { needsActionCount: 1 },

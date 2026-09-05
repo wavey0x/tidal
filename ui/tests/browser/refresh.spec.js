@@ -1,15 +1,25 @@
 import { test, expect } from "@playwright/test";
-import { mockPublicApi } from "./fixtures";
+import { mockPublicApi, refreshOnFocus } from "./fixtures";
 
-test("manual and focus refresh preserve last good dashboard data on failure", async ({ page }) => {
+test("all pages retain freshness metadata without manual refresh buttons", async ({ page }) => {
+  await mockPublicApi(page);
+  for (const path of ["/", "/fee-burner", "/logs", "/alerts"]) {
+    await page.goto(path);
+    await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
+    await expect(page.locator(".refresh-status")).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Refresh/ })).toHaveCount(0);
+  }
+});
+
+test("Automatic focus refresh preserves last good dashboard data on failure", async ({ page }) => {
   const state = await mockPublicApi(page);
   await page.goto("/");
   await expect(page.getByText("$1.25", { exact: true })).toBeVisible();
   state.balance = "2";
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.getByText("$2.50", { exact: true })).toBeVisible();
   state.failed = true;
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.getByText("Unable to load dashboard", { exact: true })).toBeVisible();
   await expect(page.getByText(/Data may be stale/)).toBeVisible();
   await expect(page.getByText("$2.50", { exact: true })).toBeVisible();
@@ -60,7 +70,7 @@ test("refresh triggers never overlap an in-flight request", async ({ page }) => 
   let release;
   state.holdDashboard = new Promise((resolve) => { release = resolve; });
   const before = state.dashboardReads;
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(() => state.dashboardReads).toBe(before + 1);
   await page.evaluate(() => {
     window.dispatchEvent(new Event("focus"));
@@ -68,7 +78,7 @@ test("refresh triggers never overlap an in-flight request", async ({ page }) => 
   });
   await page.clock.runFor(90000);
   expect(state.dashboardReads).toBe(before + 1);
-  await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled();
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "true");
   state.balance = "2";
   release();
   await expect(page.getByText("$2.50", { exact: true })).toBeVisible();
@@ -81,13 +91,13 @@ test("logs revalidate revisited pages and do not prefetch", async ({ page }) => 
   expect(state.logReads.every((offset) => offset === 0)).toBe(true);
   await page.getByRole("button", { name: "Older", exact: true }).first().click();
   await expect.poll(() => state.logReads.includes(25)).toBe(true);
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
   state.balance = "2";
   await page.getByRole("button", { name: "Newer", exact: true }).first().click();
   await expect(page.getByText("KICK REWARD2 -> USDC", { exact: true })).toBeVisible();
 });
 
-test("alerts refresh on entry, focus and manual request", async ({ page }) => {
+test("alerts refresh on entry and repeated focus", async ({ page }) => {
   const state = await mockPublicApi(page);
   await page.goto("/");
   await expect(page.getByLabel("1 alerts need action")).toBeVisible();
@@ -98,6 +108,6 @@ test("alerts refresh on entry, focus and manual request", async ({ page }) => {
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByLabel("3 alerts need action")).toBeVisible();
   state.balance = "4";
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.getByLabel("4 alerts need action")).toBeVisible();
 });

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockPublicApi, contrastRatio, STRATEGY, TOKEN, WANT, AUCTION } from "./fixtures";
+import { mockPublicApi, contrastRatio, STRATEGY, TOKEN, WANT, AUCTION, refreshOnFocus } from "./fixtures";
 
 const hash = "0x" + "ab".repeat(32);
 const now = () => new Date().toISOString();
@@ -99,15 +99,15 @@ test("log refresh pins the visible page during interaction and preserves open de
   version = 1;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(() => state.logReads.length).toBeGreaterThan(1);
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
   expect(await ids()).toEqual(before);
   await page.locator('[data-log-id="26"]').getByRole("button", { name: "Show details for log 26", exact: true }).click();
   await expect(page).toHaveURL(/kick_id=26/);
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.locator(".log-detail-content")).toBeVisible();
   expect(await ids()).toEqual(before);
   state.logsFailed = true;
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.locator(".refresh-status")).toContainText("Data may be stale");
   await expect(page.locator(".log-detail-content")).toBeVisible();
   state.logsFailed = false;
@@ -115,7 +115,7 @@ test("log refresh pins the visible page during interaction and preserves open de
   await expect(page.locator(".log-detail-content")).toBeVisible();
   const position = await page.evaluate(() => scrollY);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
   expect(await page.evaluate(() => scrollY)).toBe(position);
   await page.getByRole("button", { name: "Show all logs", exact: true }).click();
   await expect.poll(ids).toHaveLength(25);
@@ -140,7 +140,7 @@ test("log headings stay sticky and refresh preserves scroll; browser Back restor
   const reads = state.logReads.length;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(() => state.logReads.length).toBeGreaterThan(reads);
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
   expect(await page.evaluate(() => scrollY)).toBe(scroll);
   await page.getByRole("button", { name: "Show details for log 12", exact: true }).click();
   await expect(page.locator(".log-detail-content")).toBeVisible();
@@ -210,7 +210,7 @@ for (const theme of ["light", "dark"]) {
     await expect(round).toContainText("Agreement does not identify the cause");
     state.alertsData.evaluatedAt = now();
     state.alertsData.items[0].evidence.rounds[0].closeId = 99;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(round).toContainText("Close · log 99");
     await expect(round.locator(".provider-details")).toHaveAttribute("open", "");
     await page.setViewportSize({ width: 320, height: 1200 });
@@ -219,7 +219,7 @@ for (const theme of ["light", "dark"]) {
     expect(overflowing).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     state.alertsFailed = true;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(page.locator(".alert-health-warning")).toContainText("Current health is unverified");
     await expect(alert).toBeVisible();
     await expect(page.getByText("No operator action needed", { exact: true })).toHaveCount(0);
@@ -237,7 +237,7 @@ test("alerts never show healthy empty results for stale, missing, failed or inco
     { latestSuccessfulScanAt: null }, { evaluatedAt: "invalid" }, { items: null }, { needsActionCount: 1 },
   ]) {
     state.alertsData = { needsActionCount: 0, items: [], evaluatedAt: now(), latestSuccessfulScanAt: now(), ...invalid };
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(page.locator(".alert-health-warning")).toBeVisible();
     await expect(page.getByText("No operator action needed", { exact: true })).toHaveCount(0);
   }
@@ -274,9 +274,14 @@ for (const theme of ["light", "dark"]) {
     expect(boxes[0].x).toBe(boxes[1].x);
     expect(boxes[2].x).toBe(boxes[0].x);
     expect(boxes[2].width).toBe(boxes[0].width);
-    expect(boxes[1].width).toBeGreaterThan(1000);
+    expect(boxes[1].width).toBe(boxes[0].width);
     const refresh = await page.locator(".refresh-status").boundingBox();
-    expect(refresh.x + refresh.width).toBe(boxes[1].x + boxes[1].width);
+    expect(refresh.x).toBe(boxes[1].x);
+    const identity = await inventory.locator(".fee-burner-identity").boundingBox();
+    const auction = await inventory.locator(".fee-burner-auction").boundingBox();
+    expect(identity.y).toBe(auction.y);
+    expect(auction.x - identity.x).toBeCloseTo(320, 0);
+    await expect(page.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0);
     const columns = await table.locator("thead th").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
     for (const [index, width] of [320, 190, 190].entries()) expect(columns[index]).toBeCloseTo(width, 0);
     expect(boxes[1].y + boxes[1].height).toBeLessThanOrEqual(boxes[0].y);
@@ -307,7 +312,7 @@ for (const theme of ["light", "dark"]) {
     await expect(inventory.locator(".fee-activity-list .transaction-link").first()).toHaveAttribute("href", `https://etherscan.io/tx/0x${"1".repeat(64)}`);
     await expect(inventory.getByRole("link", { name: "View on AuctionScan" })).toHaveCount(5);
     state.rows[0].balances[0].normalizedBalance = "110";
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(table.locator(".fee-inventory-total")).toHaveText("$260.00");
     await expect(table.locator(".fee-token-amount").first()).toHaveText("110.00");
     await expect(inventory.locator(".kick-row")).toHaveCount(5);
@@ -324,7 +329,7 @@ for (const theme of ["light", "dark"]) {
     expect(await table.locator(".fee-token-amount").first().evaluate(node => getComputedStyle(node).textAlign)).toBe("left");
     await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-inventory-mobile.png`) });
     state.failed = true;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(page.locator(".refresh-status")).toContainText("Data may be stale");
     await expect(table.locator(".fee-inventory-total")).toHaveText("$260.00");
     await expect(inventory.locator(".kick-row")).toHaveCount(5);
@@ -374,11 +379,11 @@ test("fee inventories separate multiple burners and preserve loading, empty and 
   await expect(second.locator(".fee-burner-activity")).toContainText("None recorded");
   await expect(second.locator(".fee-inventory-total")).toHaveCount(0);
   state.rows[1].balances = [balance("DUST", "0.001"), balance("ZERO", "0", WANT)];
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(second.locator(".fee-token-row")).toHaveCount(0);
   await expect(second).toContainText("No balances above the visibility threshold.");
   state.rows = [];
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.getByText("No fee burners are available.", { exact: true })).toBeVisible();
   state.failed = true;
   await page.reload();

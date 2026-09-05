@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { contrastRatio, mockPublicApi, WANT, AUCTION } from "./fixtures";
+import { contrastRatio, mockPublicApi, WANT, AUCTION, refreshOnFocus } from "./fixtures";
 
 const address = (index) => `0x${index.toString(16).padStart(40, "0")}`;
 const tx = `0x${"ab".repeat(32)}`;
@@ -213,7 +213,7 @@ test("sorting, expansion, filters, and scroll survive refresh without moving the
   await first.getByRole("button", { name: /Collapse rewards/ }).focus();
   await page.getByRole("searchbox").fill("BOLDUSDC");
   await expect(page.locator(".strategy-row")).toHaveCount(1);
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.getByRole("searchbox")).toHaveValue("BOLDUSDC");
   await expect(page.locator(".result-count")).toHaveText("1 of 7 strategies");
   await page.getByRole("searchbox").fill("");
@@ -241,7 +241,7 @@ test("unknown and dust values, additive filters, stale exceptions, and explicit 
   await page.getByRole("combobox", { name: "Filter by reward token" }).selectOption(address(102));
   await expect(page.locator(".strategy-row")).toHaveCount(1);
   state.rows[1].balances = [];
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(page.getByRole("combobox", { name: "Filter by reward token" })).toHaveValue(address(102));
   await expect(page.locator(".empty")).toBeVisible();
 });
@@ -301,7 +301,7 @@ test("history expansion and token image fallback remain independent of strategy 
   await first.getByRole("button", { name: "Expand kick history", exact: true }).click();
   await expect(first.locator(".kick-row")).toHaveCount(2);
   await expect(page.locator(".strategy-detail-grid")).toHaveCount(0);
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await refreshOnFocus(page);
   await expect(first.locator(".kick-row")).toHaveCount(2);
   await first.getByRole("button", { name: "Collapse kick history", exact: true }).click();
   await expect(first.locator(".kick-row")).toHaveCount(1);

@@ -3,6 +3,18 @@ export const TOKEN = "0x2222222222222222222222222222222222222222";
 export const WANT = "0x3333333333333333333333333333333333333333";
 export const AUCTION = "0x4444444444444444444444444444444444444444";
 
+// Exercise the real automatic-refresh path without a manual refresh control.
+export async function refreshOnFocus(page) {
+  const { expect } = await import("@playwright/test");
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
+  const path = new URL(page.url()).pathname;
+  const endpoint = path === "/logs" ? "/logs/kicks" : path === "/alerts" ? "/alerts" : "/dashboard";
+  const response = page.waitForResponse(result => new URL(result.url()).pathname.endsWith(endpoint));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await response;
+  await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
+}
+
 export async function contrastRatio(locator) {
   return locator.evaluate((node) => {
     const rgba = (color) => color.match(/[\d.]+/g).map(Number);

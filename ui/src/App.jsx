@@ -1492,7 +1492,7 @@ function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
   const stale = state.error || evaluationStale || (state.updatedAt && nowMs - state.updatedAt > 65000);
   const scanOverdue = scannedAt && nowMs - new Date(scannedAt).getTime() > SCAN_STALE_AFTER_MS;
   return (
-    <div className={`refresh-status${stale || scanOverdue ? " is-stale" : ""}`}>
+    <div className={`refresh-status${stale || scanOverdue ? " is-stale" : ""}`} aria-busy={state.refreshing} title="Updates automatically every 30 seconds while visible and when you return to this page">
       <span role="status">
         {stale ? "Data may be stale · " : ""}
         {scannedAt !== undefined ? (
@@ -1507,9 +1507,6 @@ function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
           {evaluatedAt !== undefined ? evaluatedAt ? `Evaluated ${formatRelativeTimestamp(evaluatedAt, nowMs)}` : "No evaluation available" : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
         </span>
       </span>
-      <button type="button" className="kick-log-page-btn" onClick={state.refresh} disabled={state.refreshing}>
-        {state.refreshing ? "Refreshing…" : "Refresh"}
-      </button>
     </div>
   );
 }
@@ -2607,7 +2604,7 @@ function AlertsPage({ state, nowMs }) {
             : !scanFresh
             ? "The latest successful scan is missing or overdue."
             : "Refresh is overdue."}{" "}
-          Refresh before acting.
+          Wait for a current update before acting. Updates retry automatically.
         </p>
       ) : null}
       {!loading && !items.length ? (

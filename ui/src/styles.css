@@ -65,15 +65,16 @@
 }
 .fee-burner-context {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px 24px;
-  padding: 4px 0 20px;
+  width: min(100%, var(--fee-inventory-width));
+  grid-template-columns: minmax(0, 320fr) minmax(0, 380fr);
+  align-items: start;
+  gap: 12px 0;
+  padding: 4px 0 16px;
 }
-.fee-burner-context .refresh-status { margin: 0; }
+.fee-burner-context .refresh-status { grid-column: 1 / -1; margin: 0; }
 .fee-burner-identity, .fee-burner-auction { min-width: 0; }
 .fee-burner-identity .row-primary { white-space: normal; overflow-wrap: anywhere; }
-.fee-burner-auction { display: flex; align-items: baseline; gap: 10px; }
+.fee-burner-auction { display: flex; align-items: baseline; gap: 8px; padding-left: 12px; }
 .fee-context-label { color: var(--text-secondary); font-size: 11px; }
 .fee-token-table { width: min(100%, var(--fee-inventory-width)); table-layout: fixed; }
 .fee-token-table thead th { position: sticky; top: 0; z-index: 2; background: var(--bg); }
@@ -101,13 +102,9 @@
 .fee-activity-list { max-width: 260px; margin: 8px 0 0 18px; }
 .fee-activity-list .kick-history.is-expanded { display: block; }
 .fee-inventory-loading { display: grid; gap: 28px; padding: 20px 0; }
-@media (max-width: 960px) {
-  .fee-burner-context { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .fee-burner-context .refresh-status { grid-column: 1 / -1; flex-wrap: wrap; }
-}
 @media (max-width: 600px) {
-  .fee-burner-context { gap: 12px 16px; }
-  .fee-burner-auction { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .fee-burner-context { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; }
+  .fee-burner-auction { flex-wrap: wrap; gap: 2px 8px; padding-left: 0; }
   .fee-token-table, .fee-token-table thead, .fee-token-table tbody, .fee-token-table tfoot { display: block; }
   .fee-token-table thead { position: sticky; top: 0; z-index: 2; background: var(--bg); }
   .fee-token-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); gap: 0 12px; }

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { AUCTION, contrastRatio, mockPublicApi, mockWallet } from "./fixtures";
+import { AUCTION, contrastRatio, mockPublicApi, mockWallet, refreshOnFocus } from "./fixtures";
 
 async function prepare(page) {
   await page.getByRole("button", { name: "Deploy auction", exact: true }).click();
@@ -28,11 +28,11 @@ for (const theme of ["light", "dark"]) {
     await expect(page.locator(".deployment-confirmed")).toHaveCSS("color", theme === "light" ? "rgb(33, 127, 70)" : "rgb(91, 196, 125)");
     await expect.poll(() => api.dashboardReads).toBeGreaterThan(reads);
     await expect(page.getByText("Waiting for scanner mapping.", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(page.getByText("confirmed", { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`${theme}-deployment-confirmed.png`), animations: "disabled" });
     api.auctionAddress = AUCTION;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refreshOnFocus(page);
     await expect(page.locator(".auction-cell .auction-address-row .address-value")).toHaveText("0x4444...4444");
     await expect(page.getByText("Waiting for scanner mapping.", { exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => window.walletFixture.sends)).toBe(1);

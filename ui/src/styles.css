@@ -1134,13 +1134,15 @@ tbody tr:focus-within > td {
 }
 
 .kick-history {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 2px;
   width: 100%;
   margin-top: 2px;
+  font-size: 11px;
 }
+.kick-history.has-history-toggle { grid-template-columns: minmax(0, 1fr) 28px; }
 
 .history-cell .kick-history,
 .strategy-detail-grid .kick-history {
@@ -1150,38 +1152,36 @@ tbody tr:focus-within > td {
 .kick-history-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
   min-width: 0;
 }
 
-.kick-history.is-expanded {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
-  align-items: start;
-  gap: 4px;
-}
-.kick-history.is-expanded .kick-history-list {
-  gap: 4px;
-}
-.kick-history.is-expanded .kick-row-inner {
+.kick-history .kick-row-inner {
   display: grid;
   grid-template-columns: 4ch minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  min-height: 22px;
+  gap: 2px;
+  min-height: 24px;
 }
-.kick-history.is-expanded .activity-links {
-  gap: 6px;
-  flex-wrap: nowrap;
+.kick-history .activity-links {
+  gap: 4px;
+  flex-wrap: wrap;
 }
-.kick-history.is-expanded .kick-time {
+.kick-history .kick-time {
   font-size: 11px;
   color: var(--text-secondary);
 }
-.history-collapse {
-  justify-content: center;
-  min-height: 22px;
+.kick-history .transaction-link { overflow-wrap: anywhere; }
+.kick-history .kick-history-auctionscan { width: 13px; height: 13px; margin-left: 0; }
+.kick-history .history-toggle-button { gap: 2px; justify-content: flex-end; min-height: 24px; width: 28px; padding-right: 3px; -webkit-tap-highlight-color: transparent; }
+.kick-history .chevron-toggle svg { width: 10px; height: 10px; }
+.history-count { font-variant-numeric: tabular-nums; }
+@media (pointer: coarse) {
+  .kick-history.has-history-toggle { grid-template-columns: minmax(0, 1fr) 44px; }
+  .kick-history .kick-row-inner, .kick-history .activity-links a { min-height: 44px; }
+  .kick-history .activity-links a { display: inline-flex; align-items: center; min-width: 44px; }
+  .kick-history .history-toggle-button { width: 44px; min-height: 44px; }
 }
 
 .kick-row {

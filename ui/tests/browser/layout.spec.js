@@ -149,7 +149,7 @@ for (const theme of ["light", "dark"]) {
       `https://etherscan.io/tx/${tx}`
     );
     await expect(first.locator(".history-cell .transaction-link")).toHaveAttribute("target", "_blank");
-    await expect(first.locator(".transaction-link svg")).toHaveCount(1);
+    await expect(first.locator(".transaction-link svg")).toHaveCount(0);
     await expect(first.locator(".auction-address-row a")).toHaveAttribute(
       "href",
       `https://etherscan.io/address/${AUCTION}`
@@ -388,4 +388,81 @@ test("touch targets and mobile detail focus stay usable without accidental navig
   ).toBeFocused();
   expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
   await context.close();
+});
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: history reveals older entries without moving or reformatting the latest entry`, async ({ page }, testInfo) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const state = await fixture(page);
+    state.rows[0].kicks = Array.from({ length: 7 }, (_, i) => ({
+      ...state.rows[0].kicks[0], txHash: `0x${String(i + 1).repeat(64)}`,
+      createdAt: new Date(Date.now() - (i + 1) * 2 * 86400000).toISOString(),
+    }));
+    await page.goto("/");
+    const history = page.locator(".strategy-row").first().locator(".kick-history");
+    const latest = history.locator(".kick-row").first();
+    const geometry = () => history.evaluate(node => {
+      const first = node.querySelector(".kick-row");
+      return [first, first.querySelector("time"), first.querySelector(".transaction-link"), first.querySelector(".kick-history-auctionscan"), node.querySelector(".history-toggle-button")]
+        .map(element => { const { x, y, width, height } = element.getBoundingClientRect(); return { x, y, width, height }; });
+    });
+    for (const width of [1440, 1024, 800]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const expand = history.getByRole("button", { name: "Expand kick history", exact: true });
+      await expand.hover();
+      const before = await geometry();
+      const label = await latest.innerText();
+      const links = await latest.getByRole("link").evaluateAll(nodes => nodes.map(node => node.href));
+      if (width === 1440) await history.screenshot({ path: testInfo.outputPath(`${theme}-history-collapsed.png`) });
+      await expand.click();
+      await expect(history.locator(".kick-row")).toHaveCount(5);
+      await expect(latest).toHaveText(label.replace(/\n/g, ""));
+      const after = await geometry();
+      for (let index = 0; index < before.length; index++) {
+        for (const key of ["x", "y", "width", "height"]) expect(after[index][key], `${width}px, node ${index} ${key}`).toBeCloseTo(before[index][key], 1);
+      }
+      expect(await latest.getByRole("link").evaluateAll(nodes => nodes.map(node => node.href))).toEqual(links);
+      const collapse = history.getByRole("button", { name: "Collapse kick history", exact: true });
+      await expect(collapse).toBeFocused();
+      await expect(collapse).toHaveAttribute("aria-controls", await history.locator(".kick-history-list").getAttribute("id"));
+      if (width === 1440) await history.screenshot({ path: testInfo.outputPath(`${theme}-history-expanded.png`) });
+      const sizing = await history.evaluate(node => ({ viewport: innerWidth, client: node.clientWidth, scroll: node.scrollWidth,
+        overflow: [...node.querySelectorAll("*")].filter(child => child.getBoundingClientRect().right > node.getBoundingClientRect().right + .1)
+          .map(child => ({ tag: child.tagName, class: child.getAttribute("class"), right: child.getBoundingClientRect().right, text: child.textContent })) }));
+      expect(sizing.scroll, JSON.stringify(sizing)).toBeLessThanOrEqual(sizing.client);
+      await page.keyboard.press("Enter");
+      await expect(history.locator(".kick-row")).toHaveCount(1);
+      await expect(expand).toBeFocused();
+      expect(await geometry()).toEqual(before);
+    }
+  });
+}
+
+test("touch history keeps its anchor, generous targets and expansion through refresh", async ({ browser }, testInfo) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+  try {
+    const page = await context.newPage();
+    const state = await fixture(page);
+    state.rows[0].kicks = Array.from({ length: 5 }, (_, index) => ({ ...state.rows[0].kicks[0], txHash: `0x${String(index + 1).repeat(64)}` }));
+    await page.goto("/");
+    await page.getByRole("button", { name: "Show details for Curve-crvDOLA", exact: true }).tap();
+    const history = page.getByRole("dialog").locator(".kick-history");
+    const toggle = history.locator(".history-toggle-button");
+    await toggle.scrollIntoViewIfNeeded();
+    const before = await history.locator(".kick-row").first().innerText();
+    for (const target of await history.locator("button, a").all()) {
+      const box = await target.boundingBox();
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.width).toBeGreaterThanOrEqual(44);
+    }
+    await toggle.tap();
+    await expect(history.locator(".kick-row")).toHaveCount(5);
+    expect(await history.locator(".kick-row").first().innerText()).toBe(before);
+    await refreshOnFocus(page);
+    await expect(history.locator(".kick-row")).toHaveCount(5);
+    expect(await history.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await history.screenshot({ path: testInfo.outputPath("touch-coherent-history.png") });
+    await toggle.tap();
+    await expect(history.locator(".kick-row")).toHaveCount(1);
+  } finally { await context.close(); }
 });

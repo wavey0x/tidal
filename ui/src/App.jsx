@@ -5,6 +5,7 @@ import { keccak_256 } from "js-sha3";
 import { useLiveData } from "./useLiveData";
 import { useStableRowOrder } from "./useStableRowOrder";
 import { useDialogFocus } from "./useDialogFocus";
+import { useVisibleViewport } from "./useVisibleViewport";
 
 const ALL_TOKENS = "__all__";
 const MIN_USD_VISIBLE = new Big("0.01");
@@ -952,9 +953,11 @@ function MissingAuctionAction({ deployState, onDeploy, onCheck }) {
 
 function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   const dialogRef = useRef(null);
+  const backdropRef = useRef(null);
   const cancelRef = useRef(null);
   const titleId = useId();
   useDialogFocus(dialogRef, onCancel, cancelRef);
+  useVisibleViewport(backdropRef);
 
   const spec = payload || {};
   const warnings = Array.isArray(spec.warnings) ? spec.warnings.filter(Boolean) : [];
@@ -981,7 +984,7 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   }
 
   return createPortal(
-    <div className="deploy-modal-backdrop" onMouseDown={onCancel}>
+    <div ref={backdropRef} className="deploy-modal-backdrop" onMouseDown={onCancel}>
       <div ref={dialogRef} className="deploy-modal" role="dialog" aria-modal="true"
         aria-labelledby={titleId} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
         <h2 id={titleId} className="deploy-modal-title">Deploy auction</h2>
@@ -1340,53 +1343,45 @@ function DetailPanel({ colSpan, children }) {
   );
 }
 
-function DetailModal({ onClose, label = "Activity details", children }) {
+function DetailModal({ onClose, label = "Activity details", header, children }) {
   const sheetRef = useRef(null);
   const bodyRef = useRef(null);
   const backdropRef = useRef(null);
-  const dragRef = useRef({ startY: 0, startTime: 0, dy: 0, dragging: false, dismissed: false });
+  const closeRef = useRef(null);
+  const dismissTimerRef = useRef(null);
+  const dragRef = useRef(null);
 
-  useDialogFocus(sheetRef, onClose);
+  useDialogFocus(sheetRef, onClose, closeRef);
+  useVisibleViewport(backdropRef);
+  useEffect(() => () => clearTimeout(dismissTimerRef.current), []);
 
-  function onTouchStart(e) {
-    const d = dragRef.current;
-    d.startY = e.touches[0].clientY;
-    d.startTime = Date.now();
-    d.dy = 0;
-    d.dragging = false;
-    d.dismissed = false;
+  function onDragStart(e) {
+    if (e.pointerType === "mouse" || !e.isPrimary || e.target.closest("button, a, input, summary")) return;
+    dragRef.current = { pointerId: e.pointerId, startY: e.clientY, startTime: Date.now(), dy: 0 };
+    e.currentTarget.setPointerCapture(e.pointerId);
   }
 
-  function onTouchMove(e) {
+  function onDragMove(e) {
     const d = dragRef.current;
-    if (d.dismissed) return;
-    const dy = e.touches[0].clientY - d.startY;
-    if ((bodyRef.current.scrollTop <= 0 && dy > 0) || d.dragging) {
-      d.dragging = true;
-      d.dy = Math.max(0, dy);
-      sheetRef.current.style.transition = "none";
-      sheetRef.current.style.transform = `translateY(${d.dy}px)`;
-      backdropRef.current.style.opacity = Math.max(0, 1 - d.dy / (window.innerHeight * 0.5));
-    }
+    if (!d || e.pointerId !== d.pointerId) return;
+    d.dy = Math.max(0, e.clientY - d.startY);
+    sheetRef.current.style.transition = "none";
+    sheetRef.current.style.transform = `translateY(${d.dy}px)`;
   }
 
-  function onTouchEnd() {
+  function onDragEnd(e) {
     const d = dragRef.current;
-    if (!d.dragging) return;
+    if (!d || e.pointerId !== d.pointerId) return;
+    dragRef.current = null;
     const velocity = d.dy / Math.max(1, Date.now() - d.startTime);
-    const dismiss = d.dy > 80 || velocity > 0.5;
+    const dismiss = e.type !== "pointercancel" && (d.dy > 80 || (d.dy > 20 && velocity > 0.5));
     sheetRef.current.style.transition = "transform 200ms ease-out";
-    backdropRef.current.style.transition = "opacity 200ms ease-out";
     if (dismiss) {
-      d.dismissed = true;
       sheetRef.current.style.transform = "translateY(100%)";
-      backdropRef.current.style.opacity = "0";
-      setTimeout(onClose, 200);
+      dismissTimerRef.current = setTimeout(onClose, 200);
     } else {
-      sheetRef.current.style.transform = "translateY(0)";
-      backdropRef.current.style.opacity = "1";
+      sheetRef.current.style.transform = "none";
     }
-    d.dragging = false;
   }
 
   return createPortal(
@@ -1399,12 +1394,15 @@ function DetailModal({ onClose, label = "Activity details", children }) {
         aria-label={label}
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
       >
-        <div className="kick-modal-handle" />
-        <button type="button" className="kick-modal-close" onClick={onClose}>Close details</button>
+        <div className="kick-modal-header" onPointerDown={onDragStart} onPointerMove={onDragMove}
+          onPointerUp={onDragEnd} onPointerCancel={onDragEnd}>
+          <div className="kick-modal-handle" aria-hidden="true" />
+          <div className="kick-modal-heading">{header || label}</div>
+          <button ref={closeRef} type="button" className="kick-modal-close" onClick={onClose} aria-label="Close details" title="Close details">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+          </button>
+        </div>
         <div ref={bodyRef} className="kick-modal-body">
           {children}
         </div>

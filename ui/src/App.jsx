@@ -976,16 +976,6 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
       />,
     ]);
   }
-  if (spec.startingPrice) {
-    rows.push([
-      "Starting price",
-      `${spec.startingPriceDisplay || spec.startingPrice} ${spec.wantSymbol || "want"}`,
-    ]);
-    rows.push(["Raw startingPrice", spec.startingPrice]);
-  }
-  if (spec.startPriceBufferBps != null) {
-    rows.push(["Start-price buffer", `+${(Number(spec.startPriceBufferBps) / 100).toFixed(1)}%`]);
-  }
   if (spec.predictedAuctionAddress) {
     rows.push(["Predicted auction", <AddressLinkCopy address={spec.predictedAuctionAddress} />]);
   }
@@ -994,9 +984,17 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
     <div className="deploy-modal-backdrop" onMouseDown={onCancel}>
       <div ref={dialogRef} className="deploy-modal" role="dialog" aria-modal="true"
         aria-labelledby={titleId} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
-        <div id={titleId} className="deploy-modal-title">
-          Deploy auction for {spec.strategyName || shortenAddress(spec.strategyAddress)}?
+        <h2 id={titleId} className="deploy-modal-title">Deploy auction</h2>
+        <div className="deploy-modal-entity">
+          <EntityIdentity primary={formatStrategyDisplayName(spec.strategyName) || "Strategy"}
+            primaryTitle={spec.strategyName} address={spec.strategyAddress} />
         </div>
+        {spec.startingPrice ? <div className="deploy-price">
+          <span className="deploy-price-label">Starting price</span>
+          <span className="deploy-price-amount">{spec.startingPriceDisplay || spec.startingPrice}</span>
+          <span className="deploy-price-token">{spec.wantSymbol || "want"}</span>
+          {spec.startPriceBufferBps != null ? <span className="deploy-price-buffer">+{(Number(spec.startPriceBufferBps) / 100).toFixed(1)}% start-price buffer</span> : null}
+        </div> : null}
         <dl className="deploy-modal-details">
           {rows.map(([label, value]) => (
             <div key={label} className="deploy-modal-row">
@@ -1007,6 +1005,13 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
             </div>
           ))}
         </dl>
+        <details className="deploy-technical">
+          <summary>Technical details</summary>
+          <dl className="deploy-modal-details">
+            {spec.strategyName ? <div className="deploy-modal-row"><dt>Strategy name</dt><dd>{spec.strategyName}</dd></div> : null}
+            {spec.startingPrice ? <div className="deploy-modal-row"><dt>Raw startingPrice</dt><dd>{spec.startingPrice}</dd></div> : null}
+          </dl>
+        </details>
         {warnings.length ? (
           <div className="deploy-modal-warnings" role="status" aria-live="polite">
             {warnings.map((warning) => (

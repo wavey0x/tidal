@@ -35,7 +35,7 @@ export async function contrastRatio(locator) {
 export async function mockPublicApi(page) {
   const state = { balance: "1", failed: false, dashboardReads: 0, logReads: [], alertReads: 0, holdDashboard: null,
     warnings: [], defaultsWarnings: [], prepareWarnings: [], rows: null, logsData: null, logQueries: [], logsFailed: false,
-    alertsData: null, alertsFailed: false, holdAlerts: null, latestScanAt: "2026-09-04T20:00:00Z" };
+    alertsData: null, alertsFailed: false, holdAlerts: null, deployDefaults: {}, latestScanAt: "2026-09-04T20:00:00Z" };
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     return url.hostname === "127.0.0.1" ? route.continue() : route.abort();
@@ -81,7 +81,7 @@ export async function mockPublicApi(page) {
         wantAddress: WANT, wantSymbol: "USDC", factoryAddress: "0x5555555555555555555555555555555555555555",
         governanceAddress: "0x6666666666666666666666666666666666666666", factoryVersion: "1.0.5",
         startingPrice: "1000000000000000000", startingPriceDisplay: "1", salt: "0x" + "00".repeat(32),
-        predictedAuctionAddress: AUCTION };
+        predictedAuctionAddress: AUCTION, ...state.deployDefaults };
     } else if (url.pathname.endsWith("/deploy/browser-prepare")) {
       warnings = state.prepareWarnings;
       data = { transactions: [{ to: "0x5555555555555555555555555555555555555555", data: "0x00", value: "0x0", chainId: 1 }] };

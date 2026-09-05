@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { AUCTION, contrastRatio, mockPublicApi, mockWallet, refreshOnFocus } from "./fixtures";
+import { AUCTION, TOKEN, contrastRatio, mockPublicApi, mockWallet, refreshOnFocus } from "./fixtures";
 
 async function prepare(page) {
   await page.getByRole("button", { name: "Deploy auction", exact: true }).click();
@@ -144,3 +144,52 @@ test("confirmation queues a fresh read when a previous refresh is in flight", as
   release();
   await expect.poll(() => api.dashboardReads).toBe(before + 2);
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: mobile deployment separates exact pricing from raw fields without hiding warnings`, async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: theme,
+      permissions: ["clipboard-read", "clipboard-write"] });
+    try {
+      const page = await context.newPage();
+      const api = await mockPublicApi(page);
+      const name = "StrategyCurveBoostedFactory-ETH MATIC-f";
+      api.deployDefaults = { strategyName: name, wantSymbol: "ETH MATIC-f", startingPriceDisplay: "10.162816661626094681",
+        startingPrice: "10162816661626096000", inference: { sellTokenAddress: TOKEN, sellTokenSymbol: "CRV" }, startPriceBufferBps: 1000 };
+      api.defaultsWarnings = ["Curve quote unavailable for deploy inference (status: no_route)"];
+      await mockWallet(page);
+      await page.goto("/");
+      await page.getByRole("button", { name: "Show details for Fixture Strategy", exact: true }).tap();
+      await prepare(page);
+      const modal = page.locator(".deploy-modal");
+      await expect(modal.getByRole("heading")).toHaveText("Deploy auction");
+      await expect(modal.locator(".deploy-modal-entity .row-primary")).toHaveText("Curve-ETH MATIC-f");
+      await expect(modal.locator(".deploy-price-amount")).toHaveText("10.162816661626094681");
+      await expect(modal.locator(".deploy-price-token")).toHaveText("ETH MATIC-f");
+      await expect(modal.locator(".deploy-technical dl")).toBeHidden();
+      await expect(modal.locator(".deploy-modal-warning")).toBeVisible();
+      expect(await contrastRatio(modal.locator(".deploy-modal-warning"))).toBeGreaterThanOrEqual(4.5);
+      const copy = modal.locator(".deploy-modal-entity .copy-trigger");
+      await copy.tap();
+      await expect(copy).toHaveClass(/is-copied/);
+      await expect.poll(() => copy.locator(".check-glyph").evaluate(node => getComputedStyle(node).opacity)).toBe("1");
+      expect(await contrastRatio(copy.locator(".copy-icon"))).toBeGreaterThanOrEqual(4.5);
+      await page.screenshot({ path: testInfo.outputPath(`${theme}-compact-deploy-mobile.png`), animations: "disabled" });
+      await modal.locator(".deploy-technical summary").tap();
+      await expect(modal.locator(".deploy-technical")).toContainText("10162816661626096000");
+      await expect(modal.locator(".deploy-technical")).toContainText(name);
+      expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
+      for (const width of [320, 390, 768]) {
+        await page.setViewportSize({ width, height: 700 });
+        expect(await modal.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+        const box = await modal.boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(12);
+        expect(box.y).toBeGreaterThanOrEqual(12);
+        expect(box.y + box.height).toBeLessThanOrEqual(688);
+      }
+      await modal.getByRole("button", { name: "Cancel", exact: true }).tap();
+      await expect(modal).toHaveCount(0);
+      await expect(page.getByRole("dialog", { name: "Strategy details" })).toBeVisible();
+      expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
+    } finally { await context.close(); }
+  });
+}

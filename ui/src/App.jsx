@@ -1095,7 +1095,7 @@ function KickHistoryCell({
         <button type="button" className="history-toggle-button" onClick={onToggleExpand}
           aria-expanded={isExpanded} aria-controls={historyId}
           aria-label={toggleLabel} title={toggleLabel}>
-          <span className="history-count" aria-hidden="true">{isExpanded ? "−" : "+"}{earlierCount}</span>
+          <span className="history-count" aria-hidden="true">+{earlierCount}</span>
           <span className="history-toggle-label">{toggleLabel}</span>
           <Chevron expanded={isExpanded} />
         </button>

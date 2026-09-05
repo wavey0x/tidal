@@ -413,6 +413,10 @@ for (const theme of ["light", "dark"]) {
       const before = await geometry();
       const label = await latest.innerText();
       const links = await latest.getByRole("link").evaluateAll(nodes => nodes.map(node => node.href));
+      const gap = before[4].x - (before[3].x + before[3].width);
+      expect(gap, "expander stays next to its transaction links").toBeGreaterThanOrEqual(0);
+      expect(gap, "expander must not drift toward the next column").toBeLessThanOrEqual(12);
+      await expect(expand.locator(".history-count")).toBeVisible();
       if (width === 1440) await history.screenshot({ path: testInfo.outputPath(`${theme}-history-collapsed.png`) });
       await expand.click();
       await expect(history.locator(".kick-row")).toHaveCount(5);
@@ -423,6 +427,8 @@ for (const theme of ["light", "dark"]) {
       }
       expect(await latest.getByRole("link").evaluateAll(nodes => nodes.map(node => node.href))).toEqual(links);
       const collapse = history.getByRole("button", { name: "Hide earlier transactions", exact: true });
+      await expect(collapse.locator(".history-count")).toBeHidden();
+      await expect(collapse.locator(".chevron-toggle")).toBeVisible();
       await expect(collapse).toBeFocused();
       await expect(collapse).toHaveAttribute("aria-controls", await history.locator(".kick-history-list").getAttribute("id"));
       if (width === 1440) await history.screenshot({ path: testInfo.outputPath(`${theme}-history-expanded.png`) });
@@ -433,6 +439,7 @@ for (const theme of ["light", "dark"]) {
       await page.keyboard.press("Enter");
       await expect(history.locator(".kick-row")).toHaveCount(1);
       await expect(expand).toBeFocused();
+      await expect(expand.locator(".history-count")).toBeVisible();
       expect(await geometry()).toEqual(before);
     }
   });

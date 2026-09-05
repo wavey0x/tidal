@@ -1543,7 +1543,7 @@ function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now(), comp
           <time dateTime={scannedAt || (state.updatedAt ? new Date(state.updatedAt).toISOString() : undefined)} title={formatUtcTimestamp(scannedAt ?? state.updatedAt)}>
             {scannedAt !== undefined
               ? scannedAt ? `Scan ${formatCompactRelativeTimestamp(scannedAt, nowMs)}` : "No scan"
-              : state.updatedAt ? `Updated ${formatCompactRelativeTimestamp(state.updatedAt, nowMs)}` : "Not yet updated"}
+              : state.updatedAt ? `Updated ${formatCompactRelativeTimestamp(state.updatedAt, Math.max(nowMs, state.updatedAt))}` : "Not yet updated"}
           </time>
         ) : <>
         {scannedAt !== undefined ? (

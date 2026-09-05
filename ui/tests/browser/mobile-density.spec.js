@@ -110,6 +110,17 @@ const event = (id, extra = {}) => ({
   usdValue: "761.75", txHash: tx, normalizedBalance: "1000", ...extra,
 });
 
+test("a mobile focus refresh is never labelled as a future update between clock ticks", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.install();
+  await mockPublicApi(page);
+  await page.goto("/logs");
+  await expect(page.locator(".refresh-status")).toHaveText("Updated just now");
+  await page.clock.fastForward(10000);
+  await refreshOnFocus(page);
+  await expect(page.locator(".refresh-status")).toHaveText("Updated just now");
+});
+
 for (const theme of ["light", "dark"]) {
   test(`${theme}: mobile logs are compact events with explicit outcomes and explorer access in details`, async ({ browser }, testInfo) => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: theme,

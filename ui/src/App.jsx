@@ -767,20 +767,21 @@ function WantTokenValue({ address, symbol }) {
   );
 }
 
-function EntityIdentity({ primary, primaryTitle, secondary, address, onOpen, expanded = false, showAddress = true }) {
+function EntityIdentity({ primary, primaryTitle, secondary, address, onOpen, expanded = false, showAddress = true, inline = false }) {
+  const Tag = inline ? "span" : "div";
   return (
-    <div className="entity-cell">
-      <div className="row-primary" title={primaryTitle || (typeof primary === "string" ? primary : undefined)}>
+    <Tag className="entity-cell">
+      <Tag className="row-primary" title={primaryTitle || (typeof primary === "string" ? primary : undefined)}>
         {onOpen ? (
           <button type="button" className="entity-open" onClick={onOpen} aria-expanded={expanded}
             aria-label={`${expanded ? "Hide" : "Show"} details for ${primary}`}>
             {primary || "—"}
           </button>
         ) : primary || "—"}
-      </div>
-      {secondary ? <div className="entity-secondary mono">{secondary}</div> : null}
+      </Tag>
+      {secondary ? <Tag className="entity-secondary mono">{secondary}</Tag> : null}
       {showAddress ? <AddressLinkCopy address={address} /> : null}
-    </div>
+    </Tag>
   );
 }
 
@@ -1243,7 +1244,7 @@ function DetailGroup({ title, children }) {
   </section>;
 }
 
-function KickDetailContent({ kick }) {
+function KickDetailContent({ kick, compact = false }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
   const operationMeta = getOperationMeta(kick.operationType);
   let quote = null;
@@ -1262,9 +1263,15 @@ function KickDetailContent({ kick }) {
   const tokenValue = (address, symbol) => address ? <WantTokenValue address={address} symbol={symbol} /> : symbol || "—";
 
   return <div className="log-detail-content">
+    {compact ? <div className="mobile-log-detail-summary">
+      <div className="mobile-log-detail-heading"><strong>{formatKickPairLabel(kick)}</strong><StatusBadge status={kick.status} /></div>
+      <div className="mobile-log-detail-links"><EtherscanTxLink txHash={kick.txHash} /><AuctionScanTextLink kick={kick} /></div>
+      {kick.auctionAddress ? <div className="mobile-log-detail-auction"><span>Auction</span><AddressLinkCopy address={kick.auctionAddress} /></div> : null}
+    </div> : null}
     <div className="log-detail-columns">
       <DetailGroup title="Execution">
         <DetailField label="Operation">{operationMeta.detailLabel}</DetailField>
+        {compact && operationMeta.showUsd ? <DetailField label="USD">{parseBig(kick.usdValue) !== null ? `$${formatBalance(kick.usdValue)}` : "?"}</DetailField> : null}
         <DetailField label="Timestamp">
           <button type="button" className="timestamp-toggle" onClick={() => setShowRelativeTimestamp(value => !value)}
             title={kick.createdAt || undefined} aria-label="Toggle timestamp format">
@@ -1275,7 +1282,7 @@ function KickDetailContent({ kick }) {
         <DetailField label={operationMeta.primaryTokenLabel}>{tokenValue(kick.tokenAddress, kick.tokenSymbol)}</DetailField>
         <DetailField label={operationMeta.secondaryTokenLabel}>{tokenValue(kick.wantAddress, kick.wantSymbol)}</DetailField>
         {kick.normalizedBalance != null ? <DetailField label="Balance">{formatBalance(kick.normalizedBalance)} {kick.tokenSymbol}</DetailField> : null}
-        {kick.txHash ? <DetailField label="Transaction"><EtherscanTxLink txHash={kick.txHash} /></DetailField> : null}
+        {kick.txHash && !compact ? <DetailField label="Transaction"><EtherscanTxLink txHash={kick.txHash} /></DetailField> : null}
         {kick.blockNumber != null ? <DetailField label="Block">{kick.blockNumber}</DetailField> : null}
         {kick.gasUsed != null ? <DetailField label="Gas used">{Number(kick.gasUsed).toLocaleString()}</DetailField> : null}
         {kick.gasPriceGwei != null ? <DetailField label="Gas price">{kick.gasPriceGwei} gwei</DetailField> : null}
@@ -1314,7 +1321,7 @@ function KickDetailContent({ kick }) {
       </div>
     </div>
     {(getAuctionScanHref(kick) || kick.auctionAddress) ? <div className="log-detail-links">
-      {getAuctionScanHref(kick) ? <AuctionScanTextLink kick={kick} /> : null}
+      {getAuctionScanHref(kick) && !compact ? <AuctionScanTextLink kick={kick} /> : null}
       {kick.auctionAddress ? <a href={`${COW_EXPLORER_URL}${kick.auctionAddress}`} target="_blank" rel="noopener noreferrer" className="kick-external-link">CoW Explorer <OutboundLinkGlyph /></a> : null}
     </div> : null}
   </div>;
@@ -1413,13 +1420,34 @@ function KickDetailPanel({ kick, onOpenAuctionScan }) {
 function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
   return (
     <DetailModal onClose={onClose}>
-      <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
+      <KickDetailContent kick={kick} compact onOpenAuctionScan={onOpenAuctionScan} />
     </DetailModal>
   );
 }
 
 function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
+  const summaryId = useId();
   const operationMeta = getOperationMeta(kick.operationType);
+  const usd = operationMeta.showUsd ? (parseBig(kick.usdValue) !== null ? `$${formatBalance(kick.usdValue)}` : "?") : "—";
+  if (isMobile) return <>
+    <tr ref={rowRef} data-log-id={kick.id} className={`kick-log-row mobile-log-row${isExpanded ? " is-expanded" : ""}`}>
+      <td colSpan={6}>
+        <button type="button" className="mobile-log-open" onClick={onToggle} aria-expanded={isExpanded} aria-haspopup="dialog"
+          aria-describedby={summaryId}
+          aria-label={`${isExpanded ? "Hide" : "Show"} details for log ${kick.id}`}>
+          <span className="sr-only" id={summaryId}>{formatKickPairLabel(kick)}, {kick.sourceName || "Unknown source"}, {formatKickStatusLabel(kick.status)}, {formatRelativeTimestamp(kick.createdAt, nowMs)}, {usd}</span>
+          <span className="mobile-log-pair"><Chevron expanded={isExpanded} /><span>{formatKickPairLabel(kick).replace(" -> ", " → ")}</span></span>
+          <span className="log-usd-cell" title={operationMeta.showUsd ? undefined : "Not applicable to this operation"}>{usd}</span>
+          <EntityIdentity primary={kick.sourceName ? formatStrategyDisplayName(kick.sourceName) : "Unknown source"}
+            primaryTitle={kick.sourceName} showAddress={false} inline />
+          <span className="mobile-log-meta"><time dateTime={kick.createdAt} title={formatUtcTimestamp(kick.createdAt)}>
+            {formatCompactRelativeTimestamp(kick.createdAt, nowMs)}
+          </time><StatusBadge status={kick.status} /></span>
+        </button>
+      </td>
+    </tr>
+    {isExpanded ? <KickDetailModal kick={kick} onClose={onToggle} /> : null}
+  </>;
   return <>
     <tr ref={rowRef} data-log-id={kick.id} className={`kick-log-row ${isExpanded ? "is-expanded" : ""}`}>
       <td className="mono muted kick-time-cell" headers="log-time">
@@ -1444,7 +1472,7 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
         <div className="activity-links">{kick.txHash ? <EtherscanTxLink txHash={kick.txHash} /> : <span className="muted">No transaction</span>}<AuctionScanIconLink kick={kick} /></div>
       </td>
       <td className="mono align-right log-usd-cell" headers="log-usd" title={operationMeta.showUsd ? undefined : "Not applicable to this operation"}>
-        {operationMeta.showUsd ? (parseBig(kick.usdValue) !== null ? `$${formatBalance(kick.usdValue)}` : "?") : "—"}
+        {usd}
       </td>
     </tr>
     {isExpanded && !isMobile ? <KickDetailPanel kick={kick} /> : null}
@@ -1468,6 +1496,7 @@ function KickLogPager({
   hasMore,
   onPrev,
   onNext,
+  compact = false,
 }) {
   const rangeStart = total === 0 ? 0 : offset + 1;
   const rangeEnd = total === 0 ? 0 : Math.min(offset + pageSize, total);
@@ -1475,15 +1504,15 @@ function KickLogPager({
   return (
     <div className="kick-log-pagination">
       <div className="kick-log-pagination-meta" role="status">
-        {total === 0 ? "Showing 0 results" : `Showing ${rangeStart.toLocaleString()}-${rangeEnd.toLocaleString()} of ${total.toLocaleString()}`}
+        {total === 0 ? `${compact ? "" : "Showing "}0 results` : `${compact ? "" : "Showing "}${rangeStart.toLocaleString()}-${rangeEnd.toLocaleString()} of ${total.toLocaleString()}`}
       </div>
-      {state ? <RefreshStatus state={state} nowMs={nowMs} /> : null}
+      {state ? <RefreshStatus state={state} nowMs={nowMs} compact={compact} /> : null}
       <div className="kick-log-pagination-actions">
-        <button type="button" className="kick-log-page-btn" onClick={onPrev} disabled={loading || offset === 0}>
-          Newer
+        <button type="button" className="kick-log-page-btn" onClick={onPrev} disabled={loading || offset === 0} title="Newer logs">
+          {compact ? <span aria-hidden="true">←</span> : "Newer"}<span className="sr-only">{compact ? "Newer" : ""}</span>
         </button>
-        <button type="button" className="kick-log-page-btn" onClick={onNext} disabled={loading || !hasMore}>
-          Older
+        <button type="button" className="kick-log-page-btn" onClick={onNext} disabled={loading || !hasMore} title="Older logs">
+          {compact ? <span aria-hidden="true">→</span> : "Older"}<span className="sr-only">{compact ? "Older" : ""}</span>
         </button>
       </div>
     </div>
@@ -1539,6 +1568,7 @@ const logRowKey = (kick) => kick.id;
 function KickLogPage({ nowMs }) {
   const [initial] = useState(parseLocation);
   const [statusFilter, setStatusFilter] = useState(initial.logsStatus);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState(initial.logsQuery);
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(initial.logsQuery);
   const [offset, setOffset] = useState(initial.logsOffset);
@@ -1633,7 +1663,7 @@ function KickLogPage({ nowMs }) {
     setExpandedRows(new Set());
     navigateTo("kicks", buildNavParams({ kick_id: null, run_id: null }));
   }
-  const pagerProps = { offset, pageSize: KICK_LOG_PAGE_SIZE, total, loading, hasMore,
+  const pagerProps = { offset, pageSize: KICK_LOG_PAGE_SIZE, total, loading, hasMore, compact: isMobile,
     onPrev: () => changePage(Math.max(0, offset - KICK_LOG_PAGE_SIZE)), onNext: () => changePage(offset + KICK_LOG_PAGE_SIZE) };
 
   return <section className="logs-page">
@@ -1641,18 +1671,21 @@ function KickLogPage({ nowMs }) {
       <label className="control control-search">
         <span className="sr-only">Search logs</span>
         <input type="search" value={searchTerm} onChange={event => { setSearchTerm(event.target.value); setOffset(0); setExpandedRows(new Set()); }}
-          disabled={focusedView} placeholder="Search tokens, operations, addresses, transactions…" />
+          disabled={focusedView} placeholder={isMobile ? "Search logs…" : "Search tokens, operations, addresses, transactions…"} />
       </label>
+      <MobileFilterToggle expanded={filtersOpen} onToggle={() => setFiltersOpen(value => !value)} count={Number(statusFilter !== "all")} controls="log-filters" />
+      <div id="log-filters" className="responsive-filter-tray" hidden={isMobile && !filtersOpen}>
       <label className="control control-status">
         <span className="sr-only">Result</span>
         <select aria-label="Result" value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setOffset(0); setExpandedRows(new Set()); }} disabled={focusedView}>
           <option value="all">All results</option><option value="confirmed">Confirmed</option><option value="failed">Failed</option>
         </select>
       </label>
+      </div>
     </section>
     {focusedView ? <div className="kick-log-focusbar">
       <span className="toolbar-meta">{focusedKickId ? `Selected log ${focusedKickId}` : `Run ${focusedRunId}`}</span>
-      <RefreshStatus state={logs} nowMs={nowMs} />
+      <RefreshStatus state={logs} nowMs={nowMs} compact={isMobile} />
       <button type="button" className="kick-log-page-btn" onClick={clearFocusedView}>Show all logs</button>
     </div> : <KickLogPager {...pagerProps} state={logs} nowMs={nowMs} />}
     {error ? <p className="error" role="alert">{error}</p> : null}

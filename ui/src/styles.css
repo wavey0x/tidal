@@ -1021,6 +1021,12 @@ tbody tr:focus-within > td {
 .reward-summary {
   min-width: 0;
 }
+.reward-summary.is-expanded {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 8px;
+}
 .reward-summary-button {
   display: grid;
   grid-template-columns: 12px minmax(36px, 1fr) auto;
@@ -1043,6 +1049,14 @@ tbody tr:focus-within > td {
   justify-self: end;
   overflow-wrap: anywhere;
   max-width: 100%;
+}
+.reward-summary.is-expanded .reward-summary-button {
+  display: flex;
+  justify-content: flex-start;
+  width: 24px;
+  min-height: 18px;
+  margin-left: -6px;
+  padding: 0 6px;
 }
 .reward-total {
   font-weight: 500;
@@ -1090,30 +1104,29 @@ tbody tr:focus-within > td {
   color: var(--warning);
 }
 .reward-breakdown {
-  padding-left: 20px;
-  margin-top: 8px;
+  min-width: 0;
 }
-.reward-breakdown-heading {
-  display: flex;
+.reward-breakdown-total {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--divider-subtle);
+}
+.reward-breakdown-total.has-long-total {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+.reward-breakdown-total .reward-total {
+  justify-self: end;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.reward-total-label {
   color: var(--text-secondary);
   font-size: 11px;
-  margin-bottom: 5px;
-}
-.display-mode-button {
-  border: 0;
-  background: none;
-  color: var(--text-primary);
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.display-mode-button:hover {
-  text-decoration: underline;
 }
 .reward-empty {
   display: flex;
@@ -2189,12 +2202,13 @@ tbody tr:focus-within > td {
     flex-shrink: 0;
   }
   .reward-summary-button,
+  .reward-summary.is-expanded .reward-summary-button,
+  .token-balance-button,
   .auction-action-link,
   .th-sort-button,
   .toggle-filter,
   .entity-open,
   .history-toggle-button,
-  .display-mode-button,
   .tab-item,
   .kick-modal-close,
   .deploy-modal-btn {

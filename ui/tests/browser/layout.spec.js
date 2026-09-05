@@ -64,6 +64,74 @@ async function fixture(page) {
 }
 
 for (const theme of ["light", "dark"]) {
+  test(`${theme}: expanded rewards replace the summary without repeating tokens or values`, async ({
+    page,
+    context,
+  }, testInfo) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.emulateMedia({ colorScheme: theme });
+    const state = await fixture(page);
+    // A non-unit price makes USD/token switching distinguishable.
+    state.rows[0].balances[0].tokenPriceUsd = "2";
+    await page.goto("/");
+    const single = page.locator(`[data-strategy="${address(1)}"]`);
+    const multi = page.locator(`[data-strategy="${address(2)}"]`);
+    const caretX = await single
+      .locator(".chevron-toggle")
+      .first()
+      .evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        return bounds.x + bounds.width / 2;
+      });
+    const logoX = await single.locator(".reward-logos").evaluate((node) => node.getBoundingClientRect().x);
+    const valueRight = await single
+      .locator(".reward-total")
+      .evaluate((node) => node.getBoundingClientRect().right);
+    await single.getByRole("button", { name: /Expand rewards/ }).click();
+    await expect(single.getByRole("button", { name: /Collapse rewards/ })).toBeFocused();
+    await expect(single.locator(".reward-logos, .reward-caption, .reward-breakdown-total")).toHaveCount(0);
+    await expect(single.locator(".token-item")).toHaveCount(1);
+    await expect(single.getByText("$1,370.04", { exact: true })).toHaveCount(1);
+    const dimensions = await single.evaluate((node) => ({
+      height: node.getBoundingClientRect().height,
+      caretX: (() => {
+        const bounds = node.querySelector(".reward-summary-button .chevron-toggle").getBoundingClientRect();
+        return bounds.x + bounds.width / 2;
+      })(),
+      logoX: node.querySelector(".token-logo, .token-logo-placeholder").getBoundingClientRect().x,
+      valueRight: node.querySelector(".token-balance").getBoundingClientRect().right,
+    }));
+    expect(dimensions.height).toBeLessThanOrEqual(56);
+    expect(dimensions.caretX).toBeCloseTo(caretX, 3);
+    expect(dimensions.logoX).toBe(logoX);
+    expect(dimensions.valueRight).toBe(valueRight);
+    const copy = single.getByRole("button", { name: "Copy token address for CRV", exact: true });
+    await copy.click();
+    await expect(copy).toHaveClass(/is-copied/);
+    expect((await page.evaluate(() => navigator.clipboard.readText())).toLowerCase()).toBe(address(101));
+    await multi.getByRole("button", { name: /Expand rewards/ }).click();
+    await expect(multi.locator(".token-item")).toHaveCount(2);
+    await expect(multi.locator(".reward-logos, .reward-caption")).toHaveCount(0);
+    await expect(multi.getByText("$297.08", { exact: true })).toHaveCount(1);
+    await expect(multi.locator(".reward-total-label")).toHaveText("Total");
+    expect(await contrastRatio(multi.locator(".reward-total-label"))).toBeGreaterThanOrEqual(4.5);
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-reward-breakdowns.png`) });
+    await single.locator(".token-balance-button").click();
+    await expect(single.locator(".token-balance")).toHaveText("685.02");
+    await expect(multi.locator(".reward-total-label")).toHaveText("Total USD");
+    await single.locator(".token-balance-button").click();
+    for (const width of [780, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expect(single.getByText("$1,370.04", { exact: true })).toHaveCount(1);
+    }
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-reward-breakdowns-mobile.png`) });
+    await single.getByRole("button", { name: /Collapse rewards/ }).focus();
+    await page.keyboard.press("Enter");
+    await expect(single.getByRole("button", { name: /Expand rewards/ })).toBeFocused();
+    await expect(single.locator(".reward-total")).toHaveText("$1,370.04");
+  });
+
   test(`${theme}: compact ledger, true explorer links, aligned rewards, and responsive layout`, async ({
     page,
   }, testInfo) => {
@@ -260,6 +328,16 @@ test("touch targets and mobile detail focus stay usable without accidental navig
   await copy.tap();
   await expect(copy).toHaveClass(/is-copied/);
   await expect(page.locator(".strategy-detail-grid")).toHaveCount(0);
+  await first.getByRole("button", { name: /Expand rewards/ }).tap();
+  const rewardCopy = first.getByRole("button", { name: "Copy token address for CRV", exact: true });
+  await rewardCopy.tap();
+  await expect(rewardCopy).toHaveClass(/is-copied/);
+  const collapse = first.getByRole("button", { name: /Collapse rewards/ });
+  const collapseBox = await collapse.boundingBox();
+  expect(collapseBox.width).toBeGreaterThanOrEqual(24);
+  expect(collapseBox.height).toBeGreaterThanOrEqual(44);
+  await collapse.tap();
+  await expect(first.locator(".reward-breakdown")).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("dark-ledger-touch.png"), fullPage: true });
   await first.getByRole("button", { name: "Show details for Curve-crvDOLA", exact: true }).tap();

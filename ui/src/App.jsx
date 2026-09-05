@@ -2028,6 +2028,7 @@ function TokenBalances({
                     onToggleMode();
                   }}
                   title={title}
+                  aria-label={`${tokenSymbol}: ${value} ${displayMode === "usd" ? "USD" : "tokens"}. ${balanceTitle}`}
                 >
                   {value}
                 </button>
@@ -2057,7 +2058,7 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
     );
 
   return (
-    <div className="reward-summary">
+    <div className={`reward-summary${expanded ? " is-expanded" : ""}`}>
       <button
         type="button"
         className={`reward-summary-button${total.length > 11 ? " has-long-total" : ""}`}
@@ -2069,22 +2070,28 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
         )}`}
       >
         <Chevron expanded={expanded} />
-        <span className="reward-logos" aria-hidden="true">
-          {row.balances.slice(0, 3).map((balance) => (
-            <TokenLogo key={balance.tokenAddress} src={balance.tokenLogoUrl} alt="" />
-          ))}
-          {row.balances.length > 3 ? <span className="reward-more">+{row.balances.length - 3}</span> : null}
-        </span>
-        <span
-          className="reward-total"
-          title={
-            row.totalUsdValue == null
-              ? "Total USD unavailable: one or more tokens are unpriced"
-              : "Total reward value in USD"
-          }
-        >
-          {total}
-        </span>
+        {!expanded ? (
+          <>
+            <span className="reward-logos" aria-hidden="true">
+              {row.balances.slice(0, 3).map((balance) => (
+                <TokenLogo key={balance.tokenAddress} src={balance.tokenLogoUrl} alt="" />
+              ))}
+              {row.balances.length > 3 ? (
+                <span className="reward-more">+{row.balances.length - 3}</span>
+              ) : null}
+            </span>
+            <span
+              className="reward-total"
+              title={
+                row.totalUsdValue == null
+                  ? "Total USD unavailable: one or more tokens are unpriced"
+                  : "Total reward value in USD"
+              }
+            >
+              {total}
+            </span>
+          </>
+        ) : null}
       </button>
       {!expanded ? (
         <div className="reward-caption">
@@ -2118,18 +2125,22 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
       <div className="reward-breakdown" id={detailsId} hidden={!expanded}>
         {expanded ? (
           <>
-            <div className="reward-breakdown-heading">
-              <span>Balances</span>
-              <button
-                type="button"
-                className="display-mode-button"
-                onClick={onToggleMode}
-                aria-label={`Show ${displayMode === "usd" ? "token amounts" : "USD values"}`}
-              >
-                {displayMode === "usd" ? "USD" : "Tokens"} ⇄
-              </button>
-            </div>
             <TokenBalances balances={row.balances} displayMode={displayMode} onToggleMode={onToggleMode} />
+            {row.balances.length > 1 ? (
+              <div className={`reward-breakdown-total${total.length > 11 ? " has-long-total" : ""}`}>
+                <span className="reward-total-label">{displayMode === "usd" ? "Total" : "Total USD"}</span>
+                <span
+                  className="reward-total"
+                  title={
+                    row.totalUsdValue == null
+                      ? "Total USD unavailable: one or more tokens are unpriced"
+                      : "Total reward value in USD"
+                  }
+                >
+                  {total}
+                </span>
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>

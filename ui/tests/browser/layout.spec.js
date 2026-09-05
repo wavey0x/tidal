@@ -299,12 +299,12 @@ test("history expansion and token image fallback remain independent of strategy 
   await expect(
     page.locator(".strategy-row").nth(1).locator(".reward-logos .token-logo-placeholder")
   ).toHaveCount(2);
-  await first.getByRole("button", { name: "Expand kick history", exact: true }).click();
+  await first.getByRole("button", { name: "Show 1 earlier transaction", exact: true }).click();
   await expect(first.locator(".kick-row")).toHaveCount(2);
   await expect(page.locator(".strategy-detail-grid")).toHaveCount(0);
   await refreshOnFocus(page);
   await expect(first.locator(".kick-row")).toHaveCount(2);
-  await first.getByRole("button", { name: "Collapse kick history", exact: true }).click();
+  await first.getByRole("button", { name: "Hide earlier transactions", exact: true }).click();
   await expect(first.locator(".kick-row")).toHaveCount(1);
 });
 
@@ -319,7 +319,7 @@ for (const theme of ["light", "dark"]) {
     }));
     await page.goto("/");
     const first = page.locator(".strategy-row").first();
-    await first.getByRole("button", { name: "Expand kick history", exact: true }).click();
+    await first.getByRole("button", { name: "Show 4 earlier transactions", exact: true }).click();
     const history = first.locator(".kick-history");
     await expect(history.locator(".kick-row")).toHaveCount(5);
     await expect(history.locator(".transaction-prefix")).toHaveCount(0);
@@ -408,7 +408,7 @@ for (const theme of ["light", "dark"]) {
     });
     for (const width of [1440, 1024, 800]) {
       await page.setViewportSize({ width, height: 1000 });
-      const expand = history.getByRole("button", { name: "Expand kick history", exact: true });
+      const expand = history.getByRole("button", { name: "Show 4 earlier transactions", exact: true });
       await expand.hover();
       const before = await geometry();
       const label = await latest.innerText();
@@ -422,7 +422,7 @@ for (const theme of ["light", "dark"]) {
         for (const key of ["x", "y", "width", "height"]) expect(after[index][key], `${width}px, node ${index} ${key}`).toBeCloseTo(before[index][key], 1);
       }
       expect(await latest.getByRole("link").evaluateAll(nodes => nodes.map(node => node.href))).toEqual(links);
-      const collapse = history.getByRole("button", { name: "Collapse kick history", exact: true });
+      const collapse = history.getByRole("button", { name: "Hide earlier transactions", exact: true });
       await expect(collapse).toBeFocused();
       await expect(collapse).toHaveAttribute("aria-controls", await history.locator(".kick-history-list").getAttribute("id"));
       if (width === 1440) await history.screenshot({ path: testInfo.outputPath(`${theme}-history-expanded.png`) });
@@ -438,31 +438,91 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
-test("touch history keeps its anchor, generous targets and expansion through refresh", async ({ browser }, testInfo) => {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+for (const theme of ["light", "dark"]) {
+test(`${theme}: mobile history invites expansion with a stable labeled touch control`, async ({ browser }, testInfo) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: theme });
   try {
     const page = await context.newPage();
     const state = await fixture(page);
-    state.rows[0].kicks = Array.from({ length: 5 }, (_, index) => ({ ...state.rows[0].kicks[0], txHash: `0x${String(index + 1).repeat(64)}` }));
+    state.rows[0].kicks = Array.from({ length: 7 }, (_, index) => ({ ...state.rows[0].kicks[0],
+      createdAt: new Date(Date.now() - (index + 1) * 86400000).toISOString(), txHash: `0x${String(index + 1).repeat(64)}` }));
     await page.goto("/");
     await page.getByRole("button", { name: "Show details for Curve-crvDOLA", exact: true }).tap();
     const history = page.getByRole("dialog").locator(".kick-history");
     const toggle = history.locator(".history-toggle-button");
-    await toggle.scrollIntoViewIfNeeded();
-    const before = await history.locator(".kick-row").first().innerText();
-    for (const target of await history.locator("button, a").all()) {
-      const box = await target.boundingBox();
-      expect(box.height).toBeGreaterThanOrEqual(44);
-      expect(box.width).toBeGreaterThanOrEqual(44);
+    const latest = history.locator(".kick-history-latest");
+    const geometry = () => history.evaluate(node => {
+      const origin = node.getBoundingClientRect();
+      return [node.querySelector(".kick-history-latest"), node.querySelector("button")].map(element => {
+        const box = element.getBoundingClientRect();
+        return { x: box.x - origin.x, y: box.y - origin.y, width: box.width, height: box.height };
+      });
+    });
+    for (const width of [390, 320, 768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await toggle.scrollIntoViewIfNeeded();
+      await expect(toggle).toHaveAccessibleName("Show 4 earlier transactions");
+      await expect(toggle.locator(".history-toggle-label")).toBeVisible();
+      await expect(toggle.locator(".history-count")).toBeHidden();
+      await expect(history.locator(".kick-history-list")).toBeHidden();
+      expect(await contrastRatio(toggle)).toBeGreaterThanOrEqual(4.5);
+      const before = await geometry();
+      const text = await latest.innerText();
+      expect(before[1].x).toBe(before[0].x);
+      expect(before[1].width).toBe(before[0].width);
+      expect(before[1].y).toBeGreaterThanOrEqual(before[0].y + before[0].height);
+      for (const target of await history.locator("button, a").all()) {
+        const box = await target.boundingBox();
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(box.width).toBeGreaterThanOrEqual(44);
+      }
+      const badge = await latest.locator(".kick-history-auctionscan").evaluate(link => {
+        const icon = link.querySelector("img").getBoundingClientRect();
+        const arrow = link.querySelector("svg").getBoundingClientRect();
+        return { dx: arrow.right - icon.right, dy: arrow.bottom - icon.bottom };
+      });
+      expect(Math.abs(badge.dx)).toBeLessThanOrEqual(2);
+      expect(Math.abs(badge.dy)).toBeLessThanOrEqual(2);
+      await history.screenshot({ path: testInfo.outputPath(`${theme}-mobile-history-${width}-collapsed.png`) });
+      await toggle.tap();
+      await expect(toggle).toHaveAccessibleName("Hide earlier transactions");
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(toggle).toBeFocused();
+      await expect(history.locator(".kick-row")).toHaveCount(5);
+      expect(await latest.innerText()).toBe(text);
+      expect(await geometry()).toEqual(before);
+      const earlier = await history.locator(".kick-history-list").boundingBox();
+      const control = await toggle.boundingBox();
+      expect(earlier.y).toBeGreaterThanOrEqual(control.y + control.height);
+      await refreshOnFocus(page);
+      await expect(history.locator(".kick-row")).toHaveCount(5);
+      expect(await history.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+      await history.screenshot({ path: testInfo.outputPath(`${theme}-mobile-history-${width}-expanded.png`) });
+      await toggle.press("Enter");
+      await expect(history.locator(".kick-row")).toHaveCount(1);
+      await expect(toggle).toBeFocused();
+      expect(await geometry()).toEqual(before);
     }
-    await toggle.tap();
-    await expect(history.locator(".kick-row")).toHaveCount(5);
-    expect(await history.locator(".kick-row").first().innerText()).toBe(before);
-    await refreshOnFocus(page);
-    await expect(history.locator(".kick-row")).toHaveCount(5);
-    expect(await history.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
-    await history.screenshot({ path: testInfo.outputPath("touch-coherent-history.png") });
-    await toggle.tap();
-    await expect(history.locator(".kick-row")).toHaveCount(1);
   } finally { await context.close(); }
+});
+}
+
+test("mobile history only offers expansion when earlier transactions exist", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state = await fixture(page);
+  state.rows[1].kicks.push({ ...state.rows[1].kicks[0], txHash: `0x${"cd".repeat(32)}` });
+  await page.goto("/");
+  const dialog = page.getByRole("dialog", { name: "Strategy details" });
+  for (const [name, rows, label] of [["Curve-crvDOLA", 1, null], ["Curve-BOLDUSDC", 1, "Show 1 earlier transaction"], ["Curve-ETH MATIC-f", 0, null]]) {
+    await page.getByRole("button", { name: `Show details for ${name}`, exact: true }).click();
+    await expect(dialog.locator(".kick-row")).toHaveCount(rows);
+    if (label) {
+      await expect(dialog.getByRole("button", { name: label, exact: true })).toBeVisible();
+      await dialog.getByRole("button", { name: label, exact: true }).click();
+      await expect(dialog.locator(".kick-row")).toHaveCount(2);
+    } else {
+      await expect(dialog.locator(".history-toggle-button")).toHaveCount(0);
+    }
+    await dialog.getByRole("button", { name: "Close details" }).click();
+  }
 });

@@ -99,7 +99,6 @@
 .fee-activity-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 4px 0; background: transparent; font: inherit; color: var(--text-secondary); cursor: pointer; }
 .fee-activity-toggle:hover { color: var(--text-primary); }
 .fee-activity-list { max-width: 260px; margin: 8px 0 0 18px; }
-.fee-activity-list .kick-history.is-expanded { display: block; }
 .fee-inventory-loading { display: grid; gap: 28px; padding: 20px 0; }
 @media (max-width: 600px) {
   .fee-burner-context { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; }
@@ -1137,12 +1136,14 @@ tbody tr:focus-within > td {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 2px;
+  gap: 4px 2px;
   width: 100%;
   margin-top: 2px;
   font-size: 11px;
 }
 .kick-history.has-history-toggle { grid-template-columns: minmax(0, 1fr) 28px; }
+.kick-history-latest, .kick-history-list { grid-column: 1; }
+.kick-history .history-toggle-button { grid-column: 2; grid-row: 1; }
 
 .history-cell .kick-history,
 .strategy-detail-grid .kick-history {
@@ -1156,6 +1157,7 @@ tbody tr:focus-within > td {
   width: 100%;
   min-width: 0;
 }
+.kick-history-list[hidden] { display: none; }
 
 .kick-history .kick-row-inner {
   display: grid;
@@ -1174,14 +1176,32 @@ tbody tr:focus-within > td {
 }
 .kick-history .transaction-link { overflow-wrap: anywhere; }
 .kick-history .kick-history-auctionscan { width: 13px; height: 13px; margin-left: 0; }
+.kick-history .kick-history-auctionscan-glyph { right: calc(50% - 7.5px); bottom: calc(50% - 7.5px); }
 .kick-history .history-toggle-button { gap: 2px; justify-content: flex-end; min-height: 24px; width: 28px; padding-right: 3px; -webkit-tap-highlight-color: transparent; }
 .kick-history .chevron-toggle svg { width: 10px; height: 10px; }
 .history-count { font-variant-numeric: tabular-nums; }
+.history-toggle-label { display: none; }
 @media (pointer: coarse) {
   .kick-history.has-history-toggle { grid-template-columns: minmax(0, 1fr) 44px; }
   .kick-history .kick-row-inner, .kick-history .activity-links a { min-height: 44px; }
   .kick-history .activity-links a { display: inline-flex; align-items: center; min-width: 44px; }
   .kick-history .history-toggle-button { width: 44px; min-height: 44px; }
+}
+@media (max-width: 780px) {
+  .kick-history.has-history-toggle { grid-template-columns: minmax(0, 1fr); }
+  .kick-history .history-toggle-button {
+    grid-column: 1; grid-row: 2;
+    justify-content: flex-start; gap: 8px;
+    width: 100%; min-height: 44px; padding: 8px 10px;
+    border-radius: 4px; background: var(--hover); color: var(--text-primary);
+    text-align: left; font-size: 12px; word-break: normal;
+  }
+  .kick-history .history-toggle-button:hover,
+  .kick-history .history-toggle-button:active { background: var(--surface); }
+  .kick-history .history-count { display: none; }
+  .history-toggle-label { display: inline; }
+  .kick-history .history-toggle-button .chevron-toggle { color: inherit; transform: rotate(90deg); }
+  .kick-history .history-toggle-button .chevron-toggle.is-expanded { transform: rotate(-90deg); }
 }
 
 .kick-row {

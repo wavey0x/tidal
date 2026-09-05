@@ -1075,6 +1075,8 @@ function KickHistoryCell({
   }
 
   const visibleKicks = (isExpanded ? kicks : kicks.slice(0, 1)).slice(0, 5);
+  const earlierCount = Math.min(kicks.length, 5) - 1;
+  const toggleLabel = isExpanded ? "Hide earlier transactions" : `Show ${earlierCount} earlier transaction${earlierCount === 1 ? "" : "s"}`;
   const displayKick = (kick) => (
     kick.auctionAddress || !fallbackAuctionAddress
       ? kick
@@ -1083,22 +1085,25 @@ function KickHistoryCell({
 
   return (
     <div className={`kick-history${hasToggle ? " has-history-toggle" : ""}${isExpanded ? " is-expanded" : ""}`} onClick={(event) => event.stopPropagation()}>
-      <div className="kick-history-list" id={historyId}>
-        {visibleKicks.map((kick, index) => (
+      <div className="kick-row kick-history-latest">
+        <KickRow kick={displayKick(visibleKicks[0])} nowMs={nowMs} />
+      </div>
+      {hasToggle ? (
+        <button type="button" className="history-toggle-button" onClick={onToggleExpand}
+          aria-expanded={isExpanded} aria-controls={historyId}
+          aria-label={toggleLabel} title={toggleLabel}>
+          <span className="history-count" aria-hidden="true">{isExpanded ? "−" : "+"}{earlierCount}</span>
+          <span className="history-toggle-label">{toggleLabel}</span>
+          <Chevron expanded={isExpanded} />
+        </button>
+      ) : null}
+      <div className="kick-history-list" id={historyId} hidden={!isExpanded || !earlierCount}>
+        {visibleKicks.slice(1).map((kick, index) => (
           <div key={kick.txHash || index} className="kick-row">
             <KickRow kick={displayKick(kick)} nowMs={nowMs} />
           </div>
         ))}
       </div>
-      {hasToggle ? (
-        <button type="button" className="history-toggle-button" onClick={onToggleExpand}
-          aria-expanded={isExpanded} aria-controls={historyId}
-          aria-label={isExpanded ? "Collapse kick history" : "Expand kick history"}
-          title={isExpanded ? "Hide earlier activity" : "Show earlier activity"}>
-          <span className="history-count">{isExpanded ? "−" : "+"}{Math.min(kicks.length, 5) - 1}</span>
-          <Chevron expanded={isExpanded} />
-        </button>
-      ) : null}
     </div>
   );
 }

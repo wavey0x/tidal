@@ -2443,6 +2443,8 @@ function AlertRoundTimeline({ rounds = [], nowMs }) {
 }
 
 function AlertCard({ item, nowMs }) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
   const sourceLabel = item.scope?.sourceType === "fee_burner" ? "Fee burner" : "Strategy";
   const retryLabel = item.retryAt
     ? new Date(item.retryAt).getTime() <= nowMs
@@ -2452,101 +2454,112 @@ function AlertCard({ item, nowMs }) {
   const otherEvidence = Object.entries(item.evidence || {}).filter(([key]) => key !== "rounds");
   return (
     <article className={`alert-card alert-${item.severity}`} aria-label={item.title}>
-      <div className="alert-body">
-        <header className="alert-card-header">
-          <div className="alert-title">
+      <header className="alert-card-header">
+        <h3>
+          <button type="button" className="alert-expand" aria-expanded={expanded} aria-controls={detailsId}
+            aria-label={`${expanded ? "Hide" : "Show"} details for ${item.title}`} onClick={() => setExpanded(value => !value)}>
+            <Chevron expanded={expanded} />
             <span className="alert-kicker">{item.severity}</span>
-            <h3>{item.title}</h3>
-          </div>
-        </header>
-        <p className="alert-summary">{item.summary}</p>
-        {item.nextAction?.instruction || item.nextAction?.command ? (
-          <div className="alert-next-action">
-            {item.nextAction?.instruction ? (
-              <div>
-                <span className="next-action-label">Next step</span>
-                <p>{item.nextAction.instruction}</p>
-              </div>
-            ) : null}
-            {item.nextAction?.command ? (
-              <CopyIconButton
-                className="alert-command"
-                valueToCopy={item.nextAction.command}
-                title={item.nextAction.command}
-                ariaLabel="Copy retry command"
-              >
-                Copy retry command
-              </CopyIconButton>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-      <dl className="alert-addresses">
-        {item.scope?.sourceAddress ? (
-          <div>
-            <dt>{sourceLabel}</dt>
-            <dd><AddressLinkCopy address={item.scope.sourceAddress} /></dd>
-          </div>
-        ) : null}
-        {item.scope?.auctionAddress ? (
-          <div>
-            <dt>Auction</dt>
-            <dd><AddressLinkCopy address={item.scope.auctionAddress} /></dd>
-          </div>
-        ) : null}
-        {item.scope?.tokenAddress ? (
-          <div>
-            <dt>Token</dt>
-            <dd><AddressLinkCopy address={item.scope.tokenAddress} /></dd>
-          </div>
-        ) : null}
-        <div className="alert-age">
-          <dt>Opened</dt>
-          <dd><time dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>{formatRelativeTimestamp(item.openedAt, nowMs)}</time></dd>
-        </div>
-        {retryLabel ? (
-          <div>
-            <dt>Retry</dt>
-            <dd><time className="alert-retry" dateTime={item.retryAt} title={formatUtcTimestamp(item.retryAt)}>{retryLabel.replace(/^Retry /, "")}</time></dd>
-          </div>
-        ) : null}
-      </dl>
-      <div className="alert-actions">
-        <div className="alert-links">
-          {item.links?.logs ? <a href={item.links.logs}>Logs</a> : null}
-          {item.links?.etherscan ? (
-            <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">
-              Etherscan <OutboundLinkGlyph />
-            </a>
-          ) : null}
-          {item.links?.auctionScan ? (
-            <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">
-              AuctionScan <OutboundLinkGlyph />
-            </a>
-          ) : null}
-        </div>
-        <details className="alert-details">
-          <summary>
-            Evidence{item.evidence?.rounds?.length ? ` · ${item.evidence.rounds.length} rounds` : ""}
-          </summary>
-          {item.kind === "auction_retry" ? (
-            <AlertRoundTimeline rounds={item.evidence?.rounds || []} nowMs={nowMs} />
-          ) : null}
-          {otherEvidence.length ? (
-            <dl className="alert-evidence-list">
-              {otherEvidence.map(([key, value]) => (
-                <div key={key}>
-                  <dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt>
-                  <dd className="mono">
-                    {typeof value === "object" && value !== null
-                      ? JSON.stringify(value, null, 2)
-                      : String(value ?? "—")}
-                  </dd>
+            <span className="alert-title">{item.title}</span>
+            <span className="alert-toggle-label">{expanded ? "Less" : "Details"}</span>
+          </button>
+        </h3>
+        <p className="alert-summary">
+          {String(item.summary || "").split(/\n+/).filter(Boolean).map((part, index) => (
+            <span key={index}>{index ? <span className="alert-summary-separator"> · </span> : null}{part}</span>
+          ))}
+        </p>
+      </header>
+      <div id={detailsId} className="alert-expanded-content" hidden={!expanded}>
+        <div className="alert-body">
+          {item.nextAction?.instruction || item.nextAction?.command ? (
+            <div className="alert-next-action">
+              {item.nextAction?.instruction ? (
+                <div>
+                  <span className="next-action-label">Next step</span>
+                  <p>{item.nextAction.instruction}</p>
                 </div>
-              ))}
-            </dl>
+              ) : null}
+              {item.nextAction?.command ? (
+                <CopyIconButton
+                  className="alert-command"
+                  valueToCopy={item.nextAction.command}
+                  title={item.nextAction.command}
+                  ariaLabel="Copy retry command"
+                >
+                  Copy retry command
+                </CopyIconButton>
+              ) : null}
+            </div>
           ) : null}
-        </details>
+        </div>
+        <dl className="alert-addresses">
+          {item.scope?.sourceAddress ? (
+            <div>
+              <dt>{sourceLabel}</dt>
+              <dd><AddressLinkCopy address={item.scope.sourceAddress} /></dd>
+            </div>
+          ) : null}
+          {item.scope?.auctionAddress ? (
+            <div>
+              <dt>Auction</dt>
+              <dd><AddressLinkCopy address={item.scope.auctionAddress} /></dd>
+            </div>
+          ) : null}
+          {item.scope?.tokenAddress ? (
+            <div>
+              <dt>Token</dt>
+              <dd><AddressLinkCopy address={item.scope.tokenAddress} /></dd>
+            </div>
+          ) : null}
+          <div className="alert-age">
+            <dt>Opened</dt>
+            <dd><time dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>{formatRelativeTimestamp(item.openedAt, nowMs)}</time></dd>
+          </div>
+          {retryLabel ? (
+            <div>
+              <dt>Retry</dt>
+              <dd><time className="alert-retry" dateTime={item.retryAt} title={formatUtcTimestamp(item.retryAt)}>{retryLabel.replace(/^Retry /, "")}</time></dd>
+            </div>
+          ) : null}
+        </dl>
+        <div className="alert-actions">
+          <div className="alert-links">
+            {item.links?.logs ? <a href={item.links.logs}>Logs</a> : null}
+            {item.links?.etherscan ? (
+              <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">
+                Etherscan <OutboundLinkGlyph />
+              </a>
+            ) : null}
+            {item.links?.auctionScan ? (
+              <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">
+                AuctionScan <OutboundLinkGlyph />
+              </a>
+            ) : null}
+          </div>
+          <details className="alert-details">
+            <summary>
+              Evidence{item.evidence?.rounds?.length ? ` · ${item.evidence.rounds.length} rounds` : ""}
+            </summary>
+            {item.kind === "auction_retry" ? (
+              <AlertRoundTimeline rounds={item.evidence?.rounds || []} nowMs={nowMs} />
+            ) : null}
+            {otherEvidence.length ? (
+              <dl className="alert-evidence-list">
+                {otherEvidence.map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt>
+                    <dd className="mono">
+                      {typeof value === "object" && value !== null
+                        ? JSON.stringify(value, null, 2)
+                        : String(value ?? "—")}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </details>
+        </div>
       </div>
     </article>
   );

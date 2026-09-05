@@ -155,24 +155,27 @@
 .alert-counts > span:first-child strong { color: var(--warning); }
 .alert-section { margin: 0; }
 .alert-section h2 { margin: 18px 0 0; color: var(--text-secondary); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
-.alert-card { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 12px 28px; position: relative; border-bottom: 1px solid var(--divider-subtle); padding: 16px 0 16px 14px; }
-.alert-card::before { content: ""; position: absolute; top: 19px; left: 0; width: 2px; height: 14px; background: var(--text-secondary); }
-.alert-critical::before, .alert-high::before { background: var(--error); }
-.alert-warning::before { background: var(--warning); }
+.alert-card { border-bottom: 1px solid var(--divider-subtle); padding: 12px 0; }
 .alert-critical .alert-kicker, .alert-high .alert-kicker { color: var(--error); }
 .alert-warning .alert-kicker { color: var(--warning); }
 .alert-body { min-width: 0; }
 .alert-card-header { margin: 0; }
-.alert-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
-.alert-title h3 { margin: 0; font-size: 12px; font-weight: 600; }
+.alert-card-header h3 { margin: 0; font: inherit; }
+.alert-expand { display: grid; grid-template-columns: 12px auto minmax(0, 1fr) auto; align-items: baseline; gap: 8px; width: 100%; min-height: 24px; border: 0; padding: 0; background: transparent; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; }
+.alert-expand .chevron-toggle { align-self: center; }
+.alert-title { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.alert-toggle-label { color: var(--text-secondary); font-size: 11px; }
+.alert-expand:hover .alert-toggle-label { color: var(--text-primary); text-decoration: underline; text-underline-offset: 3px; }
 .alert-kicker { color: var(--text-secondary); font-size: 11px; text-transform: uppercase; }
-.alert-summary { margin: 6px 0 0; color: var(--text-secondary); white-space: pre-line; overflow-wrap: anywhere; }
+.alert-summary { margin: 2px 0 0 20px; color: var(--text-secondary); overflow-wrap: anywhere; font-size: 11px; }
+.alert-expanded-content { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 12px 28px; margin: 12px 0 0 20px; padding-top: 12px; border-top: 1px solid var(--divider-row); }
+.alert-expanded-content[hidden] { display: none; }
 .alert-addresses { align-self: start; display: grid; gap: 8px; margin: 0; padding-left: 20px; border-left: 1px solid var(--divider-subtle); font-size: 11px; }
 .alert-addresses > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: baseline; gap: 8px; min-width: 0; }
 .alert-addresses dt { color: var(--text-secondary); }
 .alert-addresses dd { margin: 0; min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 .alert-retry { color: var(--text-secondary); font-size: 11px; }
-.alert-next-action { margin-top: 12px; display: grid; justify-items: start; gap: 8px; }
+.alert-next-action { margin: 0; display: grid; justify-items: start; gap: 8px; }
 .alert-next-action p { margin: 3px 0 0; max-width: 68ch; overflow-wrap: anywhere; }
 .next-action-label { color: var(--text-secondary); font-size: 11px; }
 .copy-trigger.alert-command { width: auto; height: auto; min-height: 28px; gap: 8px; padding: 4px 8px; border: 1px solid var(--divider-strong); border-radius: 3px; font: inherit; font-size: 11px; color: var(--text-primary); }
@@ -211,7 +214,7 @@
 .alert-health-warning { color: var(--warning); margin: 12px 0; }
 @media (max-width: 780px) {
   .alerts-meta .refresh-status { flex-basis: 100%; flex-wrap: wrap; margin: 0; }
-  .alert-card { grid-template-columns: minmax(0, 1fr); }
+  .alert-expanded-content { grid-template-columns: minmax(0, 1fr); }
   .alert-addresses { padding: 0; border: 0; }
   .alert-round-ledger, .alert-round-ledger tbody { display: block; }
   .alert-round-ledger thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -225,6 +228,7 @@
   .alert-evidence-list > div { grid-template-columns: 1fr; gap: 2px; }
 }
 @media (pointer: coarse) {
+  .alert-expand { min-height: 44px; }
   .copy-trigger.alert-command { min-height: 44px; }
   .alert-links a, .alert-details > summary, .provider-details summary { min-height: 44px; align-content: center; }
 }

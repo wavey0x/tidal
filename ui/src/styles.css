@@ -57,6 +57,81 @@
 }
 .inventory-page { padding-top: 14px; }
 
+/* Fee Burner: inventory first, context above and activity below. */
+.fee-burner-inventory + .fee-burner-inventory {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--divider-strong);
+}
+.fee-burner-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 4px 0 20px;
+}
+.fee-burner-context .refresh-status { margin: 0; }
+.fee-burner-identity, .fee-burner-auction { min-width: 0; }
+.fee-burner-identity .row-primary { white-space: normal; overflow-wrap: anywhere; }
+.fee-burner-auction { display: flex; align-items: baseline; gap: 10px; }
+.fee-context-label { color: var(--text-secondary); font-size: 11px; }
+.fee-token-table { width: 100%; table-layout: fixed; }
+.fee-token-table thead th { position: sticky; top: 0; z-index: 2; background: var(--bg); }
+.fee-token-table th:first-child { width: 50%; }
+.fee-token-table th:nth-child(2), .fee-token-table th:nth-child(3) { width: 25%; }
+.fee-token-table th, .fee-token-table td { padding: 10px 12px; }
+.fee-token-table th:first-child, .fee-token-table td:first-child { padding-left: 0; }
+.fee-token-table th:last-child, .fee-token-table td:last-child { padding-right: 0; }
+.fee-token-row { height: 42px; }
+.fee-token-row td { vertical-align: middle; }
+.fee-token-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fee-token-name .token-symbol { color: var(--text-primary); font-weight: 500; white-space: normal; overflow-wrap: anywhere; }
+.fee-token-warnings { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 0 calc(var(--token-icon-size) + 8px); color: var(--warning); font-size: 11px; }
+.fee-token-warnings > span { display: inline-flex; align-items: center; gap: 4px; }
+.fee-token-amount, .fee-token-usd, .fee-inventory-total { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fee-token-amount { color: var(--text-secondary); }
+.fee-token-usd, .fee-inventory-total { font-weight: 500; }
+.fee-token-table tfoot th, .fee-token-table tfoot td { border-top: 1px solid var(--divider-strong); text-align: right; }
+.fee-token-table tfoot th { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.fee-burner-activity { margin-top: 12px; color: var(--text-secondary); font-size: 11px; }
+.fee-activity-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.fee-activity-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 4px 0; background: transparent; font: inherit; color: var(--text-secondary); cursor: pointer; }
+.fee-activity-toggle:hover { color: var(--text-primary); }
+.fee-activity-list { max-width: 260px; margin: 8px 0 0 18px; }
+.fee-activity-list .kick-history.is-expanded { display: block; }
+.fee-inventory-loading { display: grid; gap: 28px; padding: 20px 0; }
+@media (max-width: 960px) {
+  .fee-burner-context { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .fee-burner-context .refresh-status { grid-column: 1 / -1; flex-wrap: wrap; }
+}
+@media (max-width: 600px) {
+  .fee-burner-context { gap: 12px 16px; }
+  .fee-burner-auction { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .fee-token-table, .fee-token-table thead, .fee-token-table tbody, .fee-token-table tfoot { display: block; }
+  .fee-token-table thead { position: sticky; top: 0; z-index: 2; background: var(--bg); }
+  .fee-token-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); gap: 0 12px; }
+  .fee-token-table thead tr { border-bottom: 1px solid var(--divider-strong); }
+  .fee-token-table thead th { position: static; border: 0; }
+  .fee-token-table thead th:first-child, .fee-token-table thead th:last-child { width: auto; }
+  .fee-token-table .fee-amount-heading { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  .fee-token-table thead th:last-child { grid-column: 2; }
+  .fee-token-table .fee-token-row { height: auto; padding: 10px 0; border-bottom: 1px solid var(--divider-subtle); row-gap: 3px; }
+  .fee-token-table .fee-token-row > td { border: 0; padding: 0; min-width: 0; background: transparent; }
+  .fee-token-row:hover, .fee-token-row:focus-within { background: var(--hover); }
+  .fee-token-identity { grid-column: 1; grid-row: 1; }
+  .fee-token-table .fee-token-amount { grid-column: 1; grid-row: 2; text-align: left; font-size: 11px; }
+  .fee-token-amount::before { content: attr(data-label) " "; }
+  .fee-token-table .fee-token-amount.is-long-amount { grid-column: 1 / -1; }
+  .fee-token-usd { grid-column: 2; grid-row: 1; align-self: center; }
+  .fee-token-table tfoot tr { border-top: 1px solid var(--divider-strong); }
+  .fee-token-table tfoot th:first-child { width: auto; }
+  .fee-token-table tfoot th, .fee-token-table tfoot td { border: 0; }
+  .fee-token-table .empty { grid-column: 1 / -1; }
+}
+@media (pointer: coarse) {
+  .fee-activity-toggle { min-height: 44px; }
+}
+
 .page-meta {
   justify-content: space-between;
   padding-bottom: 8px;

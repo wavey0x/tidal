@@ -248,36 +248,123 @@ test("alerts never show healthy empty results for stale, missing, failed or inco
 });
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme}: fee burner ledger shares compact balances, freshness and responsive layout`, async ({ page, context }, testInfo) => {
+  test(`${theme}: fee burner prioritizes a full-width token inventory with supporting context and activity`, async ({ page, context }, testInfo) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.emulateMedia({ colorScheme: theme });
     const state = await mockPublicApi(page);
     state.rows = [burner()];
+    state.rows[0].kicks = Array.from({ length: 5 }, (_, index) => ({
+      ...state.rows[0].kicks[0], txHash: `0x${String(index + 1).repeat(64)}`,
+      createdAt: new Date(Date.now() - (index + 1) * 86400000).toISOString(),
+    }));
     await page.goto("/fee-burner");
-    await expect(page.locator(".fee-burner-table th")).toHaveText(["Burner", "Auction", "Last activity", "BalancesUSD"]);
-    const row = page.locator(".fee-burner-row");
-    await expect(row.locator(".token-item")).toHaveCount(2);
-    await expect(row.locator(".reward-total")).toHaveText("$240.00");
+    const inventory = page.locator(".fee-burner-inventory");
+    const table = inventory.locator(".fee-token-table");
+    await expect(table.locator("thead th")).toHaveText(["Token", "Amount", "USD"]);
+    await expect(table.locator(".fee-token-row")).toHaveCount(2);
+    await expect(table.locator(".fee-token-amount")).toHaveText(["100.00", "20.00"]);
+    await expect(table.locator(".fee-token-usd")).toHaveText(["$200.00", "$40.00"]);
+    await expect(table.locator(".fee-inventory-total")).toHaveText("$240.00");
     await expect(page.locator(".refresh-status")).toHaveCount(1);
-    await expect(page.locator(".fee-burner-card")).toHaveCount(0);
-    const copy = row.getByRole("button", { name: "Copy token address for CRV", exact: true });
+    await expect(page.getByRole("button", { name: /Collapse rewards|Expand rewards/ })).toHaveCount(0);
+    await expect(inventory.locator(".fee-burner-context .entity-cell")).toContainText("yCRV Fee Burner");
+    await expect(inventory.locator(".fee-burner-auction a")).toHaveAttribute("href", `https://etherscan.io/address/${AUCTION}`);
+    const boxes = await Promise.all([table, inventory.locator(".fee-burner-context"), inventory.locator(".fee-burner-activity")].map(node => node.boundingBox()));
+    expect(boxes[0].width).toBeGreaterThan(1000);
+    expect(boxes[1].y + boxes[1].height).toBeLessThanOrEqual(boxes[0].y);
+    expect(boxes[2].y).toBeGreaterThanOrEqual(boxes[0].y + boxes[0].height);
+    expect((await table.locator(".fee-token-name").first().boundingBox()).x).toBe(boxes[0].x);
+    expect((await table.locator(".fee-inventory-total").boundingBox()).x).toBe((await table.locator(".fee-token-usd").first().boundingBox()).x);
+    const copy = table.getByRole("button", { name: "Copy token address for CRV", exact: true });
     await copy.click();
     await expect(copy).toHaveClass(/is-copied/);
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(TOKEN);
     await expect.poll(() => copy.locator(".check-glyph").evaluate(node => getComputedStyle(node).opacity)).toBe("1");
     expect(await contrastRatio(copy.locator(".copy-icon"))).toBeGreaterThanOrEqual(4.5);
-    await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-burner.png`) });
-    await row.getByRole("button", { name: /Collapse rewards/ }).click();
+    expect(await contrastRatio(table.locator(".fee-token-amount").first())).toBeGreaterThanOrEqual(4.5);
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-inventory.png`) });
+    const activity = inventory.getByRole("button", { name: "Show recent activity for yCRV Fee Burner", exact: true });
+    await activity.focus();
+    await page.keyboard.press("Enter");
+    await expect(inventory.locator(".kick-row")).toHaveCount(5);
+    await expect(inventory.locator(".fee-activity-list .transaction-link").first()).toHaveAttribute("href", `https://etherscan.io/tx/0x${"1".repeat(64)}`);
+    await expect(inventory.getByRole("link", { name: "View on AuctionScan" })).toHaveCount(5);
     state.rows[0].balances[0].normalizedBalance = "110";
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
-    await expect(row.locator(".reward-total")).toHaveText("$260.00");
-    await expect(row.locator(".reward-breakdown")).toBeHidden();
-    await row.getByRole("button", { name: /Expand rewards/ }).click();
+    await expect(table.locator(".fee-inventory-total")).toHaveText("$260.00");
+    await expect(table.locator(".fee-token-amount").first()).toHaveText("110.00");
+    await expect(inventory.locator(".kick-row")).toHaveCount(5);
+    await page.getByRole("tab", { name: "Strategies", exact: true }).click();
+    await page.getByRole("tab", { name: "Fee Burner", exact: true }).click();
+    await expect(inventory.locator(".kick-row")).toHaveCount(5);
     await page.setViewportSize({ width: 320, height: 1000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-burner-mobile.png`) });
+    await expect(table.locator(".fee-token-amount").first()).toBeVisible();
+    await expect(table.locator(".fee-token-usd").first()).toBeVisible();
+    const usdHeading = await table.locator("thead th").last().boundingBox();
+    const usdCell = await table.locator(".fee-token-usd").first().boundingBox();
+    expect(usdHeading.x + usdHeading.width).toBe(usdCell.x + usdCell.width);
+    expect(await table.locator(".fee-token-amount").first().evaluate(node => getComputedStyle(node).textAlign)).toBe("left");
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-inventory-mobile.png`) });
     state.failed = true;
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(page.locator(".refresh-status")).toContainText("Data may be stale");
-    await expect(row.locator(".reward-total")).toHaveText("$260.00");
+    await expect(table.locator(".fee-inventory-total")).toHaveText("$260.00");
+    await expect(inventory.locator(".kick-row")).toHaveCount(5);
   });
 }
+
+test("fee inventory keeps unknown values and warnings honest without hiding large balances on touch screens", async ({ browser }, testInfo) => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 1100 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+  try {
+    const page = await context.newPage();
+    const state = await mockPublicApi(page);
+    state.rows = [burner()];
+    state.rows[0].balances = [
+      balance("VERY-LONG-TOKEN-SYMBOL", "12345678901234567890.12", TOKEN, { tokenPriceUsd: null, auctionSellTokenStatus: "unknown" }),
+      balance("PAUSED", "100", WANT, { kickPrepareStatus: "PAUSED", kickPrepareReason: "AUCTION_PRICE_GRANULARITY" }),
+      balance("DISABLED", "50", AUCTION, { auctionSellTokenStatus: "disabled" }),
+      balance("UNKNOWN-AMOUNT", null, STRATEGY),
+    ];
+    await page.goto("/fee-burner");
+    await expect(page.locator(".fee-token-row")).toHaveCount(4);
+    await expect(page.locator(".fee-inventory-total")).toHaveText("?");
+    await expect(page.locator(".fee-token-amount").first()).toHaveText("12,345,678,901,234,567,890.12");
+    await expect(page.locator(".fee-token-usd").first()).toHaveText("?");
+    await expect(page.locator(".fee-token-amount").last()).toHaveText("?");
+    await expect(page.locator(".fee-token-warnings")).toHaveText(["Auction status unknown", " Paused", "Not enabled in auction"]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const button of await page.locator(".fee-token-table .copy-trigger, .fee-activity-toggle").all()) {
+      expect((await button.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    }
+    await page.screenshot({ path: testInfo.outputPath("fee-inventory-touch-edge-cases.png") });
+  } finally { await context.close(); }
+});
+
+test("fee inventories separate multiple burners and preserve loading, empty and unavailable states", async ({ page }) => {
+  const state = await mockPublicApi(page);
+  let release;
+  state.holdDashboard = new Promise(resolve => { release = resolve; });
+  state.rows = [burner(), { ...burner(), sourceAddress: AUCTION, sourceName: "Second burner", auctionAddress: null, kicks: [],
+    balances: [balance("ONE", "1")] }];
+  await page.goto("/fee-burner");
+  await expect(page.getByRole("status", { name: "Loading fee burner inventory" })).toBeVisible();
+  release();
+  await expect(page.locator(".fee-burner-inventory")).toHaveCount(2);
+  await expect(page.locator(".refresh-status")).toHaveCount(1);
+  const second = page.getByRole("region", { name: "Second burner token inventory", exact: true });
+  await expect(second.locator(".fee-burner-auction")).toContainText("No auction");
+  await expect(second.locator(".fee-burner-activity")).toContainText("None recorded");
+  await expect(second.locator(".fee-inventory-total")).toHaveCount(0);
+  state.rows[1].balances = [balance("DUST", "0.001"), balance("ZERO", "0", WANT)];
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(second.locator(".fee-token-row")).toHaveCount(0);
+  await expect(second).toContainText("No balances above the visibility threshold.");
+  state.rows = [];
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByText("No fee burners are available.", { exact: true })).toBeVisible();
+  state.failed = true;
+  await page.reload();
+  await expect(page.getByText("Fee burner inventory unavailable.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No fee burners are available.", { exact: true })).toHaveCount(0);
+});

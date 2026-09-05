@@ -2053,52 +2053,219 @@ function StrategyDetailModal({
   );
 }
 
-function FeeBurnerPage({ rows, state, nowMs, displayMode, onToggleMode, expandedKickRows, onToggleExpand,
-  collapsedRewards, onToggleRewards }) {
-  const latestScanAt = rows.reduce((latest, row) => row.scannedAt > (latest || "") ? row.scannedAt : latest, null);
+function FeeBurnerInventory({ row, latestScanAt, refreshStatus, nowMs, activityExpanded, onToggleActivity }) {
+  const activityId = useId();
+  const name = row.sourceName || "Unnamed fee burner";
+  const total = row.totalUsdValue == null ? "?" : `$${formatBalance(row.totalUsdValue)}`;
+  const latestKick = row.kicks[0];
+
+  return (
+    <section className="fee-burner-inventory" aria-label={`${name} token inventory`}>
+      <div className="fee-burner-context">
+        <div className="fee-burner-identity">
+          <EntityIdentity primary={name} address={row.sourceAddress} />
+          <RowScanStatus row={row} latestScanAt={latestScanAt} />
+        </div>
+        <div className="fee-burner-auction">
+          <span className="fee-context-label">Auction</span>
+          <AuctionAddressCell
+            address={row.auctionAddress}
+            version={row.auctionVersion}
+            wantAddress={row.wantAddress}
+            wantSymbol={row.wantSymbol}
+            emptyContent={<span className="row-secondary">No auction</span>}
+          />
+        </div>
+        {refreshStatus}
+      </div>
+
+      <table className="fee-token-table" aria-label={`Token balances for ${name}`}>
+        <thead>
+          <tr>
+            <th scope="col">Token</th>
+            <th scope="col" className="fee-amount-heading align-right">
+              Amount
+            </th>
+            <th scope="col" className="align-right">
+              USD
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {row.balances.map((balance) => {
+            const symbol = balance.tokenSymbol || "UNKNOWN";
+            const address = checksumAddress(balance.tokenAddress);
+            const auctionWarning = getAuctionSellTokenTooltip(balance);
+            const pauseWarning = getKickPrepareTooltip(balance);
+            const amount =
+              parseBig(balance.normalizedBalance) == null ? "?" : formatBalance(balance.normalizedBalance);
+            return (
+              <tr
+                key={balance.tokenAddress || symbol}
+                className="fee-token-row"
+                data-token={balance.tokenAddress}
+              >
+                <td className="fee-token-identity">
+                  <div className="fee-token-name">
+                    <TokenLogo src={balance.tokenLogoUrl} alt={`${symbol} logo`} />
+                    <span className="token-symbol-wrap">
+                      <span className="token-symbol" title={address || symbol}>
+                        {symbol}
+                      </span>
+                      <CopyIconButton
+                        valueToCopy={address}
+                        title={`Copy token address ${address}`}
+                        ariaLabel={`Copy token address for ${symbol}`}
+                      />
+                    </span>
+                  </div>
+                  {auctionWarning || pauseWarning ? (
+                    <div className="fee-token-warnings">
+                      {auctionWarning ? (
+                        <span title={auctionWarning}>
+                          {balance.auctionSellTokenStatus === "disabled"
+                            ? "Not enabled in auction"
+                            : "Auction status unknown"}
+                        </span>
+                      ) : null}
+                      {pauseWarning ? (
+                        <span title={pauseWarning}>
+                          <KickPauseIcon title={pauseWarning} /> Paused
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </td>
+                <td
+                  className={`fee-token-amount align-right${amount.length > 20 ? " is-long-amount" : ""}`}
+                  data-label="Amount"
+                  title={`${balance.normalizedBalance ?? "?"} ${symbol}`}
+                >
+                  {amount}
+                </td>
+                <td
+                  className="fee-token-usd align-right"
+                  title={
+                    balance.usdValue == null
+                      ? "USD value unavailable: token price or amount is unknown"
+                      : "Value in USD"
+                  }
+                >
+                  {balance.usdValue == null ? "?" : `$${formatBalance(balance.usdValue)}`}
+                </td>
+              </tr>
+            );
+          })}
+          {!row.balances.length ? (
+            <tr>
+              <td colSpan={3} className="empty">
+                No balances above the visibility threshold.
+              </td>
+            </tr>
+          ) : null}
+        </tbody>
+        {row.balances.length > 1 ? (
+          <tfoot>
+            <tr>
+              <th scope="row" colSpan={2}>
+                Total
+              </th>
+              <td
+                className="fee-inventory-total"
+                title={
+                  row.totalUsdValue == null
+                    ? "Total USD unavailable: one or more tokens are unpriced"
+                    : "Total value in USD"
+                }
+              >
+                {total}
+              </td>
+            </tr>
+          </tfoot>
+        ) : null}
+      </table>
+
+      <div className="fee-burner-activity">
+        {latestKick ? (
+          <>
+            <div className="fee-activity-heading">
+              <button
+                type="button"
+                className="fee-activity-toggle"
+                aria-expanded={activityExpanded}
+                aria-controls={activityId}
+                onClick={onToggleActivity}
+                aria-label={`${activityExpanded ? "Hide" : "Show"} recent activity for ${name}`}
+              >
+                <Chevron expanded={activityExpanded} /> Recent activity
+              </button>
+              {!activityExpanded ? (
+                <time dateTime={latestKick.createdAt} title={formatUtcTimestamp(latestKick.createdAt)}>
+                  {formatRelativeTimestamp(latestKick.createdAt, nowMs)}
+                </time>
+              ) : null}
+            </div>
+            <div id={activityId} className="fee-activity-list" hidden={!activityExpanded}>
+              {activityExpanded ? (
+                <KickHistoryCell
+                  kicks={row.kicks}
+                  nowMs={nowMs}
+                  isExpanded
+                  fallbackAuctionAddress={row.auctionAddress}
+                />
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <span className="fee-activity-empty">Recent activity · None recorded</span>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function FeeBurnerPage({ rows, state, nowMs, expandedKickRows, onToggleExpand }) {
+  const latestScanAt = rows.reduce(
+    (latest, row) => (row.scannedAt > (latest || "") ? row.scannedAt : latest),
+    null
+  );
+  const refreshStatus = <RefreshStatus state={state} scannedAt={latestScanAt} nowMs={nowMs} />;
+
   return (
     <section className="inventory-page" aria-label="Fee burner inventory">
-      <div className="toolbar-meta page-meta">
-        <span className="result-count" role="status"><strong>{rows.length}</strong> fee burner{rows.length === 1 ? "" : "s"}</span>
-        <RefreshStatus state={state} scannedAt={latestScanAt} nowMs={nowMs} />
-      </div>
-      {state.error ? <p className="error">{state.error}</p> : null}
-      <div className="table-shell ledger-table-shell">
-        <table className="ledger-table fee-burner-table">
-          <colgroup><col className="strategy-col" /><col className="auction-col" /><col className="history-col" /><col className="token-col" /></colgroup>
-          <thead><tr>
-            <th id="burner-heading" scope="col">Burner</th>
-            <th id="burner-auction-heading" scope="col">Auction</th>
-            <th id="burner-activity-heading" scope="col">Last activity</th>
-            <th id="burner-balances-heading" scope="col"><div className="rewards-heading"><span>Balances</span><span>USD</span></div></th>
-          </tr></thead>
-          <tbody>
-            {state.loading ? <SkeletonRows /> : null}
-            {!state.loading && !rows.length ? <tr><td colSpan={4} className="empty">No fee burners are available.</td></tr> : null}
-            {rows.map(row => <tr className="ledger-row fee-burner-row" key={row.sourceAddress}>
-              <td headers="burner-heading">
-                <EntityIdentity primary={row.sourceName || "Unnamed fee burner"} address={row.sourceAddress} />
-                <RowScanStatus row={row} latestScanAt={latestScanAt} />
-              </td>
-              <td className="auction-cell" headers="burner-auction-heading" data-label="Auction">
-                <AuctionAddressCell address={row.auctionAddress} version={row.auctionVersion}
-                  wantAddress={row.wantAddress} wantSymbol={row.wantSymbol}
-                  emptyContent={<span className="row-secondary">No auction</span>} />
-              </td>
-              <td className="history-cell" headers="burner-activity-heading" data-label="Last activity">
-                <KickHistoryCell kicks={row.kicks} nowMs={nowMs}
-                  isExpanded={expandedKickRows.has(row.sourceAddress)}
-                  onToggleExpand={() => onToggleExpand(row.sourceAddress)} fallbackAuctionAddress={row.auctionAddress} />
-              </td>
-              <td className="balances-cell" headers="burner-balances-heading">
-                <RewardSummary row={row} expanded={!collapsedRewards.has(row.sourceAddress)}
-                  onToggleExpand={() => onToggleRewards(row.sourceAddress)}
-                  displayMode={displayMode} onToggleMode={onToggleMode} />
-              </td>
-            </tr>)}
-          </tbody>
-        </table>
-      </div>
+      {state.error ? (
+        <p className="error" role="alert">
+          {state.error}
+        </p>
+      ) : null}
+      {!rows.length ? (
+        <>
+          {refreshStatus}
+          {state.loading ? (
+            <div className="fee-inventory-loading" role="status" aria-label="Loading fee burner inventory">
+              {Array.from({ length: 4 }, (_, index) => (
+                <span key={index} className="skeleton" />
+              ))}
+            </div>
+          ) : (
+            <p className="empty">
+              {state.error ? "Fee burner inventory unavailable." : "No fee burners are available."}
+            </p>
+          )}
+        </>
+      ) : (
+        rows.map((row, index) => (
+          <FeeBurnerInventory
+            key={row.sourceAddress}
+            row={row}
+            latestScanAt={latestScanAt}
+            refreshStatus={index === 0 ? refreshStatus : null}
+            nowMs={nowMs}
+            activityExpanded={expandedKickRows.has(row.sourceAddress)}
+            onToggleActivity={() => onToggleExpand(row.sourceAddress)}
+          />
+        ))
+      )}
     </section>
   );
 }
@@ -2512,7 +2679,6 @@ export default function App() {
   const [expandedStrategyRows, setExpandedStrategyRows] = useState(() => new Set());
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
   const [expandedRewardRows, setExpandedRewardRows] = useState(() => new Set());
-  const [collapsedFeeRewards, setCollapsedFeeRewards] = useState(() => new Set());
   const [deployStates, setDeployStates] = useState({});
   const [deployConfirm, setDeployConfirm] = useState(null);
   const deployChecksRef = useRef(new Set());
@@ -3203,16 +3369,8 @@ export default function App() {
           rows={feeBurnerRows}
           state={dashboard}
           nowMs={nowMs}
-          displayMode={displayMode}
-          onToggleMode={toggleDisplayMode}
           expandedKickRows={expandedKickRows}
           onToggleExpand={toggleKickExpand}
-          collapsedRewards={collapsedFeeRewards}
-          onToggleRewards={(address) => setCollapsedFeeRewards(previous => {
-            const next = new Set(previous);
-            if (next.has(address)) next.delete(address); else next.add(address);
-            return next;
-          })}
         />
       ) : null}
       {deployConfirm ? (

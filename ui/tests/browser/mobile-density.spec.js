@@ -69,7 +69,7 @@ for (const theme of ["light", "dark"]) {
       await page.keyboard.press("Escape");
       await expect(first.getByRole("button", { name: /Expand rewards/ })).toBeFocused();
       await first.getByRole("button", { name: /Show details/ }).tap();
-      await expect(dialog.locator(".strategy-detail-grid > div").first()).not.toHaveClass(/strategy-detail-balances/);
+      await expect(dialog.locator(".strategy-detail-grid > div").first()).toHaveClass(/strategy-detail-balances/);
       await expect(dialog.locator(".transaction-link")).toHaveAttribute("href", `https://etherscan.io/tx/${tx}`);
       await page.keyboard.press("Escape");
       for (const width of [320, 430, 780]) {

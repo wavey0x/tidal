@@ -1492,6 +1492,32 @@ tbody tr:focus-within > td {
   width: min(100%, 260px);
 }
 
+/* Mobile strategy sheets use one stable reading order and shared identity/copy controls. */
+.strategy-sheet-heading .row-primary { white-space: normal; overflow-wrap: anywhere; font-size: 14px; }
+.strategy-sheet-heading .address-copy { font-size: 12px; font-weight: 400; }
+.strategy-sheet-scan { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.strategy-sheet-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 8px 0 0; }
+.strategy-sheet-content .kick-detail-label { font-size: 11px; margin-bottom: 2px; }
+.strategy-sheet-content .kick-detail-value { font-size: 12px; word-break: normal; overflow-wrap: anywhere; }
+.strategy-sheet-content .token-cell { width: min(100%, 480px); }
+.strategy-sheet-content .token-balance-wrap { max-width: 100%; }
+.strategy-sheet-content .token-balance { font-size: 13px; }
+.strategy-sheet-content .auction-value-slot { gap: 0; }
+.strategy-sheet-content .kick-history { font-size: 12px; }
+.strategy-sheet-content .kick-time, .strategy-sheet-content .transaction-link { font-size: 12px; }
+.strategy-sheet-content .kick-history .kick-row-inner { gap: 6px; }
+.strategy-sheet-reference { min-width: 0; }
+.strategy-sheet-reference > summary {
+  display: flex; align-items: center; gap: 8px; min-height: 44px;
+  color: var(--text-secondary); font-size: 12px; cursor: pointer; list-style: none;
+}
+.strategy-sheet-reference > summary::-webkit-details-marker { display: none; }
+.strategy-sheet-reference > summary::after { content: "+"; }
+.strategy-sheet-reference[open] > summary::after { content: "−"; }
+.strategy-sheet-reference > summary:hover { color: var(--text-primary); }
+.strategy-sheet-reference-content { display: grid; gap: 12px; padding: 4px 0 0; }
+.strategy-sheet-reference .row-primary { white-space: normal; overflow-wrap: anywhere; }
+
 .kick-detail-tokens {
   display: flex;
   flex-direction: column;

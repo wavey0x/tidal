@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 // Keep portaled dialogs usable with a keyboard, including nested confirmation dialogs.
 export function useDialogFocus(dialogRef, onClose, initialFocusRef) {
@@ -12,8 +12,15 @@ export function useDialogFocus(dialogRef, onClose, initialFocusRef) {
     const dialog = dialogRef.current;
     const previousFocus = document.activeElement;
     const previousOverflow = document.body.style.overflow;
-    const focusable = () =>
-      [...dialog.querySelectorAll(FOCUSABLE)].filter((node) => node.getClientRects().length);
+    const focusable = () => [...dialog.querySelectorAll(FOCUSABLE)].filter((node) => {
+      if (!node.getClientRects().length || getComputedStyle(node).visibility !== "visible") return false;
+      // Closed details can retain layout rectangles after being opened once.
+      // Only their summary belongs in the keyboard loop, not hidden controls.
+      for (let parent = node.parentElement; parent && parent !== dialog; parent = parent.parentElement) {
+        if (parent.tagName === "DETAILS" && !parent.open && !parent.querySelector(":scope > summary")?.contains(node)) return false;
+      }
+      return true;
+    });
     (initialFocusRef?.current || focusable()[0] || dialog).focus({ preventScroll: true });
     document.body.style.overflow = "hidden";
 

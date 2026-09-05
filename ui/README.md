@@ -59,13 +59,18 @@ the server-only `FACTORY_DASHBOARD_API_PROXY_TARGET` proxy alias.
 ```bash
 npm test
 npm run build
-npx playwright install chromium
+npx playwright install chromium webkit
 npm run test:browser
 ```
 
 Browser tests use local API and wallet fixtures, not production services. To use
 an installed Chrome instead of Playwright's Chromium, run
 `TIDAL_TEST_BROWSER_CHANNEL=chrome npm run test:browser`.
+
+The mobile sheet regressions also run WebKit, including when Chrome is selected
+for the main suite. They check viewport resizing, scrolling to the final item,
+and disclosure focus. Chromium additionally exercises pinch-zoom viewport sizes,
+touch scrolling, header-only dismissal, and nested deployment cancellation.
 
 ## Endpoints
 

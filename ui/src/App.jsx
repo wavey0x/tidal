@@ -1993,7 +1993,7 @@ function StrategyDetailContent({
   onDeploy,
   onCheckDeploy,
   initialHistoryExpanded = false,
-  rewardsFirst = false,
+  compact = false,
 }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(() => initialHistoryExpanded);
@@ -2006,9 +2006,55 @@ function StrategyDetailContent({
     </div>
   </div>;
 
+  const vault = <div className="kick-detail-item">
+    <div className="kick-detail-label">Vault</div>
+    <div className="kick-detail-value strategy-detail-entity">
+      <EntityIdentity primary={row.contextSymbol || row.contextName || "Unknown Vault"}
+        secondary={row.contextName && row.contextSymbol !== row.contextName ? row.contextName : null}
+        address={row.contextAddress} />
+    </div>
+  </div>;
+  const auction = <div className="kick-detail-item strategy-detail-auction">
+    <div className="kick-detail-label">Auction</div>
+    <div className="kick-detail-value">
+      <AuctionAddressCell address={row.auctionAddress} version={row.auctionVersion}
+        wantAddress={row.wantAddress} wantSymbol={row.wantSymbol}
+        emptyContent={<>
+          {compact ? <WantTokenValue address={row.wantAddress} symbol={row.wantSymbol} /> : null}
+          <MissingAuctionAction deployState={deployState} onDeploy={onDeploy} onCheck={onCheckDeploy} />
+        </>} />
+    </div>
+  </div>;
+  const history = <div className="kick-detail-item strategy-detail-history">
+    <div className="kick-detail-label">History</div>
+    <div className="kick-detail-value">
+      <KickHistoryCell kicks={row.kicks} nowMs={nowMs} isExpanded={historyExpanded}
+        onToggleExpand={() => setHistoryExpanded(value => !value)} fallbackAuctionAddress={row.auctionAddress} />
+    </div>
+  </div>;
+
+  if (compact) return <div className="strategy-detail-grid strategy-sheet-content">
+    {rewards}
+    {auction}
+    {history}
+    <details className="strategy-sheet-reference">
+      <summary>Vault &amp; details</summary>
+      <div className="strategy-sheet-reference-content">
+        {vault}
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Full strategy name</div>
+          <div className="kick-detail-value">{row.sourceName || "Unknown strategy"}</div>
+        </div>
+        <div className="kick-detail-item">
+          <div className="kick-detail-label">Last scan · UTC</div>
+          <time className="kick-detail-value" dateTime={row.scannedAt || undefined}>{formatUtcTimestamp(row.scannedAt)}</time>
+        </div>
+      </div>
+    </details>
+  </div>;
+
   return (
     <div className="kick-detail-grid strategy-detail-grid">
-      {rewardsFirst ? rewards : null}
       <div className="kick-detail-item">
         <div className="kick-detail-label">Last Scan</div>
         <div
@@ -2030,16 +2076,7 @@ function StrategyDetailContent({
           <WantTokenValue address={row.wantAddress} symbol={row.wantSymbol} />
         </div>
       </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Vault</div>
-        <div className="kick-detail-value strategy-detail-entity">
-          <EntityIdentity
-            primary={row.contextSymbol || row.contextName || "Unknown Vault"}
-            secondary={row.contextName && row.contextSymbol !== row.contextName ? row.contextName : null}
-            address={row.contextAddress}
-          />
-        </div>
-      </div>
+      {vault}
       <div className="kick-detail-item">
         <div className="kick-detail-label">Strategy</div>
         <div className="kick-detail-value strategy-detail-entity">
@@ -2049,37 +2086,9 @@ function StrategyDetailContent({
           />
         </div>
       </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Auction</div>
-        <div className="kick-detail-value">
-          <AuctionAddressCell
-            address={row.auctionAddress}
-            version={row.auctionVersion}
-            wantAddress={row.wantAddress}
-            wantSymbol={row.wantSymbol}
-            emptyContent={
-              <MissingAuctionAction
-                deployState={deployState}
-                onDeploy={onDeploy}
-                onCheck={onCheckDeploy}
-              />
-            }
-          />
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">History</div>
-        <div className="kick-detail-value">
-          <KickHistoryCell
-            kicks={row.kicks}
-            nowMs={nowMs}
-            isExpanded={historyExpanded}
-            onToggleExpand={() => setHistoryExpanded((value) => !value)}
-            fallbackAuctionAddress={row.auctionAddress}
-          />
-        </div>
-      </div>
-      {!rewardsFirst ? rewards : null}
+      {auction}
+      {history}
+      {rewards}
     </div>
   );
 }
@@ -2119,11 +2128,15 @@ function StrategyDetailModal({
   onDeploy,
   onCheckDeploy,
   initialHistoryExpanded = false,
-  rewardsFirst = false,
   onClose,
 }) {
   return (
-    <DetailModal onClose={onClose} label="Strategy details">
+    <DetailModal onClose={onClose} label="Strategy details" header={<div className="strategy-sheet-heading">
+      <EntityIdentity primary={formatStrategyDisplayName(row.sourceName)} primaryTitle={row.sourceName} address={row.sourceAddress} />
+      <div className="strategy-sheet-scan">Scanned <time dateTime={row.scannedAt || undefined} title={formatUtcTimestamp(row.scannedAt)}>
+        {row.scannedAt ? formatRelativeTimestamp(row.scannedAt, nowMs) : "—"}
+      </time></div>
+    </div>}>
       <StrategyDetailContent
         row={row}
         nowMs={nowMs}
@@ -2133,7 +2146,7 @@ function StrategyDetailModal({
         onDeploy={onDeploy}
         onCheckDeploy={onCheckDeploy}
         initialHistoryExpanded={initialHistoryExpanded}
-        rewardsFirst={rewardsFirst}
+        compact
       />
     </DetailModal>
   );
@@ -2729,7 +2742,6 @@ export default function App() {
   const [showClosedVaults, setShowClosedVaults] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [strategyFiltersOpen, setStrategyFiltersOpen] = useState(false);
-  const [strategyDetailSection, setStrategyDetailSection] = useState("overview");
   const dashboard = useLiveData(apiUrl("/dashboard"), {
     active: activePage === "strategies" || activePage === "fee-burner",
     viewKey: activePage,
@@ -3038,8 +3050,7 @@ export default function App() {
     });
   }
 
-  function toggleStrategyExpand(sourceAddress, section = "overview") {
-    setStrategyDetailSection(section);
+  function toggleStrategyExpand(sourceAddress) {
     setExpandedStrategyRows((prev) => {
       if (prev.has(sourceAddress)) {
         const next = new Set(prev);
@@ -3368,7 +3379,7 @@ export default function App() {
                     {isMobile ? <MobileStrategyRow row={row} nowMs={nowMs} latestScanAt={latestVisibleScan}
                       duplicateName={duplicateStrategyNames.has(formatStrategyDisplayName(row.sourceName))}
                       onOpen={() => toggleStrategyExpand(row.sourceAddress)}
-                      onOpenRewards={() => toggleStrategyExpand(row.sourceAddress, "rewards")} /> : <tr
+                      onOpenRewards={() => toggleStrategyExpand(row.sourceAddress)} /> : <tr
                       className={`strategy-row ledger-row ${expandedStrategyRows.has(row.sourceAddress) ? "is-expanded" : ""}`}
                       data-strategy={row.sourceAddress}
                     >
@@ -3437,7 +3448,6 @@ export default function App() {
                         onDeploy={() => handleDeployStrategy(row)}
                         onCheckDeploy={() => handleCheckDeployment(row.sourceAddress)}
                         initialHistoryExpanded={expandedKickRows.has(row.sourceAddress)}
-                        rewardsFirst={strategyDetailSection === "rewards"}
                         onClose={() => toggleStrategyExpand(row.sourceAddress)}
                       />
                     ) : null}

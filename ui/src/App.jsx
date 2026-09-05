@@ -577,7 +577,7 @@ function formatRelativeTimestamp(value, nowMs) {
   const absSeconds = Math.abs(diffSeconds);
 
   if (absSeconds < 60) {
-    return diffSeconds >= 0 ? "just now" : "in a moment";
+    return diffSeconds >= -5 ? "just now" : "in a moment";
   }
 
   const units = [
@@ -768,10 +768,10 @@ function WantTokenValue({ address, symbol }) {
   );
 }
 
-function EntityIdentity({ primary, secondary, address, onOpen, expanded = false }) {
+function EntityIdentity({ primary, primaryTitle, secondary, address, onOpen, expanded = false }) {
   return (
     <div className="entity-cell">
-      <div className="row-primary" title={typeof primary === "string" ? primary : undefined}>
+      <div className="row-primary" title={primaryTitle || (typeof primary === "string" ? primary : undefined)}>
         {onOpen ? (
           <button type="button" className="entity-open" onClick={onOpen} aria-expanded={expanded}
             aria-label={`${expanded ? "Hide" : "Show"} details for ${primary}`}>
@@ -1113,7 +1113,8 @@ function Chevron({ expanded = false }) {
 function KickRow({ kick, nowMs, toggle, compact = false }) {
   const relativeTime = formatRelativeTimestamp(kick.createdAt, nowMs);
   const displayTime = compact ? relativeTime.replace(/ (year|month|week|day|hour|minute)s?\b/g,
-    (_, unit) => ({ year: "y", month: "mo", week: "w", day: "d", hour: "h", minute: "m" })[unit]).replace(/ ago$/, "") : relativeTime;
+    (_, unit) => ({ year: "y", month: "mo", week: "w", day: "d", hour: "h", minute: "m" })[unit])
+    .replace(/ ago$/, "").replace(/^just now$/, "now").replace(/^in a moment$/, "soon").replace(/^in /, "+") : relativeTime;
   return (
     <div className="kick-row-inner">
       <div className="activity-time-row">
@@ -1429,7 +1430,8 @@ function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
         <div className="log-result"><StatusBadge status={kick.status} /></div>
       </td>
       <td className="log-source-cell" headers="log-source">
-        <EntityIdentity primary={kick.sourceName || "Unknown source"} address={kick.sourceAddress} />
+        <EntityIdentity primary={kick.sourceName ? formatStrategyDisplayName(kick.sourceName) : "Unknown source"}
+          primaryTitle={kick.sourceName} address={kick.sourceAddress} />
       </td>
       <td className="log-auction-cell" headers="log-auction" data-label="Auction">
         {kick.auctionAddress ? <AddressLinkCopy address={kick.auctionAddress}
@@ -1485,8 +1487,9 @@ function KickLogPager({
   );
 }
 
-function RefreshStatus({ state, scannedAt, nowMs = Date.now() }) {
-  const stale = state.error || (state.updatedAt && nowMs - state.updatedAt > 65000);
+function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
+  const evaluationStale = evaluatedAt !== undefined && (!Number.isFinite(Date.parse(evaluatedAt)) || Math.abs(nowMs - Date.parse(evaluatedAt)) > 65000);
+  const stale = state.error || evaluationStale || (state.updatedAt && nowMs - state.updatedAt > 65000);
   const scanOverdue = scannedAt && nowMs - new Date(scannedAt).getTime() > SCAN_STALE_AFTER_MS;
   return (
     <div className={`refresh-status${stale || scanOverdue ? " is-stale" : ""}`}>
@@ -1500,8 +1503,8 @@ function RefreshStatus({ state, scannedAt, nowMs = Date.now() }) {
             <span aria-hidden="true"> · </span>
           </>
         ) : null}
-        <span className="refresh-updated" title={state.updatedAt ? formatUtcTimestamp(state.updatedAt) : undefined}>
-          {state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
+        <span className="refresh-updated" title={formatUtcTimestamp(evaluatedAt !== undefined ? evaluatedAt : state.updatedAt)}>
+          {evaluatedAt !== undefined ? evaluatedAt ? `Evaluated ${formatRelativeTimestamp(evaluatedAt, nowMs)}` : "No evaluation available" : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
         </span>
       </span>
       <button type="button" className="kick-log-page-btn" onClick={state.refresh} disabled={state.refreshing}>
@@ -2100,46 +2103,171 @@ function FeeBurnerPage({ rows, state, nowMs, displayMode, onToggleMode, expanded
   );
 }
 
-function AlertRoundTimeline({ rounds = [] }) {
-  if (!rounds.length) return null;
+function EvidenceAmount({ value, raw = false }) {
+  const amount = parseBig(value);
+  if (!amount) return <span className="evidence-amount">?</span>;
+  const exact = amount.toFixed();
+  // The alerts contract omits token decimals. Never infer them from magnitude.
+  const display =
+    raw && amount.abs().gte("1000000000") ? amount.toExponential(2) : formatBalance(amount.toString());
   return (
-    <ol className="alert-timeline">
-      {rounds.map((round) => (
-        <li key={`${round.kickId}-${round.closeId || "open"}`}>
-          <div className="alert-timeline-heading">
-            <span>Round {round.kickId}</span>
-            <span className="alert-state-text">{String(round.outcome || "UNKNOWN").replaceAll("_", " ")}</span>
-          </div>
-          <div className="alert-evidence-grid mono">
-            <span>Placed {round.placedAmount ?? "?"}</span>
-            <span>Recovered {round.recoveredAmount ?? "?"}</span>
-            {round.requestedAmount != null && round.requestedAmount !== round.placedAmount ? (
-              <span>Requested {round.requestedAmount}</span>
-            ) : null}
-            <span>Quote {round.quoteAmount ?? "?"}</span>
-            <span>Minimum {round.minimumQuote ?? "?"}</span>
-          </div>
-          {round.providers?.entries?.length ? (
-            <div className="alert-provider-evidence">
-              {round.providers.entries.map((provider) => (
-                <span key={provider.name} className="mono">
-                  {provider.name}: {provider.status || "unknown"} {provider.amountOut ?? "?"}
-                </span>
-              ))}
-              {round.providers.spreadPct != null ? (
-                <span>
-                  Providers were within {round.providers.spreadPct}% of one another; this does not identify the cause.
-                </span>
+    <span className="evidence-amount" title={`${exact} ${raw ? "raw sell units" : "buy tokens"}`}>
+      {display}
+    </span>
+  );
+}
+
+function AlertRound({ round, nowMs }) {
+  const [expanded, setExpanded] = useState(false);
+  const roundId = useId();
+  const hasProviders = Boolean(round.providers?.entries?.length);
+  const exactValues = [
+    ["Requested · raw sell units", round.requestedAmount],
+    ["Placed · raw sell units", round.placedAmount],
+    ["Recovered · raw sell units", round.recoveredAmount],
+    ["Quote · buy tokens", round.quoteAmount],
+    ["Minimum · buy tokens", round.minimumQuote],
+  ].filter(([, value]) => value != null);
+  return (
+    <>
+      <tr className="alert-round-row">
+        <td>
+          <button
+            type="button"
+            className="log-open"
+            onClick={() => setExpanded((value) => !value)}
+            aria-expanded={expanded}
+            aria-controls={expanded ? roundId : undefined}
+            aria-label={`${expanded ? "Hide" : "Show"} round details for log ${round.kickId}`}
+          >
+            <Chevron expanded={expanded} />
+            <span>Log {round.kickId}</span>
+          </button>
+          <time
+            className="round-time"
+            dateTime={round.kickAt || undefined}
+            title={formatUtcTimestamp(round.kickAt)}
+          >
+            {formatRelativeTimestamp(round.kickAt, nowMs)}
+          </time>
+        </td>
+        <td className="alert-state-text" data-label="Outcome">
+          {String(round.outcome || "UNKNOWN").replaceAll("_", " ")}
+        </td>
+        <td data-label="Placed · raw sell units">
+          <EvidenceAmount value={round.placedAmount} raw />
+        </td>
+        <td data-label="Recovered · raw sell units">
+          <EvidenceAmount value={round.recoveredAmount} raw />
+        </td>
+        <td data-label="Quote · buy tokens">
+          <EvidenceAmount value={round.quoteAmount} />
+        </td>
+        <td data-label="Minimum · buy tokens">
+          <EvidenceAmount value={round.minimumQuote} />
+        </td>
+      </tr>
+      {expanded ? (
+        <tr className="alert-round-detail">
+          <td colSpan={6}>
+            <div id={roundId}>
+              <dl className="alert-evidence-list">
+                {round.reasonCode ? (
+                  <div>
+                    <dt>Reason</dt>
+                    <dd>{round.reasonCode}</dd>
+                  </div>
+                ) : null}
+                <div>
+                  <dt>Kick</dt>
+                  <dd>
+                    <time dateTime={round.kickAt || undefined}>{formatUtcTimestamp(round.kickAt)}</time>
+                    {round.kickTxHash ? <EtherscanTxLink txHash={round.kickTxHash} /> : null}
+                  </dd>
+                </div>
+                {round.closeId != null || round.closeAt || round.closeTxHash ? (
+                  <div>
+                    <dt>Close{round.closeId != null ? ` · log ${round.closeId}` : ""}</dt>
+                    <dd>
+                      <time dateTime={round.closeAt || undefined}>{formatUtcTimestamp(round.closeAt)}</time>
+                      {round.closeTxHash ? <EtherscanTxLink txHash={round.closeTxHash} /> : null}
+                    </dd>
+                  </div>
+                ) : null}
+                {exactValues.map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd className="mono">{parseBig(value)?.toFixed() ?? String(value)}</dd>
+                  </div>
+                ))}
+              </dl>
+              {hasProviders ? (
+                <details className="provider-details">
+                  <summary>Provider diagnostics · {round.providers.entries.length} responses</summary>
+                  <dl className="provider-ledger">
+                    {round.providers.entries.map((provider) => (
+                      <div key={provider.name}>
+                        <dt>{provider.name}</dt>
+                        <dd>
+                          {provider.status || "unknown"}
+                          {provider.amountOut != null
+                            ? ` · ${
+                                parseBig(provider.amountOut)?.toFixed() ?? String(provider.amountOut)
+                              } raw buy units`
+                            : ""}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {round.providers.spreadPct != null ? (
+                    <p className="provider-note">
+                      Provider spread {round.providers.spreadPct}%. Agreement does not identify the cause.
+                    </p>
+                  ) : null}
+                </details>
               ) : null}
             </div>
-          ) : null}
-          <div className="alert-inline-links">
-            {round.kickTxHash ? <><span>Kick</span> <EtherscanTxLink txHash={round.kickTxHash} /></> : null}
-            {round.closeTxHash ? <><span>Close</span> <EtherscanTxLink txHash={round.closeTxHash} /></> : null}
-          </div>
-        </li>
-      ))}
-    </ol>
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function AlertRoundTimeline({ rounds = [], nowMs }) {
+  if (!rounds.length) return <p className="muted">No round evidence available.</p>;
+  return (
+    <div className="alert-round-shell">
+      <p className="evidence-note">
+        Sell amounts are raw units; token decimals are unavailable. Quotes are in buy tokens. Open a log row
+        for exact values and diagnostics.
+      </p>
+      <table className="alert-round-ledger">
+        <thead>
+          <tr>
+            <th scope="col">Round</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">
+              Placed<span>raw sell units</span>
+            </th>
+            <th scope="col">
+              Recovered<span>raw sell units</span>
+            </th>
+            <th scope="col">
+              Quote<span>buy tokens</span>
+            </th>
+            <th scope="col">
+              Minimum<span>buy tokens</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rounds.map((round) => (
+            <AlertRound key={round.kickId} round={round} nowMs={nowMs} />
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -2150,94 +2278,199 @@ function AlertCard({ item, nowMs, lastObservedAt }) {
       ? "Retry eligible"
       : `Retry ${formatRelativeTimestamp(item.retryAt, nowMs)}`
     : null;
+  const otherEvidence = Object.entries(item.evidence || {}).filter(([key]) => key !== "rounds");
   return (
-    <article className={`alert-card alert-${item.severity}`}>
+    <article className={`alert-card alert-${item.severity}`} aria-label={item.title}>
       <div className="alert-card-header">
         <div className="alert-title">
-          <div className="alert-kicker">{item.severity}</div>
+          <span className="alert-kicker">{item.severity}</span>
           <h3>{item.title}</h3>
         </div>
         <div className="alert-age">
           <time dateTime={item.openedAt} title={formatUtcTimestamp(item.openedAt)}>
             Opened {formatRelativeTimestamp(item.openedAt, nowMs)}
           </time>
-          {item.status === "needs_action" && lastObservedAt ? (
+          {lastObservedAt ? (
             <time dateTime={lastObservedAt} title={formatUtcTimestamp(lastObservedAt)}>
-              Still active {formatRelativeTimestamp(lastObservedAt, nowMs)}
+              Observed {formatRelativeTimestamp(lastObservedAt, nowMs)}
             </time>
           ) : null}
         </div>
       </div>
-      <p>{item.summary}</p>
+      <p className="alert-summary">{item.summary}</p>
       <div className="alert-addresses">
         {item.scope?.sourceAddress ? (
-          <div><span>{sourceLabel}</span><AddressLinkCopy address={item.scope.sourceAddress} /></div>
+          <div>
+            <span>{sourceLabel}</span>
+            <AddressLinkCopy address={item.scope.sourceAddress} />
+          </div>
         ) : null}
         {item.scope?.auctionAddress ? (
-          <div><span>Auction</span><AddressLinkCopy address={item.scope.auctionAddress} /></div>
+          <div>
+            <span>Auction</span>
+            <AddressLinkCopy address={item.scope.auctionAddress} />
+          </div>
         ) : null}
         {item.scope?.tokenAddress ? (
-          <div><span>Token</span><AddressLinkCopy address={item.scope.tokenAddress} /></div>
+          <div>
+            <span>Token</span>
+            <AddressLinkCopy address={item.scope.tokenAddress} />
+          </div>
         ) : null}
-        {retryLabel ? <div className="alert-retry" title={formatUtcTimestamp(item.retryAt)}>{retryLabel}</div> : null}
+        {retryLabel ? (
+          <time className="alert-retry" dateTime={item.retryAt} title={formatUtcTimestamp(item.retryAt)}>
+            {retryLabel}
+          </time>
+        ) : null}
       </div>
+      {item.nextAction?.instruction || item.nextAction?.command ? (
+        <div className="alert-next-action">
+          {item.nextAction?.instruction ? (
+            <p>
+              <span className="next-action-label">Next</span>
+              {item.nextAction.instruction}
+            </p>
+          ) : null}
+          {item.nextAction?.command ? (
+            <span className="alert-command" title={item.nextAction.command}>
+              Copy retry command
+              <CopyIconButton
+                valueToCopy={item.nextAction.command}
+                title="Copy retry command"
+                ariaLabel="Copy retry command"
+              />
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="alert-actions">
         <div className="alert-links">
-          {item.links?.logs ? <a href={item.links.logs}>Tidal Logs</a> : null}
-          {item.links?.etherscan ? <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">Etherscan</a> : null}
-          {item.links?.auctionScan ? <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">AuctionScan</a> : null}
+          {item.links?.logs ? <a href={item.links.logs}>Logs</a> : null}
+          {item.links?.etherscan ? (
+            <a href={item.links.etherscan} target="_blank" rel="noopener noreferrer">
+              Etherscan <OutboundLinkGlyph />
+            </a>
+          ) : null}
+          {item.links?.auctionScan ? (
+            <a href={item.links.auctionScan} target="_blank" rel="noopener noreferrer">
+              AuctionScan <OutboundLinkGlyph />
+            </a>
+          ) : null}
         </div>
-        {item.nextAction?.command ? (
-          <span className="alert-command" title={item.nextAction.command}>
-            Copy retry
-            <CopyIconButton
-              valueToCopy={item.nextAction.command}
-              title="Copy scoped retry command"
-              ariaLabel="Copy scoped retry command"
-            />
-          </span>
-        ) : null}
         <details className="alert-details">
-          <summary>Evidence</summary>
+          <summary>
+            Evidence{item.evidence?.rounds?.length ? ` · ${item.evidence.rounds.length} rounds` : ""}
+          </summary>
           {item.kind === "auction_retry" ? (
-            <AlertRoundTimeline rounds={item.evidence?.rounds || []} />
-          ) : (
+            <AlertRoundTimeline rounds={item.evidence?.rounds || []} nowMs={nowMs} />
+          ) : null}
+          {otherEvidence.length ? (
             <dl className="alert-evidence-list">
-              {Object.entries(item.evidence || {}).map(([key, value]) => (
-                <div key={key}><dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt><dd className="mono">{Array.isArray(value) ? value.join(", ") : String(value ?? "—")}</dd></div>
+              {otherEvidence.map(([key, value]) => (
+                <div key={key}>
+                  <dt>{key.replaceAll(/([A-Z])/g, " $1")}</dt>
+                  <dd className="mono">
+                    {typeof value === "object" && value !== null
+                      ? JSON.stringify(value, null, 2)
+                      : String(value ?? "—")}
+                  </dd>
+                </div>
               ))}
             </dl>
-          )}
+          ) : null}
         </details>
       </div>
     </article>
   );
 }
 
-function AlertsPage({ data, loading, error, nowMs }) {
-  const items = data?.items || [];
+function AlertsPage({ state, nowMs }) {
+  const { data, loading, error } = state;
+  const items = Array.isArray(data?.items) ? data.items : [];
   const needsAction = items.filter((item) => item.status === "needs_action");
   const watching = items.filter((item) => item.status === "watching");
+  const hasResults =
+    Array.isArray(data?.items) &&
+    items.length === needsAction.length + watching.length &&
+    Number.isInteger(data?.needsActionCount) &&
+    data.needsActionCount === needsAction.length;
+  const evaluatedTime = Date.parse(data?.evaluatedAt);
+  const scannedTime = Date.parse(data?.latestSuccessfulScanAt);
+  const evaluationFresh = Number.isFinite(evaluatedTime) && Math.abs(nowMs - evaluatedTime) <= 65000;
+  const scanFresh = Number.isFinite(scannedTime) && Math.abs(nowMs - scannedTime) <= SCAN_STALE_AFTER_MS;
+  const current =
+    hasResults &&
+    !error &&
+    evaluationFresh &&
+    scanFresh &&
+    Number.isFinite(state.updatedAt) &&
+    nowMs - state.updatedAt <= 65000;
   return (
-    <section className="alerts-page" aria-live="polite">
-      <div className="alerts-heading">
-        <div><h2>Alerts</h2><p>Canonical issues that affect auction automation and scanner health.</p></div>
-      </div>
-      {loading && !data ? <p className="muted">Loading alerts…</p> : null}
-      {error ? <p className="error">{error}</p> : null}
-      {!loading && !error && !items.length ? (
-        <div className="alerts-empty">
-          <strong>No operator action needed</strong>
+    <section className="alerts-page">
+      <div className="alerts-meta">
+        <div className="alert-counts" role="status">
           <span>
-            Last evaluated {formatRelativeTimestamp(data?.evaluatedAt, nowMs)} · latest successful scan {formatRelativeTimestamp(data?.latestSuccessfulScanAt, nowMs)}
+            <strong>{loading && !data ? "—" : needsAction.length}</strong> Needs action
+          </span>
+          <span>
+            <strong>{loading && !data ? "—" : watching.length}</strong> Watching
+          </span>
+        </div>
+        <RefreshStatus state={state} evaluatedAt={data?.evaluatedAt || null} nowMs={nowMs} />
+      </div>
+      {loading && !data ? (
+        <p className="muted" role="status">
+          Loading alerts…
+        </p>
+      ) : null}
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {!loading && !current ? (
+        <p className="alert-health-warning" role="status">
+          Current health is unverified.{" "}
+          {error
+            ? "Refresh failed; showing the last available data."
+            : !hasResults
+            ? "Alert results are incomplete."
+            : !evaluationFresh
+            ? "Alert evaluation is missing or overdue."
+            : !scanFresh
+            ? "The latest successful scan is missing or overdue."
+            : "Refresh is overdue."}{" "}
+          Refresh before acting.
+        </p>
+      ) : null}
+      {!loading && !items.length ? (
+        <div className={`alerts-empty${current ? " is-current" : ""}`}>
+          <strong>{current ? "No operator action needed" : "No current alert results to confirm"}</strong>
+          <span>
+            Latest successful scan{" "}
+            <time
+              dateTime={data?.latestSuccessfulScanAt || undefined}
+              title={formatUtcTimestamp(data?.latestSuccessfulScanAt)}
+            >
+              {formatRelativeTimestamp(data?.latestSuccessfulScanAt, nowMs)}
+            </time>
           </span>
         </div>
       ) : null}
       {needsAction.length ? (
-        <section className="alert-section"><h2>Needs action</h2>{needsAction.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.latestSuccessfulScanAt} />)}</section>
+        <section className="alert-section" aria-label="Needs action">
+          {needsAction.map((item) => (
+            <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.evaluatedAt} />
+          ))}
+        </section>
       ) : null}
       {watching.length ? (
-        <section className="alert-section"><h2>Watching</h2>{watching.map((item) => <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.latestSuccessfulScanAt} />)}</section>
+        <section className="alert-section" aria-label="Watching">
+          <h2>Watching</h2>
+          {watching.map((item) => (
+            <AlertCard key={item.id} item={item} nowMs={nowMs} lastObservedAt={data?.evaluatedAt} />
+          ))}
+        </section>
       ) : null}
     </section>
   );
@@ -2272,7 +2505,7 @@ export default function App() {
     latestScanAt: dashboard.data?.latestScanAt || dashboard.data?.summary?.latestScanAt || null,
   }), [dashboard.data]);
   const { loading: loadingRows, error } = dashboard;
-  const { data: alertsData, loading: alertsLoading, error: alertsError } = alerts;
+  const { data: alertsData } = alerts;
   const [displayMode, setDisplayMode] = useState("usd");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isMobile = useMediaQuery("(max-width: 780px)");
@@ -2769,8 +3002,6 @@ export default function App() {
         </div>
       </header>
 
-      {activePage === "alerts" ? <RefreshStatus state={alerts} nowMs={nowMs} /> : null}
-
       {activePage === "kicks" ? (
         <KickLogPage
           nowMs={nowMs}
@@ -2783,7 +3014,7 @@ export default function App() {
       ) : null}
 
       {activePage === "alerts" ? (
-        <AlertsPage data={alertsData} loading={alertsLoading} error={alertsError} nowMs={nowMs} />
+        <AlertsPage state={alerts} nowMs={nowMs} />
       ) : null}
 
       {activePage === "strategies" ? (

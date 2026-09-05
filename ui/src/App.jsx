@@ -767,7 +767,7 @@ function WantTokenValue({ address, symbol }) {
   );
 }
 
-function EntityIdentity({ primary, primaryTitle, secondary, address, onOpen, expanded = false }) {
+function EntityIdentity({ primary, primaryTitle, secondary, address, onOpen, expanded = false, showAddress = true }) {
   return (
     <div className="entity-cell">
       <div className="row-primary" title={primaryTitle || (typeof primary === "string" ? primary : undefined)}>
@@ -779,7 +779,7 @@ function EntityIdentity({ primary, primaryTitle, secondary, address, onOpen, exp
         ) : primary || "—"}
       </div>
       {secondary ? <div className="entity-secondary mono">{secondary}</div> : null}
-      <AddressLinkCopy address={address} />
+      {showAddress ? <AddressLinkCopy address={address} /> : null}
     </div>
   );
 }
@@ -1490,12 +1490,33 @@ function KickLogPager({
   );
 }
 
-function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
+function formatCompactRelativeTimestamp(value, nowMs) {
+  return formatRelativeTimestamp(value, nowMs)
+    .replace(/\s+minutes?/, "m").replace(/\s+hours?/, "h").replace(/\s+days?/, "d")
+    .replace(/\s+weeks?/, "w").replace(/\s+months?/, "mo").replace(/\s+years?/, "y");
+}
+
+function MobileFilterToggle({ expanded, onToggle, count, controls }) {
+  return <button type="button" className="mobile-filter-toggle" aria-expanded={expanded}
+    aria-label={count ? `Filters, ${count} active` : "Filters"}
+    aria-controls={controls} onClick={onToggle}>
+    Filters{count ? <span className="filter-count">{count}</span> : null}<Chevron expanded={expanded} />
+  </button>;
+}
+
+function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now(), compact = false }) {
   // An evaluation has already happened; tolerate small server/client clock skew in its label.
   const evaluationAge = Math.abs(nowMs - Date.parse(evaluatedAt)) < 60000 ? "just now" : formatRelativeTimestamp(evaluatedAt, nowMs);
   return (
     <div className="refresh-status" aria-busy={state.refreshing} title="Updates automatically every 30 seconds while visible and when you return to this page">
       <span role="status">
+        {compact ? (
+          <time dateTime={scannedAt || (state.updatedAt ? new Date(state.updatedAt).toISOString() : undefined)} title={formatUtcTimestamp(scannedAt ?? state.updatedAt)}>
+            {scannedAt !== undefined
+              ? scannedAt ? `Scan ${formatCompactRelativeTimestamp(scannedAt, nowMs)}` : "No scan"
+              : state.updatedAt ? `Updated ${formatCompactRelativeTimestamp(state.updatedAt, nowMs)}` : "Not yet updated"}
+          </time>
+        ) : <>
         {scannedAt !== undefined ? (
           <>
             <time dateTime={scannedAt || undefined} title={formatUtcTimestamp(scannedAt)}>
@@ -1507,6 +1528,7 @@ function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
         <span className="refresh-updated" title={formatUtcTimestamp(evaluatedAt !== undefined ? evaluatedAt : state.updatedAt)}>
           {evaluatedAt !== undefined ? evaluatedAt ? `Evaluated ${evaluationAge}` : "No evaluation available" : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
         </span>
+        </>}
       </span>
     </div>
   );
@@ -1763,7 +1785,7 @@ function TokenBalances({
   );
 }
 
-function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpand }) {
+function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpand, compact = false }) {
   const detailsId = useId();
   const total = row.totalUsdValue == null ? "?" : `$${formatBalance(row.totalUsdValue)}`;
   const paused = row.balances.filter((balance) => getKickPrepareTooltip(balance));
@@ -1786,7 +1808,8 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
         className={`reward-summary-button${total.length > 11 ? " has-long-total" : ""}`}
         onClick={onToggleExpand}
         aria-expanded={expanded}
-        aria-controls={detailsId}
+        aria-controls={compact ? undefined : detailsId}
+        aria-haspopup={compact ? "dialog" : undefined}
         aria-label={`${expanded ? "Collapse" : "Expand"} rewards for ${formatStrategyDisplayName(
           row.sourceName
         )}`}
@@ -1795,11 +1818,11 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
         {!expanded ? (
           <>
             <span className="reward-logos" aria-hidden="true">
-              {row.balances.slice(0, 3).map((balance) => (
+              {row.balances.slice(0, compact ? 2 : 3).map((balance) => (
                 <TokenLogo key={balance.tokenAddress} src={balance.tokenLogoUrl} alt="" />
               ))}
-              {row.balances.length > 3 ? (
-                <span className="reward-more">+{row.balances.length - 3}</span>
+              {row.balances.length > (compact ? 2 : 3) ? (
+                <span className="reward-more">+{row.balances.length - (compact ? 2 : 3)}</span>
               ) : null}
             </span>
             <span
@@ -1815,7 +1838,7 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
           </>
         ) : null}
       </button>
-      {!expanded ? (
+      {!expanded && !compact ? (
         <div className="reward-caption">
           <span className="reward-symbols" title={symbols.join(" + ")}>
             {symbols.join(" + ")}
@@ -1870,6 +1893,36 @@ function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpan
   );
 }
 
+function MobileStrategyRow({ row, nowMs, latestScanAt, duplicateName, onOpen, onOpenRewards }) {
+  const latestKick = row.kicks[0];
+  const paused = row.balances.some(balance => getKickPrepareTooltip(balance));
+  const disabled = row.balances.some(balance => balance.auctionSellTokenStatus === "disabled");
+  const unknown = row.balances.some(balance => balance.auctionSellTokenStatus === "unknown");
+  return <tr className="strategy-row ledger-row mobile-summary-row" data-strategy={row.sourceAddress}>
+    <td colSpan={4} className="mobile-summary-cell">
+      <div className="mobile-summary-grid">
+        <div className="strategy-identity-cell">
+          <EntityIdentity primary={formatStrategyDisplayName(row.sourceName)} address={row.sourceAddress}
+            showAddress={false} onOpen={onOpen} />
+        </div>
+        <div className="balances-cell">
+          <RewardSummary row={row} compact expanded={false} onToggleExpand={onOpenRewards} />
+        </div>
+        <div className="mobile-row-meta">
+          {duplicateName ? <span className="mobile-identity-hint">{shortenAddress(checksumAddress(row.sourceAddress))}</span> : null}
+          <span>{latestKick ? `Last kick ${formatCompactRelativeTimestamp(latestKick.createdAt, nowMs)}` : "No activity"}</span>
+          {!row.auctionAddress ? <span className="mobile-row-warning">Needs auction</span> : null}
+          {paused ? <span className="mobile-row-warning">Paused</span> : null}
+          {disabled ? <span className="mobile-row-warning">Not enabled</span> : null}
+          {unknown ? <span className="mobile-row-warning">Status unknown</span> : null}
+          {row.totalUsdValue == null ? <span>Unpriced rewards</span> : null}
+          <RowScanStatus row={row} latestScanAt={latestScanAt} />
+        </div>
+      </div>
+    </td>
+  </tr>;
+}
+
 function RowScanStatus({ row, latestScanAt }) {
   const rowTime = new Date(row.scannedAt).getTime();
   const latestTime = new Date(latestScanAt).getTime();
@@ -1904,12 +1957,22 @@ function StrategyDetailContent({
   onDeploy,
   onCheckDeploy,
   initialHistoryExpanded = false,
+  rewardsFirst = false,
 }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(() => initialHistoryExpanded);
+  const rewards = <div className="kick-detail-item strategy-detail-balances">
+    <div className="kick-detail-label">Token Balances</div>
+    <div className="kick-detail-value">
+      {row.balances.length ? (
+        <TokenBalances balances={row.balances} displayMode={displayMode} onToggleMode={onToggleMode} />
+      ) : <div className="row-secondary">No balances above the visibility threshold.</div>}
+    </div>
+  </div>;
 
   return (
     <div className="kick-detail-grid strategy-detail-grid">
+      {rewardsFirst ? rewards : null}
       <div className="kick-detail-item">
         <div className="kick-detail-label">Last Scan</div>
         <div
@@ -1980,20 +2043,7 @@ function StrategyDetailContent({
           />
         </div>
       </div>
-      <div className="kick-detail-item strategy-detail-balances">
-        <div className="kick-detail-label">Token Balances</div>
-        <div className="kick-detail-value">
-          {row.balances.length ? (
-            <TokenBalances
-              balances={row.balances}
-              displayMode={displayMode}
-              onToggleMode={onToggleMode}
-            />
-          ) : (
-            <div className="row-secondary">No balances above the visibility threshold.</div>
-          )}
-        </div>
-      </div>
+      {!rewardsFirst ? rewards : null}
     </div>
   );
 }
@@ -2033,6 +2083,7 @@ function StrategyDetailModal({
   onDeploy,
   onCheckDeploy,
   initialHistoryExpanded = false,
+  rewardsFirst = false,
   onClose,
 }) {
   return (
@@ -2046,6 +2097,7 @@ function StrategyDetailModal({
         onDeploy={onDeploy}
         onCheckDeploy={onCheckDeploy}
         initialHistoryExpanded={initialHistoryExpanded}
+        rewardsFirst={rewardsFirst}
       />
     </DetailModal>
   );
@@ -2640,6 +2692,8 @@ export default function App() {
   const [showZeroBalance, setShowZeroBalance] = useState(false);
   const [showClosedVaults, setShowClosedVaults] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [strategyFiltersOpen, setStrategyFiltersOpen] = useState(false);
+  const [strategyDetailSection, setStrategyDetailSection] = useState("overview");
   const dashboard = useLiveData(apiUrl("/dashboard"), {
     active: activePage === "strategies" || activePage === "fee-burner",
     viewKey: activePage,
@@ -2800,6 +2854,15 @@ export default function App() {
     [decoratedRows],
   );
 
+  const duplicateStrategyNames = useMemo(() => {
+    const counts = new Map();
+    for (const row of strategyRows) {
+      const name = formatStrategyDisplayName(row.sourceName);
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [strategyRows]);
+
   const feeBurnerRows = useMemo(
     () => decoratedRows.filter((row) => row.sourceType === "fee_burner"),
     [decoratedRows],
@@ -2897,7 +2960,7 @@ export default function App() {
   const orderedStrategyRows = useStableRowOrder(
     filteredStrategyRows,
     JSON.stringify([searchTerm, selectedToken, showZeroBalance, showClosedVaults, balanceSortDirection]),
-    tableHovered || tableFocused || Boolean(deployConfirm) || Object.values(deployStates).some((state) => ["preparing", "wallet", "checking"].includes(state.status)),
+    tableHovered || tableFocused || expandedStrategyRows.size > 0 || Boolean(deployConfirm) || Object.values(deployStates).some((state) => ["preparing", "wallet", "checking"].includes(state.status)),
   );
 
   const latestVisibleScan = useMemo(() => {
@@ -2939,7 +3002,8 @@ export default function App() {
     });
   }
 
-  function toggleStrategyExpand(sourceAddress) {
+  function toggleStrategyExpand(sourceAddress, section = "overview") {
+    setStrategyDetailSection(section);
     setExpandedStrategyRows((prev) => {
       if (prev.has(sourceAddress)) {
         const next = new Set(prev);
@@ -3129,6 +3193,12 @@ export default function App() {
     setThemePreference(next);
   }
 
+  const rewardSortButton = <button type="button" className="th-sort-button" onClick={toggleBalanceSortDirection}
+    aria-label={`Sort rewards ${balanceSortDirection === "desc" ? "ascending" : "descending"}`}
+    title={`Sort by total token USD (${balanceSortDirection === "desc" ? "descending" : "ascending"})`}>
+    USD <span className="sort-indicator" aria-hidden="true">{balanceSortDirection === "desc" ? "↓" : "↑"}</span>
+  </button>;
+
   return (
     <main className="page">
       <header className="header">
@@ -3167,7 +3237,7 @@ export default function App() {
 
       {activePage === "strategies" ? (
       <>
-      <section className="toolbar">
+      <section className="toolbar strategy-toolbar">
         <div className="toolbar-controls">
           <label className="control control-search">
             <input
@@ -3175,10 +3245,13 @@ export default function App() {
               aria-label="Search strategies, vaults, tokens, addresses"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search strategies, vaults, tokens, addresses..."
+              placeholder={isMobile ? "Search strategies…" : "Search strategies, vaults, tokens, addresses..."}
             />
           </label>
 
+          <MobileFilterToggle expanded={strategyFiltersOpen} onToggle={() => setStrategyFiltersOpen(value => !value)}
+            count={Number(selectedToken !== ALL_TOKENS) + Number(showZeroBalance) + Number(showClosedVaults)} controls="strategy-filters" />
+          <div id="strategy-filters" className="responsive-filter-tray" hidden={isMobile && !strategyFiltersOpen}>
           <label className="control control-token">
             <select
               aria-label="Filter by reward token"
@@ -3214,13 +3287,15 @@ export default function App() {
             />
             <span>Include retired</span>
           </label>
+          </div>
         </div>
 
       </section>
 
-      <div className="toolbar-meta page-meta">
-        <span className="result-count" role="status"><strong>{filteredStrategyRows.length.toLocaleString()}</strong> of {strategyRows.length.toLocaleString()} strategies</span>
-        <RefreshStatus state={dashboard} scannedAt={latestVisibleScan} nowMs={nowMs} />
+      <div className="toolbar-meta page-meta strategy-meta">
+        <span className="result-count" role="status" title={`${filteredStrategyRows.length} of ${strategyRows.length} strategies`}><strong>{filteredStrategyRows.length.toLocaleString()}</strong>{isMobile ? " strategies" : ` of ${strategyRows.length.toLocaleString()} strategies`}</span>
+        <RefreshStatus state={dashboard} scannedAt={latestVisibleScan} nowMs={nowMs} compact={isMobile} />
+        {isMobile ? rewardSortButton : null}
       </div>
 
       {error ? <p className="error">{error}</p> : null}
@@ -3239,18 +3314,7 @@ export default function App() {
               <th id="activity-heading" scope="col" className="history-col">Last activity</th>
               <th id="rewards-heading" scope="col" className="token-col" aria-sort={balanceSortDirection === "desc" ? "descending" : "ascending"}>
                 <div className="rewards-heading"><span>Rewards</span>
-                <button
-                  type="button"
-                  className="th-sort-button"
-                  onClick={toggleBalanceSortDirection}
-                  aria-label={`Sort rewards ${balanceSortDirection === "desc" ? "ascending" : "descending"}`}
-                  title={`Sort by total token USD (${balanceSortDirection === "desc" ? "descending" : "ascending"})`}
-                >
-                  USD
-                  <span className="sort-indicator" aria-hidden="true">
-                    {balanceSortDirection === "desc" ? "↓" : "↑"}
-                  </span>
-                </button>
+                {!isMobile ? rewardSortButton : null}
                 </div>
               </th>
             </tr>
@@ -3265,7 +3329,10 @@ export default function App() {
             {!loadingRows
               ? orderedStrategyRows.map((row) => (
                   <Fragment key={row.sourceAddress}>
-                    <tr
+                    {isMobile ? <MobileStrategyRow row={row} nowMs={nowMs} latestScanAt={latestVisibleScan}
+                      duplicateName={duplicateStrategyNames.has(formatStrategyDisplayName(row.sourceName))}
+                      onOpen={() => toggleStrategyExpand(row.sourceAddress)}
+                      onOpenRewards={() => toggleStrategyExpand(row.sourceAddress, "rewards")} /> : <tr
                       className={`strategy-row ledger-row ${expandedStrategyRows.has(row.sourceAddress) ? "is-expanded" : ""}`}
                       data-strategy={row.sourceAddress}
                     >
@@ -3311,7 +3378,7 @@ export default function App() {
                           onToggleMode={toggleDisplayMode}
                         />
                       </td>
-                    </tr>
+                    </tr>}
                     {expandedStrategyRows.has(row.sourceAddress) && !isMobile ? (
                       <StrategyDetailPanel
                         row={row}
@@ -3334,6 +3401,7 @@ export default function App() {
                         onDeploy={() => handleDeployStrategy(row)}
                         onCheckDeploy={() => handleCheckDeployment(row.sourceAddress)}
                         initialHistoryExpanded={expandedKickRows.has(row.sourceAddress)}
+                        rewardsFirst={strategyDetailSection === "rewards"}
                         onClose={() => toggleStrategyExpand(row.sourceAddress)}
                       />
                     ) : null}

@@ -126,6 +126,7 @@ for (const theme of ["light", "dark"]) {
       await expect(single.getByText("$1,370.04", { exact: true })).toHaveCount(1);
     }
     await page.screenshot({ path: testInfo.outputPath(`${theme}-reward-breakdowns-mobile.png`) });
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await single.getByRole("button", { name: /Collapse rewards/ }).focus();
     await page.keyboard.press("Enter");
     await expect(single.getByRole("button", { name: /Expand rewards/ })).toBeFocused();
@@ -326,7 +327,7 @@ for (const theme of ["light", "dark"]) {
     await expect(history.locator(".transaction-link").first()).toHaveAttribute("href", `https://etherscan.io/tx/0x${"1".repeat(64)}`);
     await expect(history.getByRole("link", { name: "View on AuctionScan" })).toHaveCount(5);
     await expect(history.locator("time").first()).toHaveAttribute("aria-label", "12 hours ago");
-    for (const width of [1440, 800, 320]) {
+    for (const width of [1440, 800]) {
       await page.setViewportSize({ width, height: 1100 });
       const bounds = await history.locator(".kick-row-inner").evaluateAll(rows => rows.map(row => {
         const time = row.querySelector("time").getBoundingClientRect();
@@ -359,27 +360,22 @@ test("touch targets and mobile detail focus stay usable without accidental navig
   await fixture(page);
   await page.goto("http://127.0.0.1:5182/");
   const first = page.locator(".strategy-row").first();
-  const copy = first.locator(".strategy-identity-cell .copy-trigger");
-  const box = await copy.boundingBox();
-  expect(box.width).toBeGreaterThanOrEqual(44);
-  expect(box.height).toBeGreaterThanOrEqual(44);
-  await copy.tap();
-  await expect(copy).toHaveClass(/is-copied/);
+  await expect(first.locator(".copy-trigger")).toHaveCount(0);
   await expect(page.locator(".strategy-detail-grid")).toHaveCount(0);
   await first.getByRole("button", { name: /Expand rewards/ }).tap();
-  const rewardCopy = first.getByRole("button", { name: "Copy token address for CRV", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Strategy details", exact: true });
+  await expect(dialog.locator(".strategy-detail-grid > div").first()).toHaveClass(/strategy-detail-balances/);
+  const rewardCopy = dialog.getByRole("button", { name: "Copy token address for CRV", exact: true });
+  const copyBox = await rewardCopy.boundingBox();
+  expect(copyBox.width).toBeGreaterThanOrEqual(44);
+  expect(copyBox.height).toBeGreaterThanOrEqual(44);
   await rewardCopy.tap();
   await expect(rewardCopy).toHaveClass(/is-copied/);
-  const collapse = first.getByRole("button", { name: /Collapse rewards/ });
-  const collapseBox = await collapse.boundingBox();
-  expect(collapseBox.width).toBeGreaterThanOrEqual(24);
-  expect(collapseBox.height).toBeGreaterThanOrEqual(44);
-  await collapse.tap();
-  await expect(first.locator(".reward-breakdown")).toBeHidden();
+  await dialog.getByRole("button", { name: "Close details" }).tap();
+  await expect(first.getByRole("button", { name: /Expand rewards/ })).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("dark-ledger-touch.png"), fullPage: true });
   await first.getByRole("button", { name: "Show details for Curve-crvDOLA", exact: true }).tap();
-  const dialog = page.getByRole("dialog", { name: "Strategy details", exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Close details" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");

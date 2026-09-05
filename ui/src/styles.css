@@ -45,9 +45,6 @@
   font-size: 11px;
 }
 
-.refresh-status.is-stale {
-  color: var(--warning);
-}
 .refresh-updated {
   color: var(--text-secondary);
 }
@@ -209,9 +206,7 @@
 .alert-evidence-list dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .alerts-empty { display: grid; gap: 6px; padding: 24px 0; color: var(--text-secondary); }
 .alerts-empty strong { font-size: 12px; font-weight: 500; color: var(--text-primary); }
-.alerts-empty.is-current strong { color: var(--success); }
 .alerts-empty span { font-size: 11px; }
-.alert-health-warning { color: var(--warning); margin: 12px 0; }
 @media (max-width: 780px) {
   .alerts-meta .refresh-status { flex-basis: 100%; flex-wrap: wrap; margin: 0; }
   .alert-expanded-content { grid-template-columns: minmax(0, 1fr); }

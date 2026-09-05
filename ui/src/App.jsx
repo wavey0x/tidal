@@ -26,8 +26,6 @@ const FAILED_STATUSES = new Set(["REVERTED", "ERROR", "ESTIMATE_FAILED"]);
 const FAINT_STATUSES = new Set(["DRY_RUN", "SUBMITTED", "USER_SKIPPED", "SKIP"]);
 const KICK_LOG_PAGE_SIZE = 25;
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
-// Match the scanner-staleness threshold in config/server.yaml.
-const SCAN_STALE_AFTER_MS = 90 * 60 * 1000;
 
 function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
@@ -1493,19 +1491,15 @@ function KickLogPager({
 }
 
 function RefreshStatus({ state, scannedAt, evaluatedAt, nowMs = Date.now() }) {
-  const evaluationStale = evaluatedAt !== undefined && (!Number.isFinite(Date.parse(evaluatedAt)) || Math.abs(nowMs - Date.parse(evaluatedAt)) > 65000);
   // An evaluation has already happened; tolerate small server/client clock skew in its label.
   const evaluationAge = Math.abs(nowMs - Date.parse(evaluatedAt)) < 60000 ? "just now" : formatRelativeTimestamp(evaluatedAt, nowMs);
-  const stale = state.error || evaluationStale || (state.updatedAt && nowMs - state.updatedAt > 65000);
-  const scanOverdue = scannedAt && nowMs - new Date(scannedAt).getTime() > SCAN_STALE_AFTER_MS;
   return (
-    <div className={`refresh-status${stale || scanOverdue ? " is-stale" : ""}`} aria-busy={state.refreshing} title="Updates automatically every 30 seconds while visible and when you return to this page">
+    <div className="refresh-status" aria-busy={state.refreshing} title="Updates automatically every 30 seconds while visible and when you return to this page">
       <span role="status">
-        {stale ? "Data may be stale · " : ""}
         {scannedAt !== undefined ? (
           <>
             <time dateTime={scannedAt || undefined} title={formatUtcTimestamp(scannedAt)}>
-              {scannedAt ? `${scanOverdue ? "Scan overdue" : "Scanned"} ${formatRelativeTimestamp(scannedAt, nowMs)}` : "No scan available"}
+              {scannedAt ? `Scanned ${formatRelativeTimestamp(scannedAt, nowMs)}` : "No scan available"}
             </time>
             <span aria-hidden="true"> · </span>
           </>
@@ -2575,26 +2569,15 @@ function AlertsPage({ state, nowMs }) {
     items.length === needsAction.length + watching.length &&
     Number.isInteger(data?.needsActionCount) &&
     data.needsActionCount === needsAction.length;
-  const evaluatedTime = Date.parse(data?.evaluatedAt);
-  const scannedTime = Date.parse(data?.latestSuccessfulScanAt);
-  const evaluationFresh = Number.isFinite(evaluatedTime) && Math.abs(nowMs - evaluatedTime) <= 65000;
-  const scanFresh = Number.isFinite(scannedTime) && Math.abs(nowMs - scannedTime) <= SCAN_STALE_AFTER_MS;
-  const current =
-    hasResults &&
-    !error &&
-    evaluationFresh &&
-    scanFresh &&
-    Number.isFinite(state.updatedAt) &&
-    nowMs - state.updatedAt <= 65000;
   return (
     <section className="alerts-page">
       <div className="alerts-meta">
         <div className="alert-counts" role="status">
           <span>
-            <strong>{loading && !data ? "—" : needsAction.length}</strong> Needs action
+            <strong>{hasResults ? needsAction.length : "—"}</strong> Needs action
           </span>
           <span>
-            <strong>{loading && !data ? "—" : watching.length}</strong> Watching
+            <strong>{hasResults ? watching.length : "—"}</strong> Watching
           </span>
         </div>
         <RefreshStatus state={state} evaluatedAt={data?.evaluatedAt || null} nowMs={nowMs} />
@@ -2609,24 +2592,9 @@ function AlertsPage({ state, nowMs }) {
           {error}
         </p>
       ) : null}
-      {!loading && !current ? (
-        <p className="alert-health-warning" role="status">
-          Current health is unverified.{" "}
-          {error
-            ? "Refresh failed; showing the last available data."
-            : !hasResults
-            ? "Alert results are incomplete."
-            : !evaluationFresh
-            ? "Alert evaluation is missing or overdue."
-            : !scanFresh
-            ? "The latest successful scan is missing or overdue."
-            : "Refresh is overdue."}{" "}
-          Wait for a current update before acting. Updates retry automatically.
-        </p>
-      ) : null}
       {!loading && !items.length ? (
-        <div className={`alerts-empty${current ? " is-current" : ""}`}>
-          <strong>{current ? "No operator action needed" : "No current alert results to confirm"}</strong>
+        <div className="alerts-empty">
+          <strong>{hasResults ? "No alerts in this snapshot" : "Alert results unavailable"}</strong>
           <span>
             Latest successful scan{" "}
             <time

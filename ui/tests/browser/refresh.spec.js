@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockPublicApi, refreshOnFocus } from "./fixtures";
+import { mockPublicApi, refreshOnFocus, contrastRatio } from "./fixtures";
 
 test("all pages retain freshness metadata without manual refresh buttons", async ({ page }) => {
   await mockPublicApi(page);
@@ -21,7 +21,7 @@ test("Automatic focus refresh preserves last good dashboard data on failure", as
   state.failed = true;
   await refreshOnFocus(page);
   await expect(page.getByText("Unable to load dashboard", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Data may be stale/)).toBeVisible();
+  await expect(page.getByText(/Data may be stale/)).toHaveCount(0);
   await expect(page.getByText("$2.50", { exact: true })).toBeVisible();
   state.failed = false;
   state.balance = "3";
@@ -111,3 +111,47 @@ test("alerts refresh on entry and repeated focus", async ({ page }) => {
   await refreshOnFocus(page);
   await expect(page.getByLabel("4 alerts need action")).toBeVisible();
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: cached snapshots and slow refreshes never flash age warnings or move alerts`, async ({ page }, testInfo) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.clock.install();
+    const state = await mockPublicApi(page);
+    const timestamp = new Date().toISOString();
+    state.alertsData = { needsActionCount: 1, evaluatedAt: timestamp, latestSuccessfulScanAt: timestamp, items: [{
+      id: "stable-alert", title: "Automation paused", status: "needs_action", severity: "high", summary: "Review this auction.", openedAt: timestamp,
+    }] };
+    await page.goto("/");
+    await expect(page.getByLabel("1 alerts need action")).toBeVisible();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+    await page.clock.runFor(90000);
+    let release;
+    state.holdAlerts = new Promise(resolve => { release = resolve; });
+    await page.getByRole("tab", { name: /Alerts/ }).click();
+    const alert = page.getByRole("article", { name: "Automation paused", exact: true });
+    await expect(alert).toBeVisible();
+    await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "true");
+    const position = await alert.boundingBox();
+    const color = await page.locator(".refresh-status").evaluate(node => getComputedStyle(node).color);
+    // Observe every DOM change through the former threshold and the resolving fetch.
+    await page.evaluate(() => {
+      window.ageWarnings = [];
+      const record = () => {
+        if (document.querySelector(".alert-health-warning, .refresh-status.is-stale") || /Data may be stale|Scan overdue|Current health is unverified/.test(document.body.innerText)) window.ageWarnings.push(document.body.innerText);
+      };
+      record();
+      new MutationObserver(record).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    });
+    await page.clock.runFor(90000);
+    expect(await alert.boundingBox()).toEqual(position);
+    state.alertsData.evaluatedAt = await page.evaluate(() => new Date().toISOString());
+    release();
+    await expect(page.locator(".refresh-status")).toHaveAttribute("aria-busy", "false");
+    await expect(page.locator(".refresh-status")).toContainText("Evaluated just now");
+    expect(await alert.boundingBox()).toEqual(position);
+    expect(await page.locator(".refresh-status").evaluate(node => getComputedStyle(node).color)).toBe(color);
+    expect(await page.evaluate(() => window.ageWarnings)).toEqual([]);
+    expect(await contrastRatio(page.locator(".refresh-status"))).toBeGreaterThanOrEqual(4.5);
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-quiet-snapshot.png`) });
+  });
+}

@@ -35,7 +35,7 @@ export async function contrastRatio(locator) {
 export async function mockPublicApi(page) {
   const state = { balance: "1", failed: false, dashboardReads: 0, logReads: [], alertReads: 0, holdDashboard: null,
     warnings: [], defaultsWarnings: [], prepareWarnings: [], rows: null, logsData: null, logQueries: [], logsFailed: false,
-    alertsData: null, alertsFailed: false, latestScanAt: "2026-09-04T20:00:00Z" };
+    alertsData: null, alertsFailed: false, holdAlerts: null, latestScanAt: "2026-09-04T20:00:00Z" };
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     return url.hostname === "127.0.0.1" ? route.continue() : route.abort();
@@ -71,6 +71,7 @@ export async function mockPublicApi(page) {
       if (state.logsData) data = typeof state.logsData === "function" ? state.logsData(url) : state.logsData;
     } else if (url.pathname.endsWith("/alerts")) {
       state.alertReads += 1;
+      if (state.holdAlerts) await state.holdAlerts;
       if (state.alertsFailed) return route.fulfill({ status: 503, json: { detail: "fixture unavailable" } });
       data = { items: [], needsActionCount: Number(state.balance), evaluatedAt: "2026-09-04T20:00:00Z" };
       if (state.alertsData) data = state.alertsData;

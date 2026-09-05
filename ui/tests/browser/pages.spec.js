@@ -151,7 +151,8 @@ test("log refresh pins the visible page during interaction and preserves open de
   expect(await ids()).toEqual(before);
   state.logsFailed = true;
   await refreshOnFocus(page);
-  await expect(page.locator(".refresh-status")).toContainText("Data may be stale");
+  await expect(page.getByText("Unable to load logs", { exact: true })).toBeVisible();
+  await expect(page.locator(".refresh-status")).not.toContainText("Data may be stale");
   await expect(page.locator(".log-detail-content")).toBeVisible();
   state.logsFailed = false;
   await page.reload();
@@ -290,18 +291,19 @@ for (const theme of ["light", "dark"]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     state.alertsFailed = true;
     await refreshOnFocus(page);
-    await expect(page.locator(".alert-health-warning")).toContainText("Current health is unverified");
+    await expect(page.getByText("Unable to load alerts", { exact: true })).toBeVisible();
+    await expect(page.locator(".alert-health-warning")).toHaveCount(0);
     await expect(alert).toBeVisible();
     await expect(page.getByText("No operator action needed", { exact: true })).toHaveCount(0);
     expect(writes).toEqual([]);
   });
 }
 
-test("alerts never show healthy empty results for stale, missing, failed or inconsistent data", async ({ page }) => {
+test("alerts describe snapshots without freshness banners or unverified health claims", async ({ page }) => {
   const state = await mockPublicApi(page);
   state.alertsData = { needsActionCount: 0, items: [], evaluatedAt: now(), latestSuccessfulScanAt: now() };
   await page.goto("/alerts");
-  await expect(page.getByText("No operator action needed", { exact: true })).toBeVisible();
+  await expect(page.getByText("No alerts in this snapshot", { exact: true })).toBeVisible();
   state.alertsData.evaluatedAt = new Date(Date.now() + 20000).toISOString();
   await refreshOnFocus(page);
   await expect(page.locator(".refresh-status")).toContainText("Evaluated just now");
@@ -312,12 +314,17 @@ test("alerts never show healthy empty results for stale, missing, failed or inco
   ]) {
     state.alertsData = { needsActionCount: 0, items: [], evaluatedAt: now(), latestSuccessfulScanAt: now(), ...invalid };
     await refreshOnFocus(page);
-    await expect(page.locator(".alert-health-warning")).toBeVisible();
+    await expect(page.locator(".alert-health-warning")).toHaveCount(0);
+    const invalidResults = Object.hasOwn(invalid, "items") || Object.hasOwn(invalid, "needsActionCount");
+    await expect(page.locator(".alerts-empty strong")).toHaveText(invalidResults ? "Alert results unavailable" : "No alerts in this snapshot");
+    await expect(page.locator(".alert-counts strong")).toHaveText(invalidResults ? ["—", "—"] : ["0", "0"]);
     await expect(page.getByText("No operator action needed", { exact: true })).toHaveCount(0);
   }
   state.alertsFailed = true;
   await page.reload();
-  await expect(page.locator(".alert-health-warning")).toBeVisible();
+  await expect(page.getByText("Unable to load alerts", { exact: true })).toBeVisible();
+  await expect(page.locator(".alerts-empty strong")).toHaveText("Alert results unavailable");
+  await expect(page.locator(".alert-health-warning")).toHaveCount(0);
   await expect(page.getByText("No operator action needed", { exact: true })).toHaveCount(0);
 });
 
@@ -404,7 +411,8 @@ for (const theme of ["light", "dark"]) {
     await page.screenshot({ path: testInfo.outputPath(`${theme}-fee-inventory-mobile.png`) });
     state.failed = true;
     await refreshOnFocus(page);
-    await expect(page.locator(".refresh-status")).toContainText("Data may be stale");
+    await expect(page.getByText("Unable to load dashboard", { exact: true })).toBeVisible();
+    await expect(page.locator(".refresh-status")).not.toContainText("Data may be stale");
     await expect(table.locator(".fee-inventory-total")).toHaveText("$260.00");
     await expect(inventory.locator(".kick-row")).toHaveCount(5);
   });

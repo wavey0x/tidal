@@ -1231,272 +1231,89 @@ function formatProviderAmount(amountOut, decimals, status) {
   return String(amountOut);
 }
 
-function KickDetailContent({ kick, onOpenAuctionScan }) {
+function DetailField({ label, children, error = false }) {
+  return <div className="kick-detail-item">
+    <dt className="kick-detail-label">{label}</dt>
+    <dd className={`kick-detail-value${error ? " error-text" : ""}`}>{children}</dd>
+  </div>;
+}
+
+function DetailGroup({ title, children }) {
+  return <section className="log-detail-group">
+    <h3>{title}</h3>
+    <dl className="kick-detail-grid">{children}</dl>
+  </section>;
+}
+
+function KickDetailContent({ kick }) {
   const [showRelativeTimestamp, setShowRelativeTimestamp] = useState(false);
   const operationMeta = getOperationMeta(kick.operationType);
-  const formattedSellTokenAddress = checksumAddress(kick.tokenAddress);
-  const formattedWantAddress = checksumAddress(kick.wantAddress);
-  let quoteProviders = null;
-  let quoteSummary = null;
-  let tokenOutDecimals = null;
-  let quoteRequestUrl = null;
-  let identifierLabel = null;
-  let identifierValue = null;
-
-  if (kick.quoteResponseJson) {
-    try {
-      const parsed = JSON.parse(kick.quoteResponseJson);
-      if (parsed.providers && typeof parsed.providers === "object") {
-        tokenOutDecimals = parsed.tokenOutDecimals ?? parsed.token_out?.decimals ?? null;
-        quoteProviders = Object.entries(parsed.providers).map(([name, entry]) => ({
-          name,
-          status: entry?.status ?? null,
-          amountOut: entry?.amount_out ?? null,
-        }));
-      }
-      if (parsed.summary && typeof parsed.summary === "object") {
-        quoteSummary = parsed.summary;
-      }
-      if (parsed.requestUrl) {
-        quoteRequestUrl = parsed.requestUrl;
-      }
-    } catch {
-      // ignore parse errors
-    }
-  }
-
-  if (kick.runId && kick.runId.startsWith("api-action:")) {
-    identifierLabel = "Action ID";
-    identifierValue = kick.runId.slice("api-action:".length) || kick.runId;
-  } else if (kick.runId && kick.runId !== "api-prepare") {
-    identifierLabel = "Run ID";
-    identifierValue = kick.runId;
-  }
-
-  const bpsToPercent = (bps) => {
-    if (bps == null) return null;
-    return `${(Number(bps) / 100).toFixed(1)}%`;
+  let quote = null;
+  try { quote = kick.quoteResponseJson ? JSON.parse(kick.quoteResponseJson) : null; } catch { /* Preserve the event even if quote diagnostics are malformed. */ }
+  const providers = quote?.providers && typeof quote.providers === "object" ? Object.entries(quote.providers) : [];
+  const summary = quote?.summary;
+  const decimals = quote?.tokenOutDecimals ?? quote?.token_out?.decimals ?? null;
+  const providerAmount = (amount, status) => {
+    const value = formatProviderAmount(amount, decimals, status);
+    return amount != null ? `${value} ${decimals == null ? "raw units" : kick.wantSymbol || "output tokens"}${status ? ` · ${status}` : ""}` : value;
   };
+  const actionId = kick.runId?.startsWith("api-action:");
+  const identifier = actionId ? kick.runId.slice("api-action:".length) || kick.runId : kick.runId !== "api-prepare" ? kick.runId : null;
+  const bpsToPercent = (bps) => `${(Number(bps) / 100).toFixed(2)}%`;
+  const hasDiagnostics = kick.stuckAbortReason || kick.errorMessage || providers.length || summary || quote?.requestUrl;
+  const tokenValue = (address, symbol) => address ? <WantTokenValue address={address} symbol={symbol} /> : symbol || "—";
 
-  return (
-    <div className="kick-detail-grid">
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Action</div>
-        <div className="kick-detail-value">{operationMeta.detailLabel}</div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Timestamp</div>
-        <div
-          className="kick-detail-value clickable"
-          title={showRelativeTimestamp ? formatTimestamp(kick.createdAt) : kick.createdAt}
-          onClick={() => setShowRelativeTimestamp(v => !v)}
-          style={{ cursor: "pointer" }}
-        >
-          {kick.createdAt
-            ? showRelativeTimestamp
-              ? formatRelativeTimestamp(kick.createdAt, Date.now())
-              : formatTimestamp(kick.createdAt)
-            : "—"}
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Source</div>
-        <div className="kick-detail-value">
-          {kick.sourceName ? <div className="row-primary">{kick.sourceName}</div> : null}
-          <AddressCopy address={kick.sourceAddress} />
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Tokens</div>
-        <div className="kick-detail-value kick-detail-tokens">
-          <span>
-            <span className="kick-detail-token-direction">{operationMeta.primaryTokenLabel}</span>
-            <span className="address-copy" title={formattedSellTokenAddress}>
-              <span className="mono address-value">{kick.tokenSymbol || shortenAddress(formattedSellTokenAddress)}</span>
-              <CopyIconButton
-                valueToCopy={formattedSellTokenAddress}
-                title={`Copy address ${formattedSellTokenAddress}`}
-                ariaLabel={`Copy address ${formattedSellTokenAddress}`}
-              />
-            </span>
-          </span>
-          <span>
-            <span className="kick-detail-token-direction">{operationMeta.secondaryTokenLabel}</span>
-            {formattedWantAddress ? (
-              <span className="address-copy" title={formattedWantAddress}>
-                <span className="mono address-value">{kick.wantSymbol || shortenAddress(formattedWantAddress)}</span>
-                <CopyIconButton
-                  valueToCopy={formattedWantAddress}
-                  title={`Copy address ${formattedWantAddress}`}
-                  ariaLabel={`Copy address ${formattedWantAddress}`}
-                />
-              </span>
-            ) : "—"}
-          </span>
-        </div>
-      </div>
-      <div className="kick-detail-item">
-        <div className="kick-detail-label">Normalized Balance</div>
-        <div className="kick-detail-value">
-          {kick.normalizedBalance ? `${formatBalance(kick.normalizedBalance)} ${kick.tokenSymbol || ""}` : "—"}
-        </div>
-      </div>
-      {operationMeta.showKickPricing ? (
-        <>
-          <div className="kick-detail-item">
-            <div className="kick-detail-label">Start Quote</div>
-            <div className="kick-detail-value">
-              {kick.startingPriceDisplay || kick.startingPrice || "—"}
-              {!kick.startingPriceDisplay && kick.startPriceBufferBps != null
-                ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)`
-                : ""}
-            </div>
-          </div>
-          <div className="kick-detail-item">
-            <div className="kick-detail-label">Min Quote</div>
-            <div className="kick-detail-value">
-              {kick.minimumQuote || "—"}
-              {kick.minPriceBufferBps != null ? ` (-${bpsToPercent(kick.minPriceBufferBps)} buffer)` : ""}
-            </div>
-          </div>
-          <div className="kick-detail-item">
-            <div className="kick-detail-label">Min Price (scaled)</div>
-            <div className="kick-detail-value">{kick.minimumPrice || "—"}</div>
-          </div>
-          <div className="kick-detail-item">
-            <div className="kick-detail-label">Quote Amount</div>
-            <div className="kick-detail-value">{kick.quoteAmount || "—"}</div>
-          </div>
-          <div className="kick-detail-item">
-            <div className="kick-detail-label">Step Decay</div>
-            <div className="kick-detail-value">
-              {kick.stepDecayRateBps != null ? `${(Number(kick.stepDecayRateBps) / 100).toFixed(2)}%` : "—"}
-            </div>
-          </div>
-          <div className="kick-detail-item">
-            <div className="kick-detail-label">Pre-Kick Settle</div>
-            <div className="kick-detail-value">
-              {kick.settleToken
-                ? (kick.settleToken === kick.tokenAddress
-                  ? (kick.tokenSymbol || shortenAddress(kick.settleToken))
-                  : shortenAddress(kick.settleToken))
-                : "—"}
-            </div>
-          </div>
-        </>
-      ) : null}
-      {kick.stuckAbortReason ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">{operationMeta.showKickPricing ? "Abort Reason" : "Reason"}</div>
-          <div className="kick-detail-value">{kick.stuckAbortReason}</div>
-        </div>
-      ) : null}
-      {operationMeta.showKickPricing && quoteProviders ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Quote Providers</div>
-          <div className="kick-detail-value">
-            {quoteProviders.map((p) => (
-              <div key={p.name}>
-                {p.name}: {formatProviderAmount(p.amountOut, tokenOutDecimals, p.status)}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {operationMeta.showKickPricing && quoteSummary ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Quote Summary</div>
-          <div className="kick-detail-value">
-            {quoteSummary.requested_providers != null ? (
-              <div>Providers: {quoteSummary.successful_providers ?? 0}/{quoteSummary.requested_providers}</div>
-            ) : null}
-            {quoteSummary.high_amount_out != null ? (
-              <div>High: {formatProviderAmount(quoteSummary.high_amount_out, tokenOutDecimals)}</div>
-            ) : null}
-            {quoteSummary.low_amount_out != null ? (
-              <div>Low: {formatProviderAmount(quoteSummary.low_amount_out, tokenOutDecimals)}</div>
-            ) : null}
-            {quoteSummary.median_amount_out != null ? (
-              <div>Median: {formatProviderAmount(quoteSummary.median_amount_out, tokenOutDecimals)}</div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-      {kick.errorMessage ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Error</div>
-          <div className="kick-detail-value error-text">{kick.errorMessage}</div>
-        </div>
-      ) : null}
-      {identifierLabel ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">{identifierLabel}</div>
-          <div className="kick-detail-value">{identifierValue}</div>
-        </div>
-      ) : null}
-      {kick.txHash ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Tx Hash</div>
-          <div className="kick-detail-value">
-            <EtherscanTxLink txHash={kick.txHash} />
-          </div>
-        </div>
-      ) : null}
-      {kick.blockNumber != null ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Block</div>
-          <div className="kick-detail-value mono">{kick.blockNumber}</div>
-        </div>
-      ) : null}
-      {kick.gasUsed != null ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Gas Used</div>
-          <div className="kick-detail-value mono">{Number(kick.gasUsed).toLocaleString()}</div>
-        </div>
-      ) : null}
-      {kick.gasPriceGwei ? (
-        <div className="kick-detail-item">
-          <div className="kick-detail-label">Gas Price</div>
-          <div className="kick-detail-value mono">{kick.gasPriceGwei} gwei</div>
-        </div>
-      ) : null}
-      {(getAuctionScanHref(kick) || kick.auctionAddress || quoteRequestUrl) ? (
-        <div className="kick-detail-item" style={{ gridColumn: "1 / -1" }}>
-          <div className="kick-detail-value">
-            {getAuctionScanHref(kick) ? (
-              <div>
-                <AuctionScanTextLink kick={kick} />
-              </div>
-            ) : null}
-            {kick.auctionAddress ? (
-              <div>
-                <a
-                  href={`${COW_EXPLORER_URL}${kick.auctionAddress}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="kick-external-link"
-                >
-                  view on 🐮 explorer
-                </a>
-              </div>
-            ) : null}
-            {quoteRequestUrl ? (
-              <div>
-                <a
-                  href={quoteRequestUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="kick-external-link"
-                >
-                  view new quote via 🌊 api
-                </a>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
+  return <div className="log-detail-content">
+    <DetailGroup title="Execution">
+      <DetailField label="Operation">{operationMeta.detailLabel}</DetailField>
+      <DetailField label="Timestamp">
+        <button type="button" className="timestamp-toggle" onClick={() => setShowRelativeTimestamp(value => !value)}
+          title={kick.createdAt || undefined} aria-label="Toggle timestamp format">
+          {showRelativeTimestamp ? formatRelativeTimestamp(kick.createdAt, Date.now()) : formatUtcTimestamp(kick.createdAt)}
+        </button>
+      </DetailField>
+      <DetailField label="Source"><EntityIdentity primary={kick.sourceName || "Unknown source"} address={kick.sourceAddress} /></DetailField>
+      <DetailField label={operationMeta.primaryTokenLabel}>{tokenValue(kick.tokenAddress, kick.tokenSymbol)}</DetailField>
+      <DetailField label={operationMeta.secondaryTokenLabel}>{tokenValue(kick.wantAddress, kick.wantSymbol)}</DetailField>
+      {kick.normalizedBalance != null ? <DetailField label="Balance">{formatBalance(kick.normalizedBalance)} {kick.tokenSymbol}</DetailField> : null}
+      {kick.txHash ? <DetailField label="Transaction"><EtherscanTxLink txHash={kick.txHash} /></DetailField> : null}
+      {kick.blockNumber != null ? <DetailField label="Block">{kick.blockNumber}</DetailField> : null}
+      {kick.gasUsed != null ? <DetailField label="Gas used">{Number(kick.gasUsed).toLocaleString()}</DetailField> : null}
+      {kick.gasPriceGwei != null ? <DetailField label="Gas price">{kick.gasPriceGwei} gwei</DetailField> : null}
+      {identifier ? <DetailField label={actionId ? "Action ID" : "Run ID"}>{identifier}</DetailField> : null}
+    </DetailGroup>
+    {operationMeta.showKickPricing ? <DetailGroup title="Pricing">
+      <DetailField label="Start quote">{kick.startingPriceDisplay || kick.startingPrice || "—"}
+        {!kick.startingPriceDisplay && kick.startPriceBufferBps != null ? ` (+${bpsToPercent(kick.startPriceBufferBps)} buffer)` : ""}</DetailField>
+      <DetailField label="Minimum quote">{kick.minimumQuote ?? "—"}{kick.minPriceBufferBps != null ? ` (-${bpsToPercent(kick.minPriceBufferBps)} buffer)` : ""}</DetailField>
+      <DetailField label="Minimum price · scaled">{kick.minimumPrice ?? "—"}</DetailField>
+      <DetailField label="Quote amount">{kick.quoteAmount ?? "—"}</DetailField>
+      {kick.stepDecayRateBps != null ? <DetailField label="Step decay">{bpsToPercent(kick.stepDecayRateBps)}</DetailField> : null}
+      {kick.settleToken ? <DetailField label="Pre-kick settle">{tokenValue(kick.settleToken, kick.settleToken === kick.tokenAddress ? kick.tokenSymbol : null)}</DetailField> : null}
+    </DetailGroup> : null}
+    {hasDiagnostics ? <DetailGroup title="Diagnostics">
+      {kick.stuckAbortReason ? <DetailField label="Reason">{kick.stuckAbortReason}</DetailField> : null}
+      {kick.errorMessage ? <DetailField label="Error" error>{kick.errorMessage}</DetailField> : null}
+      {summary ? <DetailField label="Quote summary">
+        {summary.requested_providers != null ? <div>Providers {summary.successful_providers ?? 0}/{summary.requested_providers}</div> : null}
+        {summary.high_amount_out != null ? <div>High {providerAmount(summary.high_amount_out)}</div> : null}
+        {summary.low_amount_out != null ? <div>Low {providerAmount(summary.low_amount_out)}</div> : null}
+        {summary.median_amount_out != null ? <div>Median {providerAmount(summary.median_amount_out)}</div> : null}
+      </DetailField> : null}
+      {providers.length ? <DetailField label="Provider responses">
+        <details className="provider-details"><summary>{providers.length} providers</summary>
+          <dl className="provider-ledger">{providers.map(([name, entry]) => <div key={name}>
+            <dt>{name}</dt><dd>{providerAmount(entry?.amount_out, entry?.status)}</dd>
+          </div>)}</dl>
+        </details>
+      </DetailField> : null}
+      {quote?.requestUrl ? <DetailField label="Quote request"><a className="kick-external-link" href={quote.requestUrl} target="_blank" rel="noopener noreferrer">View quote via API <OutboundLinkGlyph /></a></DetailField> : null}
+    </DetailGroup> : null}
+    {(getAuctionScanHref(kick) || kick.auctionAddress) ? <div className="log-detail-links">
+      {getAuctionScanHref(kick) ? <AuctionScanTextLink kick={kick} /> : null}
+      {kick.auctionAddress ? <a href={`${COW_EXPLORER_URL}${kick.auctionAddress}`} target="_blank" rel="noopener noreferrer" className="kick-external-link">CoW Explorer <OutboundLinkGlyph /></a> : null}
+    </div> : null}
+  </div>;
 }
 
 function DetailPanel({ colSpan, children }) {
@@ -1583,7 +1400,7 @@ function DetailModal({ onClose, label = "Activity details", children }) {
 
 function KickDetailPanel({ kick, onOpenAuctionScan }) {
   return (
-    <DetailPanel colSpan={8}>
+    <DetailPanel colSpan={6}>
       <KickDetailContent kick={kick} onOpenAuctionScan={onOpenAuctionScan} />
     </DetailPanel>
   );
@@ -1597,82 +1414,48 @@ function KickDetailModal({ kick, onClose, onOpenAuctionScan }) {
   );
 }
 
-function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile, onOpenAuctionScan }) {
-  const sourceLabel = truncateMiddle(kick.sourceName || kick.sourceAddress, 18);
+function KickLogRow({ kick, nowMs, isExpanded, onToggle, rowRef, isMobile }) {
   const operationMeta = getOperationMeta(kick.operationType);
-
-  return (
-    <>
-      <tr ref={rowRef} className={`kick-log-row ${isExpanded ? "is-expanded" : ""}`} onClick={onToggle}>
-        <td className="mono muted kick-time-cell" title={kick.createdAt} data-label="Time">
-          {formatRelativeTimestamp(kick.createdAt, nowMs)}
-        </td>
-        <td data-label="Result">
-          <StatusBadge status={kick.status} />
-        </td>
-        <td className="mono" data-label="Action">
-          {formatKickPairLabel(kick)}
-        </td>
-        <td className="mono align-right" data-label="USD Value">
-          {operationMeta.showUsd ? (kick.usdValue ? `$${formatBalance(kick.usdValue)}` : "—") : "N/A"}
-        </td>
-        <td data-label="Auction">
-          {kick.auctionAddress ? (
-            <AddressLinkCopy
-              address={kick.auctionAddress}
-              onClick={(e) => e.stopPropagation()}
-              copyTitle={`Copy ${checksumAddress(kick.auctionAddress)}`}
-              copyAriaLabel={`Copy auction address ${checksumAddress(kick.auctionAddress)}`}
-            />
-          ) : "—"}
-        </td>
-        <td data-label="Source">
-          {kick.sourceAddress ? (
-            <AddressLinkCopy
-              address={kick.sourceAddress}
-              label={sourceLabel}
-              title={kick.sourceName || checksumAddress(kick.sourceAddress)}
-              onClick={(e) => e.stopPropagation()}
-              copyTitle={`Copy ${checksumAddress(kick.sourceAddress)}`}
-              copyAriaLabel={`Copy source address ${checksumAddress(kick.sourceAddress)}`}
-            />
-          ) : "—"}
-        </td>
-        <td className="kick-auctionscan-cell" data-label="AuctionScan">
-          <AuctionScanIconLink kick={kick} onOpen={onOpenAuctionScan} />
-        </td>
-        <td data-label="Tx">
-          {kick.txHash ? (
-            <span onClick={(e) => e.stopPropagation()}>
-              <EtherscanTxLink txHash={kick.txHash} />
-            </span>
-          ) : "—"}
-        </td>
-      </tr>
-      {isExpanded && !isMobile ? <KickDetailPanel kick={kick} onOpenAuctionScan={onOpenAuctionScan} /> : null}
-      {isExpanded && isMobile ? (
-        <KickDetailModal kick={kick} onClose={onToggle} onOpenAuctionScan={onOpenAuctionScan} />
-      ) : null}
-    </>
-  );
+  return <>
+    <tr ref={rowRef} data-log-id={kick.id} className={`kick-log-row ${isExpanded ? "is-expanded" : ""}`}>
+      <td className="mono muted kick-time-cell" headers="log-time">
+        <time dateTime={kick.createdAt} title={formatUtcTimestamp(kick.createdAt)}>{formatRelativeTimestamp(kick.createdAt, nowMs)}</time>
+      </td>
+      <td className="log-activity-cell" headers="log-activity">
+        <button type="button" className="log-open" onClick={onToggle} aria-expanded={isExpanded}
+          aria-label={`${isExpanded ? "Hide" : "Show"} details for log ${kick.id}`}>
+          <Chevron expanded={isExpanded} /><span>{formatKickPairLabel(kick)}</span>
+        </button>
+        <div className="log-result"><StatusBadge status={kick.status} /></div>
+      </td>
+      <td className="log-source-cell" headers="log-source">
+        <EntityIdentity primary={kick.sourceName || "Unknown source"} address={kick.sourceAddress} />
+      </td>
+      <td className="log-auction-cell" headers="log-auction" data-label="Auction">
+        {kick.auctionAddress ? <AddressLinkCopy address={kick.auctionAddress}
+          copyAriaLabel={`Copy auction address ${checksumAddress(kick.auctionAddress)}`} /> : <span className="muted">—</span>}
+      </td>
+      <td className="log-transaction-cell" headers="log-transaction" data-label="Transaction">
+        <div className="activity-links">{kick.txHash ? <EtherscanTxLink txHash={kick.txHash} /> : <span className="muted">No transaction</span>}<AuctionScanIconLink kick={kick} /></div>
+      </td>
+      <td className="mono align-right log-usd-cell" headers="log-usd" title={operationMeta.showUsd ? undefined : "Not applicable to this operation"}>
+        {operationMeta.showUsd ? (parseBig(kick.usdValue) !== null ? `$${formatBalance(kick.usdValue)}` : "?") : "—"}
+      </td>
+    </tr>
+    {isExpanded && !isMobile ? <KickDetailPanel kick={kick} /> : null}
+    {isExpanded && isMobile ? <KickDetailModal kick={kick} onClose={onToggle} /> : null}
+  </>;
 }
 
 function KickLogSkeletonRows() {
-  return [...Array(10)].map((_, index) => (
-    <tr key={`kick-skeleton-${index}`} className="kick-log-skeleton">
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
-    </tr>
-  ));
+  return Array.from({ length: 10 }, (_, index) => <tr key={index} className="kick-log-skeleton">
+    {Array.from({ length: 6 }, (_, column) => <td key={column}><span className="skeleton" /></td>)}
+  </tr>);
 }
 
 function KickLogPager({
+  state,
+  nowMs,
   offset,
   pageSize,
   total,
@@ -1685,10 +1468,11 @@ function KickLogPager({
   const rangeEnd = total === 0 ? 0 : Math.min(offset + pageSize, total);
 
   return (
-    <div className="kick-log-pagination" aria-live="polite">
-      <div className="kick-log-pagination-meta">
+    <div className="kick-log-pagination">
+      <div className="kick-log-pagination-meta" role="status">
         {total === 0 ? "Showing 0 results" : `Showing ${rangeStart.toLocaleString()}-${rangeEnd.toLocaleString()} of ${total.toLocaleString()}`}
       </div>
+      {state ? <RefreshStatus state={state} nowMs={nowMs} /> : null}
       <div className="kick-log-pagination-actions">
         <button type="button" className="kick-log-page-btn" onClick={onPrev} disabled={loading || offset === 0}>
           Newer
@@ -1727,223 +1511,150 @@ function RefreshStatus({ state, scannedAt, nowMs = Date.now() }) {
   );
 }
 
-function KickLogPage({
-  nowMs,
-  initialRunId,
-  initialKickId,
-  initialOffset = 0,
-  initialStatus = "all",
-  initialSearch = "",
-}) {
-  const [statusFilter, setStatusFilter] = useState(initialStatus);
-  const [searchTerm, setSearchTerm] = useState(initialSearch);
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(initialSearch);
-  const [offset, setOffset] = useState(initialOffset);
+const logRowKey = (kick) => kick.id;
+
+function KickLogPage({ nowMs }) {
+  const [initial] = useState(parseLocation);
+  const [statusFilter, setStatusFilter] = useState(initial.logsStatus);
+  const [searchTerm, setSearchTerm] = useState(initial.logsQuery);
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(initial.logsQuery);
+  const [offset, setOffset] = useState(initial.logsOffset);
   const [expandedRows, setExpandedRows] = useState(() => new Set());
-  const [focusedKickId, setFocusedKickId] = useState(initialKickId);
-  const [focusedRunId, setFocusedRunId] = useState(initialRunId);
+  const [focusedKickId, setFocusedKickId] = useState(initial.kickId);
+  const [focusedRunId, setFocusedRunId] = useState(initial.runId);
+  const [tableHovered, setTableHovered] = useState(false);
+  const [tableFocused, setTableFocused] = useState(false);
   const highlightedRowRef = useRef(null);
-  const filterResetRef = useRef(true);
-  const isMobile = useMediaQuery("(max-width: 600px)");
+  const openedTargetRef = useRef(null);
+  const isMobile = useMediaQuery("(max-width: 960px)");
   const focusedView = Boolean(focusedKickId || focusedRunId);
 
   useEffect(() => {
-    const timerId = window.setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm);
-    }, 250);
+    const timerId = window.setTimeout(() => setDebouncedSearchTerm(searchTerm), 250);
     return () => window.clearTimeout(timerId);
   }, [searchTerm]);
 
   useEffect(() => {
-    if (filterResetRef.current) {
-      filterResetRef.current = false;
-      return;
-    }
-    setOffset(0);
-    setExpandedRows(new Set());
-  }, [statusFilter, debouncedSearchTerm]);
+    const restoreLocation = () => {
+      const location = parseLocation();
+      if (location.page !== "kicks") return;
+      setStatusFilter(location.logsStatus);
+      setSearchTerm(location.logsQuery);
+      setDebouncedSearchTerm(location.logsQuery);
+      setOffset(location.logsOffset);
+      setFocusedKickId(location.kickId);
+      setFocusedRunId(location.runId);
+      setExpandedRows(new Set());
+      openedTargetRef.current = null;
+    };
+    window.addEventListener("popstate", restoreLocation);
+    return () => window.removeEventListener("popstate", restoreLocation);
+  }, []);
 
   const params = new URLSearchParams({ limit: String(KICK_LOG_PAGE_SIZE), offset: String(offset) });
   if (statusFilter !== "all") params.set("status", statusFilter);
   if (debouncedSearchTerm.trim()) params.set("q", debouncedSearchTerm.trim());
   if (focusedKickId) params.set("kick_id", String(focusedKickId));
   else if (focusedRunId) params.set("run_id", focusedRunId);
-  const logs = useLiveData(apiUrl(`/logs/kicks?${params.toString()}`), { errorMessage: "Unable to load logs" });
+  const queryKey = params.toString();
+  const logs = useLiveData(apiUrl(`/logs/kicks?${queryKey}`), { errorMessage: "Unable to load logs" });
   const { loading, error } = logs;
-  const kicks = useMemo(() => Array.isArray(logs.data?.kicks) ? logs.data.kicks.map(normalizeKick) : [], [logs.data]);
+  const liveKicks = useMemo(() => Array.isArray(logs.data?.kicks) ? logs.data.kicks.map(normalizeKick) : [], [logs.data]);
+  const kicks = useStableRowOrder(liveKicks, queryKey, tableHovered || tableFocused || expandedRows.size > 0, { key: logRowKey, pinPage: true });
   const total = logs.data?.total || 0;
   const hasMore = Boolean(logs.data?.hasMore);
 
   useEffect(() => {
-    if (loading || (!focusedKickId && !focusedRunId) || !kicks.length) return;
-    const match = focusedKickId
-      ? kicks.find((k) => String(k.id) === String(focusedKickId))
-      : kicks.find((k) => k.runId === focusedRunId);
-    if (match) {
-      setExpandedRows(new Set([match.id]));
-      if (!isMobile) {
-        requestAnimationFrame(() => {
-          highlightedRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-        });
-      }
-    }
+    const search = new URLSearchParams();
+    if (offset) search.set("offset", String(offset));
+    if (statusFilter !== "all") search.set("status", statusFilter);
+    if (debouncedSearchTerm.trim()) search.set("q", debouncedSearchTerm.trim());
+    if (focusedKickId) search.set("kick_id", String(focusedKickId));
+    else if (focusedRunId) search.set("run_id", focusedRunId);
+    window.history.replaceState(null, "", `/logs${search.size ? `?${search}` : ""}`);
+  }, [offset, statusFilter, debouncedSearchTerm, focusedKickId, focusedRunId]);
+
+  useEffect(() => {
+    const target = focusedKickId ? `kick:${focusedKickId}` : focusedRunId ? `run:${focusedRunId}` : null;
+    if (!target) { openedTargetRef.current = null; return; }
+    if (loading || openedTargetRef.current === target) return;
+    const match = focusedKickId ? kicks.find(kick => String(kick.id) === String(focusedKickId)) : kicks.find(kick => kick.runId === focusedRunId);
+    if (!match) return;
+    openedTargetRef.current = target;
+    setExpandedRows(new Set([match.id]));
+    // Deep links scroll once, never again on a background refresh.
+    if (!isMobile) requestAnimationFrame(() => highlightedRowRef.current?.scrollIntoView({ block: "center" }));
   }, [loading, focusedKickId, focusedRunId, kicks, isMobile]);
 
-  function openAuctionScanLink(kick) {
-    const href = getAuctionScanHref(kick);
-    if (!href) {
-      return;
-    }
-    window.open(href, "_blank", "noopener,noreferrer");
-  }
-
   function buildNavParams(overrides = {}) {
-    const params = {
-      offset: offset > 0 && !focusedView ? String(offset) : null,
-      status: statusFilter !== "all" ? statusFilter : null,
-      q: debouncedSearchTerm.trim() || null,
-      run_id: focusedRunId || null,
-      ...overrides,
-    };
-    return params;
+    return { offset: offset ? String(offset) : null, status: statusFilter !== "all" ? statusFilter : null,
+      q: debouncedSearchTerm.trim() || null, run_id: focusedRunId || null, ...overrides };
   }
-
   function toggleRow(kick) {
     const expanding = !expandedRows.has(kick.id);
-    setExpandedRows((prev) => {
-      if (prev.has(kick.id)) {
-        const next = new Set(prev);
-        next.delete(kick.id);
-        return next;
-      }
-      if (isMobile) {
-        return new Set([kick.id]);
-      }
-      const next = new Set(prev);
-      next.add(kick.id);
+    setExpandedRows(previous => {
+      const next = isMobile && expanding ? new Set() : new Set(previous);
+      if (expanding) next.add(kick.id); else next.delete(kick.id);
       return next;
     });
-    if (expanding) {
-      navigateTo("kicks", buildNavParams({ kick_id: String(kick.id) }));
-    } else {
-      if (focusedKickId && String(focusedKickId) === String(kick.id)) {
-        setFocusedKickId(null);
-      }
-      navigateTo("kicks", buildNavParams({ kick_id: null }));
-    }
+    if (!expanding && String(focusedKickId) === String(kick.id)) setFocusedKickId(null);
+    navigateTo("kicks", buildNavParams({ kick_id: expanding ? String(kick.id) : null }));
   }
-
+  function changePage(next) {
+    setExpandedRows(new Set());
+    setOffset(next);
+  }
   function clearFocusedView() {
     setFocusedKickId(null);
     setFocusedRunId(null);
     setExpandedRows(new Set());
     navigateTo("kicks", buildNavParams({ kick_id: null, run_id: null }));
   }
+  const pagerProps = { offset, pageSize: KICK_LOG_PAGE_SIZE, total, loading, hasMore,
+    onPrev: () => changePage(Math.max(0, offset - KICK_LOG_PAGE_SIZE)), onNext: () => changePage(offset + KICK_LOG_PAGE_SIZE) };
 
-  return (
-    <>
-      <section className="kick-log-controls">
-        <label className="control control-search">
-          <span>Search</span>
-          <input
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            disabled={focusedView}
-            placeholder="token symbol, operation, auction address, tx hash"
-          />
-        </label>
-        <label className="control control-status">
-          <span>Result</span>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} disabled={focusedView}>
-            <option value="all">All</option>
-            <option value="confirmed">Confirmed</option>
-            <option value="failed">Failed</option>
-          </select>
-        </label>
-      </section>
-
-      <RefreshStatus state={logs} />
-
-      {focusedView ? (
-        <div className="kick-log-focusbar">
-          <div className="toolbar-meta">
-            {focusedKickId ? `Showing selected log ${focusedKickId}` : `Showing run ${focusedRunId}`}
-          </div>
-          <button type="button" className="kick-log-page-btn" onClick={clearFocusedView}>
-            Show all logs
-          </button>
-        </div>
-      ) : (
-        <KickLogPager
-          offset={offset}
-          pageSize={KICK_LOG_PAGE_SIZE}
-          total={total}
-          loading={loading}
-          hasMore={hasMore}
-          onPrev={() => setOffset((current) => Math.max(0, current - KICK_LOG_PAGE_SIZE))}
-          onNext={() => setOffset((current) => current + KICK_LOG_PAGE_SIZE)}
-        />
-      )}
-
-      {error ? <p className="error">{error}</p> : null}
-
-      <div className="table-shell">
-        <table className="kick-log-table">
-          <thead>
-            <tr>
-              <th className="kick-time-col">Time</th>
-              <th>Result</th>
-              <th>Action</th>
-              <th className="align-right">USD Value</th>
-              <th>Auction</th>
-              <th>Source</th>
-              <th className="kick-auctionscan-col" title="AuctionScan" aria-label="AuctionScan" />
-              <th>Tx</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? <KickLogSkeletonRows /> : null}
-            {!loading && !kicks.length ? (
-              <tr>
-                <td colSpan={8} className="kick-log-empty">No activity found</td>
-              </tr>
-            ) : null}
-            {!loading
-              ? kicks.map((kick) => (
-                  <KickLogRow
-                    key={kick.id}
-                    kick={kick}
-                    nowMs={nowMs}
-                    isExpanded={expandedRows.has(kick.id)}
-                    onToggle={() => toggleRow(kick)}
-                    onOpenAuctionScan={openAuctionScanLink}
-                    rowRef={
-                      (focusedKickId != null && String(kick.id) === String(focusedKickId))
-                      || (focusedKickId == null && focusedRunId != null && kick.runId === focusedRunId)
-                        ? highlightedRowRef
-                        : undefined
-                    }
-                    isMobile={isMobile}
-                  />
-                ))
-              : null}
-          </tbody>
-        </table>
-      </div>
-
-      {!focusedView && !loading ? (
-        <KickLogPager
-          offset={offset}
-          pageSize={KICK_LOG_PAGE_SIZE}
-          total={total}
-          loading={loading}
-          hasMore={hasMore}
-          onPrev={() => setOffset((current) => Math.max(0, current - KICK_LOG_PAGE_SIZE))}
-          onNext={() => setOffset((current) => current + KICK_LOG_PAGE_SIZE)}
-        />
-      ) : null}
-    </>
-  );
+  return <section className="logs-page">
+    <section className="kick-log-controls" aria-label="Filter logs">
+      <label className="control control-search">
+        <span className="sr-only">Search logs</span>
+        <input type="search" value={searchTerm} onChange={event => { setSearchTerm(event.target.value); setOffset(0); setExpandedRows(new Set()); }}
+          disabled={focusedView} placeholder="Search tokens, operations, addresses, transactions…" />
+      </label>
+      <label className="control control-status">
+        <span className="sr-only">Result</span>
+        <select aria-label="Result" value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setOffset(0); setExpandedRows(new Set()); }} disabled={focusedView}>
+          <option value="all">All results</option><option value="confirmed">Confirmed</option><option value="failed">Failed</option>
+        </select>
+      </label>
+    </section>
+    {focusedView ? <div className="kick-log-focusbar">
+      <span className="toolbar-meta">{focusedKickId ? `Selected log ${focusedKickId}` : `Run ${focusedRunId}`}</span>
+      <RefreshStatus state={logs} nowMs={nowMs} />
+      <button type="button" className="kick-log-page-btn" onClick={clearFocusedView}>Show all logs</button>
+    </div> : <KickLogPager {...pagerProps} state={logs} nowMs={nowMs} />}
+    {error ? <p className="error" role="alert">{error}</p> : null}
+    <div className="log-table-shell"
+      onPointerEnter={event => { if (event.pointerType !== "touch") setTableHovered(true); }}
+      onPointerLeave={() => setTableHovered(false)}
+      onFocusCapture={() => setTableFocused(true)}
+      onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setTableFocused(false); }}>
+      <table className="kick-log-table">
+        <thead><tr>
+          <th id="log-time" scope="col">Time</th><th id="log-activity" scope="col">Activity</th>
+          <th id="log-source" scope="col">Source</th><th id="log-auction" scope="col">Auction</th>
+          <th id="log-transaction" scope="col">Transaction</th><th id="log-usd" scope="col" className="align-right">USD</th>
+        </tr></thead>
+        <tbody>
+          {loading ? <KickLogSkeletonRows /> : null}
+          {!loading && !kicks.length ? <tr><td colSpan={6} className="kick-log-empty">{error ? "Logs unavailable" : "No activity found"}</td></tr> : null}
+          {!loading ? kicks.map(kick => <KickLogRow key={kick.id} kick={kick} nowMs={nowMs}
+            isExpanded={expandedRows.has(kick.id)} onToggle={() => toggleRow(kick)} isMobile={isMobile}
+            rowRef={(focusedKickId != null && String(kick.id) === String(focusedKickId)) || (focusedKickId == null && focusedRunId != null && kick.runId === focusedRunId) ? highlightedRowRef : undefined} />) : null}
+        </tbody>
+      </table>
+    </div>
+    {!focusedView && !loading ? <KickLogPager {...pagerProps} /> : null}
+  </section>;
 }
 
 function TokenLogo({ src, alt }) {

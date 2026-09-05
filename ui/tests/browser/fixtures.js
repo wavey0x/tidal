@@ -22,7 +22,8 @@ export async function contrastRatio(locator) {
 
 export async function mockPublicApi(page) {
   const state = { balance: "1", failed: false, dashboardReads: 0, logReads: [], alertReads: 0, holdDashboard: null,
-    warnings: [], defaultsWarnings: [], prepareWarnings: [], rows: null, latestScanAt: "2026-09-04T20:00:00Z" };
+    warnings: [], defaultsWarnings: [], prepareWarnings: [], rows: null, logsData: null, logQueries: [], logsFailed: false,
+    alertsData: null, alertsFailed: false, latestScanAt: "2026-09-04T20:00:00Z" };
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     return url.hostname === "127.0.0.1" ? route.continue() : route.abort();
@@ -50,12 +51,17 @@ export async function mockPublicApi(page) {
     } else if (url.pathname.endsWith("/logs/kicks")) {
       const offset = Number(url.searchParams.get("offset") || "0");
       state.logReads.push(offset);
+      state.logQueries.push(url.search);
+      if (state.logsFailed) return route.fulfill({ status: 503, json: { detail: "fixture unavailable" } });
       data = { total: 26, hasMore: offset === 0, kicks: [{ id: offset + 1, operationType: "kick", status: "CONFIRMED",
         createdAt: "2026-09-04T20:00:00Z", tokenSymbol: `REWARD${state.balance}`, wantSymbol: "USDC",
         sourceAddress: STRATEGY, sourceName: "Fixture Strategy", auctionAddress: AUCTION, usdValue: "1.25" }] };
+      if (state.logsData) data = typeof state.logsData === "function" ? state.logsData(url) : state.logsData;
     } else if (url.pathname.endsWith("/alerts")) {
       state.alertReads += 1;
+      if (state.alertsFailed) return route.fulfill({ status: 503, json: { detail: "fixture unavailable" } });
       data = { items: [], needsActionCount: Number(state.balance), evaluatedAt: "2026-09-04T20:00:00Z" };
+      if (state.alertsData) data = state.alertsData;
     } else if (url.pathname.endsWith("/deploy-defaults")) {
       warnings = state.defaultsWarnings;
       data = { strategyAddress: STRATEGY, strategyName: "Fixture Strategy", receiverAddress: STRATEGY,

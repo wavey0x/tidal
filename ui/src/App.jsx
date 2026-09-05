@@ -785,19 +785,20 @@ function EntityIdentity({ primary, secondary, address, onOpen, expanded = false 
   );
 }
 
-function EtherscanTxLink({ txHash, compact = false }) {
+function EtherscanTxLink({ txHash, compact = false, concise = false }) {
   if (!txHash) return <span className="row-secondary">No transaction</span>;
   const normalized = txHash.startsWith("0x") ? txHash : `0x${txHash}`;
   return (
     <a
-      className="etherscan-link transaction-link mono"
+      className={`etherscan-link transaction-link mono${concise ? " is-concise" : ""}`}
       href={`${ETHERSCAN_TX_URL}${normalized}`}
       title={normalized}
+      aria-label={`View transaction ${normalized} on Etherscan`}
       target="_blank"
       rel="noopener noreferrer"
     >
-      <span>{compact ? <span className="transaction-prefix">tx </span> : null}{normalized.slice(0, 6)}...{normalized.slice(-4)}</span>
-      <OutboundLinkGlyph />
+      <span>{compact ? <span className="transaction-prefix">tx </span> : null}{normalized.slice(0, concise ? 4 : 6)}{concise ? "…" : "..."}{normalized.slice(-4)}</span>
+      {!concise ? <OutboundLinkGlyph /> : null}
     </a>
   );
 }
@@ -1077,22 +1078,28 @@ function KickHistoryCell({
   );
 
   return (
-    <div className="kick-history" onClick={(event) => event.stopPropagation()}>
+    <div className={`kick-history${isExpanded ? " is-expanded" : ""}`} onClick={(event) => event.stopPropagation()}>
       <div className="kick-history-list">
         {visibleKicks.map((kick, index) => (
           <div key={kick.txHash || index} className="kick-row">
-            <KickRow kick={displayKick(kick)} nowMs={nowMs} toggle={index === 0 && hasToggle ? (
+            <KickRow kick={displayKick(kick)} nowMs={nowMs} compact={isExpanded} toggle={!isExpanded && index === 0 && hasToggle ? (
               <button type="button" className="history-toggle-button" onClick={onToggleExpand}
                 aria-expanded={isExpanded}
                 aria-label={isExpanded ? "Collapse kick history" : "Expand kick history"}
                 title={isExpanded ? "Collapse history" : "Show earlier activity"}>
                 <Chevron expanded={isExpanded} />
-                <span>{isExpanded ? "less" : `+${Math.min(kicks.length, 5) - 1}`}</span>
+                <span>+{Math.min(kicks.length, 5) - 1}</span>
               </button>
             ) : null} />
           </div>
         ))}
       </div>
+      {isExpanded && hasToggle ? (
+        <button type="button" className="history-toggle-button history-collapse" onClick={onToggleExpand}
+          aria-expanded="true" aria-label="Collapse kick history" title="Collapse history">
+          <Chevron expanded />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1103,16 +1110,19 @@ function Chevron({ expanded = false }) {
   </span>;
 }
 
-function KickRow({ kick, nowMs, toggle }) {
+function KickRow({ kick, nowMs, toggle, compact = false }) {
+  const relativeTime = formatRelativeTimestamp(kick.createdAt, nowMs);
+  const displayTime = compact ? relativeTime.replace(/ (year|month|week|day|hour|minute)s?\b/g,
+    (_, unit) => ({ year: "y", month: "mo", week: "w", day: "d", hour: "h", minute: "m" })[unit]).replace(/ ago$/, "") : relativeTime;
   return (
     <div className="kick-row-inner">
       <div className="activity-time-row">
-        <time className="kick-time" dateTime={kick.createdAt} title={formatUtcTimestamp(kick.createdAt)}>
-          {formatRelativeTimestamp(kick.createdAt, nowMs)}
+        <time className="kick-time" dateTime={kick.createdAt} title={formatUtcTimestamp(kick.createdAt)} aria-label={relativeTime}>
+          {displayTime}
         </time>
         {toggle}
       </div>
-      <div className="activity-links"><EtherscanTxLink txHash={kick.txHash} compact /><KickHistoryAuctionScanLink kick={kick} /></div>
+      <div className="activity-links"><EtherscanTxLink txHash={kick.txHash} concise={compact} /><KickHistoryAuctionScanLink kick={kick} /></div>
     </div>
   );
 }

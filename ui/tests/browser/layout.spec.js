@@ -307,6 +307,44 @@ test("history expansion and token image fallback remain independent of strategy 
   await expect(first.locator(".kick-row")).toHaveCount(1);
 });
 
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: expanded activity is an aligned single-line ledger with working explorer links`, async ({ page }, testInfo) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const state = await fixture(page);
+    state.rows[0].kicks = Array.from({ length: 5 }, (_, index) => ({
+      ...state.rows[0].kicks[0],
+      createdAt: new Date(Date.now() - (index ? index * 86400000 : 43200000)).toISOString(),
+      txHash: `0x${String(index + 1).repeat(64)}`,
+    }));
+    await page.goto("/");
+    const first = page.locator(".strategy-row").first();
+    await first.getByRole("button", { name: "Expand kick history", exact: true }).click();
+    const history = first.locator(".kick-history");
+    await expect(history.locator(".kick-row")).toHaveCount(5);
+    await expect(history.locator(".transaction-prefix")).toHaveCount(0);
+    await expect(history.getByText("less", { exact: true })).toHaveCount(0);
+    await expect(history.locator(".transaction-link").first()).toHaveAttribute("href", `https://etherscan.io/tx/0x${"1".repeat(64)}`);
+    await expect(history.getByRole("link", { name: "View on AuctionScan" })).toHaveCount(5);
+    await expect(history.locator("time").first()).toHaveAttribute("aria-label", "12 hours ago");
+    for (const width of [1440, 800, 320]) {
+      await page.setViewportSize({ width, height: 1100 });
+      const bounds = await history.locator(".kick-row-inner").evaluateAll(rows => rows.map(row => {
+        const time = row.querySelector("time").getBoundingClientRect();
+        const link = row.querySelector(".transaction-link").getBoundingClientRect();
+        return { x: link.x, timeY: time.y + time.height / 2, linkY: link.y + link.height / 2 };
+      }));
+      expect(new Set(bounds.map(b => Math.round(b.x))).size).toBe(1);
+      for (const bound of bounds) expect(Math.abs(bound.timeY - bound.linkY)).toBeLessThan(2);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await history.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`${theme}-history-${width}.png`) });
+    }
+    expect(await contrastRatio(history.locator("time").first())).toBeGreaterThanOrEqual(4.5);
+    await expect(page.locator(".brand-logo")).toHaveAttribute("src", `/tidal-logo-${theme}.svg`);
+    await expect.poll(() => page.locator(".brand-logo").evaluate(node => node.naturalWidth)).toBeGreaterThan(0);
+  });
+}
+
 test("touch targets and mobile detail focus stay usable without accidental navigation", async ({
   browser,
 }, testInfo) => {

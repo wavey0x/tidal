@@ -414,7 +414,7 @@ textarea {
 .header h1 {
   margin: 0;
   font-size: 18px;
-  font-weight: 500;
+  font-weight: 650;
   letter-spacing: -0.04em;
   white-space: nowrap;
 }
@@ -429,7 +429,6 @@ textarea {
 .brand-logo {
   width: 20px;
   height: 20px;
-  border-radius: 4px;
   flex-shrink: 0;
   display: block;
 }
@@ -1260,6 +1259,35 @@ tbody tr:focus-within > td {
   min-width: 0;
 }
 
+.kick-history.is-expanded {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: start;
+  gap: 4px;
+}
+.kick-history.is-expanded .kick-history-list {
+  gap: 4px;
+}
+.kick-history.is-expanded .kick-row-inner {
+  display: grid;
+  grid-template-columns: 4ch minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+.kick-history.is-expanded .activity-links {
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.kick-history.is-expanded .kick-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.history-collapse {
+  justify-content: center;
+  min-height: 22px;
+}
+
 .kick-row {
   display: flex;
   align-items: center;
@@ -2042,6 +2070,12 @@ tbody tr:focus-within > td {
   .ledger-table .activity-links {
     flex-wrap: wrap;
     gap: 4px;
+  }
+  .ledger-table .history-cell:has(.kick-history.is-expanded) {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    padding-left: 0;
+    max-width: 270px;
   }
   .ledger-table .ledger-skeleton {
     row-gap: 10px;

@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { AUCTION, mockPublicApi, mockWallet } from "./fixtures";
+import { AUCTION, contrastRatio, mockPublicApi, mockWallet } from "./fixtures";
 
 async function prepare(page) {
-  await page.getByRole("button", { name: /click to deploy now/ }).click();
+  await page.getByRole("button", { name: "Deploy auction", exact: true }).click();
   await expect(page.locator(".deploy-modal")).toBeVisible();
 }
 
@@ -17,6 +17,9 @@ for (const theme of ["light", "dark"]) {
     await prepare(page);
     await expect(page.getByText("Fixture quote warning", { exact: true })).toBeVisible();
     await expect(page.getByText("Fixture gas estimate warning", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+    expect(await contrastRatio(page.locator(".deploy-modal-warning").first())).toBeGreaterThanOrEqual(4.5);
     expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
     await page.screenshot({ path: testInfo.outputPath(`${theme}-deployment-warnings.png`), animations: "disabled" });
     const reads = api.dashboardReads;
@@ -105,6 +108,15 @@ test("account changes and cancelled confirmation do not send", async ({ page }) 
   await mockPublicApi(page);
   await mockWallet(page);
   await page.goto("/");
+  await prepare(page);
+  await page.getByRole("button", { name: "Confirm", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".deploy-modal a").first()).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button", { name: "Confirm", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
   await prepare(page);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);

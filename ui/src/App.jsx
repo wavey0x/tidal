@@ -1,8 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Big from "big.js";
 import { keccak_256 } from "js-sha3";
 import { useLiveData } from "./useLiveData";
+import { useStableRowOrder } from "./useStableRowOrder";
+import { useDialogFocus } from "./useDialogFocus";
 
 const ALL_TOKENS = "__all__";
 const MIN_USD_VISIBLE = new Big("0.01");
@@ -24,6 +26,8 @@ const FAILED_STATUSES = new Set(["REVERTED", "ERROR", "ESTIMATE_FAILED"]);
 const FAINT_STATUSES = new Set(["DRY_RUN", "SUBMITTED", "USER_SKIPPED", "SKIP"]);
 const KICK_LOG_PAGE_SIZE = 25;
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+// Match the scanner-staleness threshold in config/server.yaml.
+const SCAN_STALE_AFTER_MS = 90 * 60 * 1000;
 
 function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
@@ -633,7 +637,6 @@ function SkeletonRows() {
       <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
       <td><span className="skeleton" /></td>
-      <td><span className="skeleton" /></td>
     </tr>
   ));
 }
@@ -750,7 +753,7 @@ function WantTokenValue({ address, symbol }) {
   const formattedAddress = checksumAddress(address);
 
   if (!formattedAddress) {
-    return <span className="row-secondary mono">—</span>;
+    return <span className="row-secondary mono">{symbol || "Unknown want"}</span>;
   }
 
   return (
@@ -765,27 +768,36 @@ function WantTokenValue({ address, symbol }) {
   );
 }
 
-function EntityIdentity({ primary, secondary, address }) {
+function EntityIdentity({ primary, secondary, address, onOpen, expanded = false }) {
   return (
     <div className="entity-cell">
-      <div className="row-primary">{primary || "—"}</div>
+      <div className="row-primary" title={typeof primary === "string" ? primary : undefined}>
+        {onOpen ? (
+          <button type="button" className="entity-open" onClick={onOpen} aria-expanded={expanded}
+            aria-label={`${expanded ? "Hide" : "Show"} details for ${primary}`}>
+            {primary || "—"}
+          </button>
+        ) : primary || "—"}
+      </div>
       {secondary ? <div className="entity-secondary mono">{secondary}</div> : null}
-      <AddressCopy address={address} />
+      <AddressLinkCopy address={address} />
     </div>
   );
 }
 
 function EtherscanTxLink({ txHash, compact = false }) {
+  if (!txHash) return <span className="row-secondary">No transaction</span>;
   const normalized = txHash.startsWith("0x") ? txHash : `0x${txHash}`;
   return (
     <a
-      className="etherscan-link mono"
+      className="etherscan-link transaction-link mono"
       href={`${ETHERSCAN_TX_URL}${normalized}`}
       title={normalized}
       target="_blank"
       rel="noopener noreferrer"
     >
-      {compact ? `${normalized.slice(0, 6)}...` : `${normalized.slice(0, 6)}...${normalized.slice(-4)}`}
+      <span>{compact ? <span className="transaction-prefix">tx </span> : null}{normalized.slice(0, 6)}...{normalized.slice(-4)}</span>
+      <OutboundLinkGlyph />
     </a>
   );
 }
@@ -921,13 +933,13 @@ function MissingAuctionAction({ deployState, onDeploy, onCheck }) {
             <span className="mono">preparing…</span>
           ) : (
             <>
-              <span className="deploy-cta">N/A</span>
-              <br />
-              <span className="deploy-cta">click to deploy now 🚀</span>
+              <span className="deploy-cta">Deploy auction</span>
+              <span className="deploy-plus" aria-hidden="true">+</span>
             </>
           )}
         </button>
       )}
+      {!txHash && !isBusy ? <span className="row-secondary deployment-hint">Not deployed</span> : null}
       {txHash && (status === "pending" || status === "checking") ? (
         <button type="button" className="auction-action-link" onClick={onCheck} disabled={status === "checking"}>
           Check again
@@ -940,15 +952,10 @@ function MissingAuctionAction({ deployState, onDeploy, onCheck }) {
 }
 
 function DeployConfirmModal({ payload, onConfirm, onCancel }) {
-  useEffect(() => {
-    const onKeyDown = (e) => { if (e.key === "Escape") onCancel(); };
-    window.addEventListener("keydown", onKeyDown);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = "";
-    };
-  }, [onCancel]);
+  const dialogRef = useRef(null);
+  const cancelRef = useRef(null);
+  const titleId = useId();
+  useDialogFocus(dialogRef, onCancel, cancelRef);
 
   const spec = payload || {};
   const warnings = Array.isArray(spec.warnings) ? spec.warnings.filter(Boolean) : [];
@@ -986,8 +993,9 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
 
   return createPortal(
     <div className="deploy-modal-backdrop" onMouseDown={onCancel}>
-      <div className="deploy-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="deploy-modal-title">
+      <div ref={dialogRef} className="deploy-modal" role="dialog" aria-modal="true"
+        aria-labelledby={titleId} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
+        <div id={titleId} className="deploy-modal-title">
           Deploy auction for {spec.strategyName || shortenAddress(spec.strategyAddress)}?
         </div>
         <dl className="deploy-modal-details">
@@ -1010,7 +1018,7 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
           </div>
         ) : null}
         <div className="deploy-modal-actions">
-          <button type="button" className="deploy-modal-btn deploy-modal-btn-cancel" onClick={onCancel}>
+          <button ref={cancelRef} type="button" className="deploy-modal-btn deploy-modal-btn-cancel" onClick={onCancel}>
             Cancel
           </button>
           <button type="button" className="deploy-modal-btn deploy-modal-btn-confirm" onClick={onConfirm}>
@@ -1033,17 +1041,15 @@ function AuctionAddressCell({
   return (
     <div className="auction-value-slot">
       {address ? (
-        <span className="auction-address-row">
-          <AddressCopy address={address} />
-          {version ? <span className="auction-version-badge mono">{version}</span> : null}
-        </span>
+        <>
+          <span className="auction-title-row">
+            <WantTokenValue address={wantAddress} symbol={wantSymbol} />
+            {version ? <span className="auction-version-badge mono">v{String(version).replace(/^v/, "")}</span> : null}
+          </span>
+          <span className="auction-address-row"><AddressLinkCopy address={address} /></span>
+        </>
       ) : null}
       {!address ? (emptyContent || <span className="row-secondary mono">—</span>) : null}
-      {address && wantAddress ? (
-        <span className="auction-secondary-row">
-          <WantTokenValue address={wantAddress} symbol={wantSymbol} />
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -1053,7 +1059,6 @@ function KickHistoryCell({
   nowMs,
   isExpanded,
   onToggleExpand,
-  isMobile = false,
   fallbackAuctionAddress = null,
   emptyContent = null,
 }) {
@@ -1061,7 +1066,7 @@ function KickHistoryCell({
   const hasToggle = kicks && kicks.length > 1 && typeof onToggleExpand === "function";
 
   if (!hasKicks) {
-    return emptyContent || <span className="row-secondary mono">—</span>;
+    return emptyContent || <span className="row-secondary">None recorded</span>;
   }
 
   const visibleKicks = (isExpanded ? kicks : kicks.slice(0, 1)).slice(0, 5);
@@ -1076,38 +1081,39 @@ function KickHistoryCell({
       <div className="kick-history-list">
         {visibleKicks.map((kick, index) => (
           <div key={kick.txHash || index} className="kick-row">
-            <KickRow kick={displayKick(kick)} nowMs={nowMs} />
+            <KickRow kick={displayKick(kick)} nowMs={nowMs} toggle={index === 0 && hasToggle ? (
+              <button type="button" className="history-toggle-button" onClick={onToggleExpand}
+                aria-expanded={isExpanded}
+                aria-label={isExpanded ? "Collapse kick history" : "Expand kick history"}
+                title={isExpanded ? "Collapse history" : "Show earlier activity"}>
+                <Chevron expanded={isExpanded} />
+                <span>{isExpanded ? "less" : `+${Math.min(kicks.length, 5) - 1}`}</span>
+              </button>
+            ) : null} />
           </div>
         ))}
       </div>
-      {hasToggle ? (
-        <button
-          type="button"
-          className="history-toggle-button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleExpand();
-          }}
-          aria-label={isExpanded ? "Collapse kick history" : "Expand kick history"}
-        >
-          <span className={`chevron-toggle ${isExpanded ? "is-expanded" : ""}`} aria-hidden="true">
-            ▶
-          </span>
-          <span className="history-toggle-label">{isExpanded ? "view less" : "view more"}</span>
-        </button>
-      ) : null}
     </div>
   );
 }
 
-function KickRow({ kick, nowMs }) {
+function Chevron({ expanded = false }) {
+  return <span className={`chevron-toggle ${expanded ? "is-expanded" : ""}`} aria-hidden="true">
+    <svg viewBox="0 0 12 12"><path d="m4 2 4 4-4 4" /></svg>
+  </span>;
+}
+
+function KickRow({ kick, nowMs, toggle }) {
   return (
-    <span className="kick-row-inner">
-      <EtherscanTxLink txHash={kick.txHash} compact />
-      <span className="kick-separator mono">·</span>
-      <span className="kick-time mono">{formatRelativeTimestamp(kick.createdAt, nowMs)}</span>
-      <KickHistoryAuctionScanLink kick={kick} />
-    </span>
+    <div className="kick-row-inner">
+      <div className="activity-time-row">
+        <time className="kick-time" dateTime={kick.createdAt} title={formatUtcTimestamp(kick.createdAt)}>
+          {formatRelativeTimestamp(kick.createdAt, nowMs)}
+        </time>
+        {toggle}
+      </div>
+      <div className="activity-links"><EtherscanTxLink txHash={kick.txHash} compact /><KickHistoryAuctionScanLink kick={kick} /></div>
+    </div>
   );
 }
 
@@ -1491,21 +1497,13 @@ function DetailPanel({ colSpan, children }) {
   );
 }
 
-function DetailModal({ onClose, children }) {
+function DetailModal({ onClose, label = "Activity details", children }) {
   const sheetRef = useRef(null);
   const bodyRef = useRef(null);
   const backdropRef = useRef(null);
   const dragRef = useRef({ startY: 0, startTime: 0, dy: 0, dragging: false, dismissed: false });
 
-  useEffect(() => {
-    const onKeyDown = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKeyDown);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = "";
-    };
-  }, [onClose]);
+  useDialogFocus(sheetRef, onClose);
 
   function onTouchStart(e) {
     const d = dragRef.current;
@@ -1553,12 +1551,17 @@ function DetailModal({ onClose, children }) {
       <div
         ref={sheetRef}
         className="kick-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
         <div className="kick-modal-handle" />
+        <button type="button" className="kick-modal-close" onClick={onClose}>Close details</button>
         <div ref={bodyRef} className="kick-modal-body">
           {children}
         </div>
@@ -1688,13 +1691,24 @@ function KickLogPager({
   );
 }
 
-function RefreshStatus({ state }) {
-  const stale = state.error || (state.updatedAt && Date.now() - state.updatedAt > 65000);
+function RefreshStatus({ state, scannedAt, nowMs = Date.now() }) {
+  const stale = state.error || (state.updatedAt && nowMs - state.updatedAt > 65000);
+  const scanOverdue = scannedAt && nowMs - new Date(scannedAt).getTime() > SCAN_STALE_AFTER_MS;
   return (
-    <div className="refresh-status">
+    <div className={`refresh-status${stale || scanOverdue ? " is-stale" : ""}`}>
       <span role="status">
         {stale ? "Data may be stale · " : ""}
-        {state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
+        {scannedAt !== undefined ? (
+          <>
+            <time dateTime={scannedAt || undefined} title={formatUtcTimestamp(scannedAt)}>
+              {scannedAt ? `${scanOverdue ? "Scan overdue" : "Scanned"} ${formatRelativeTimestamp(scannedAt, nowMs)}` : "No scan available"}
+            </time>
+            <span aria-hidden="true"> · </span>
+          </>
+        ) : null}
+        <span className="refresh-updated" title={state.updatedAt ? formatUtcTimestamp(state.updatedAt) : undefined}>
+          {state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : "Not yet updated"}
+        </span>
       </span>
       <button type="button" className="kick-log-page-btn" onClick={state.refresh} disabled={state.refreshing}>
         {state.refreshing ? "Refreshing…" : "Refresh"}
@@ -1963,7 +1977,6 @@ function TokenBalances({
   displayMode,
   onToggleMode,
 }) {
-  const alignedSymbolMaxChars = 6;
   return (
     <div className="token-cell">
       <div className="token-stack">
@@ -1979,9 +1992,10 @@ function TokenBalances({
           if (balance.auctionSellTokenStatus === "disabled") {
             itemClassNames.push("is-auction-disabled");
           }
-          if (tokenSymbol.length > alignedSymbolMaxChars) {
-            itemClassNames.push("is-compact-balance");
-          }
+          const value = displayMode === "usd"
+            ? (balance.usdValue == null ? "?" : `$${formatBalance(balance.usdValue)}`)
+            : formatBalance(balance.normalizedBalance);
+          if (value.length > 11) itemClassNames.push("is-long-balance");
           const itemClassName = itemClassNames.join(" ");
 
           return (
@@ -2003,6 +2017,7 @@ function TokenBalances({
                   title={`Copy token address ${checksumAddress(balance.tokenAddress)}`}
                   ariaLabel={`Copy token address for ${tokenSymbol || "token"}`}
                 />
+                {kickPrepareTooltip ? <KickPauseIcon title={kickPrepareTooltip} /> : null}
               </span>
               <span className="token-balance-wrap">
                 <button
@@ -2014,18 +2029,135 @@ function TokenBalances({
                   }}
                   title={title}
                 >
-                  {displayMode === "usd"
-                    ? (balance.usdValue ? `$${formatBalance(balance.usdValue)}` : "?")
-                    : formatBalance(balance.normalizedBalance)}
+                  {value}
                 </button>
-                {kickPrepareTooltip ? (
-                  <KickPauseIcon title={kickPrepareTooltip} />
-                ) : null}
               </span>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function RewardSummary({ row, displayMode, onToggleMode, expanded, onToggleExpand }) {
+  const detailsId = useId();
+  const total = row.totalUsdValue == null ? "?" : `$${formatBalance(row.totalUsdValue)}`;
+  const paused = row.balances.filter((balance) => getKickPrepareTooltip(balance));
+  const disabled = row.balances.filter((balance) => balance.auctionSellTokenStatus === "disabled");
+  const unknown = row.balances.some((balance) => balance.auctionSellTokenStatus === "unknown");
+  const symbols = row.balances.map((balance) => balance.tokenSymbol || "UNKNOWN");
+
+  if (!row.balances.length)
+    return (
+      <div className="reward-empty">
+        <span>$0.00</span>
+        <span className="row-secondary">No visible rewards</span>
+      </div>
+    );
+
+  return (
+    <div className="reward-summary">
+      <button
+        type="button"
+        className={`reward-summary-button${total.length > 11 ? " has-long-total" : ""}`}
+        onClick={onToggleExpand}
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        aria-label={`${expanded ? "Collapse" : "Expand"} rewards for ${formatStrategyDisplayName(
+          row.sourceName
+        )}`}
+      >
+        <Chevron expanded={expanded} />
+        <span className="reward-logos" aria-hidden="true">
+          {row.balances.slice(0, 3).map((balance) => (
+            <TokenLogo key={balance.tokenAddress} src={balance.tokenLogoUrl} alt="" />
+          ))}
+          {row.balances.length > 3 ? <span className="reward-more">+{row.balances.length - 3}</span> : null}
+        </span>
+        <span
+          className="reward-total"
+          title={
+            row.totalUsdValue == null
+              ? "Total USD unavailable: one or more tokens are unpriced"
+              : "Total reward value in USD"
+          }
+        >
+          {total}
+        </span>
+      </button>
+      {!expanded ? (
+        <div className="reward-caption">
+          <span className="reward-symbols" title={symbols.join(" + ")}>
+            {symbols.join(" + ")}
+          </span>
+          {paused.length ? (
+            <span
+              className="reward-paused"
+              title={paused
+                .map((balance) => `${balance.tokenSymbol}: ${getKickPrepareTooltip(balance)}`)
+                .join("\n")}
+            >
+              <KickPauseIcon title="Some rewards are paused; expand for token details" />
+              paused
+            </span>
+          ) : null}
+          {disabled.length ? (
+            <span
+              className="reward-warning"
+              title={disabled
+                .map((balance) => `${balance.tokenSymbol}: ${getAuctionSellTokenTooltip(balance)}`)
+                .join("\n")}
+            >
+              not enabled
+            </span>
+          ) : null}
+          {unknown ? <span className="reward-warning">status unknown</span> : null}
+        </div>
+      ) : null}
+      <div className="reward-breakdown" id={detailsId} hidden={!expanded}>
+        {expanded ? (
+          <>
+            <div className="reward-breakdown-heading">
+              <span>Balances</span>
+              <button
+                type="button"
+                className="display-mode-button"
+                onClick={onToggleMode}
+                aria-label={`Show ${displayMode === "usd" ? "token amounts" : "USD values"}`}
+              >
+                {displayMode === "usd" ? "USD" : "Tokens"} ⇄
+              </button>
+            </div>
+            <TokenBalances balances={row.balances} displayMode={displayMode} onToggleMode={onToggleMode} />
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function RowScanStatus({ row, latestScanAt }) {
+  const rowTime = new Date(row.scannedAt).getTime();
+  const latestTime = new Date(latestScanAt).getTime();
+  const missing = !row.scannedAt || !Number.isFinite(rowTime);
+  // Scanning individual rows takes time; a minute of skew is not a missed scan.
+  const behind = Number.isFinite(latestTime) && latestTime - rowTime > 60000;
+  if (!missing && !behind && !row.kickGuardDisabled) return null;
+  return (
+    <div className="row-scan-status">
+      {missing || behind ? (
+        <span
+          title={`Last scan: ${formatUtcTimestamp(row.scannedAt)}. Latest scan: ${formatUtcTimestamp(
+            latestScanAt
+          )}.`}
+        >
+          {missing ? "Scan unavailable" : "Older scan"}
+        </span>
+      ) : null}
+      {row.kickGuardDisabled ? (
+        <span title={row.kickGuardDetail || "Strategy kick disabled"}>Kicks disabled</span>
+      ) : null}
     </div>
   );
 }
@@ -2091,6 +2223,8 @@ function StrategyDetailContent({
           <AuctionAddressCell
             address={row.auctionAddress}
             version={row.auctionVersion}
+            wantAddress={row.wantAddress}
+            wantSymbol={row.wantSymbol}
             emptyContent={
               <MissingAuctionAction
                 deployState={deployState}
@@ -2142,7 +2276,7 @@ function StrategyDetailPanel({
   initialHistoryExpanded = false,
 }) {
   return (
-    <DetailPanel colSpan={5}>
+    <DetailPanel colSpan={4}>
       <StrategyDetailContent
         row={row}
         nowMs={nowMs}
@@ -2169,7 +2303,7 @@ function StrategyDetailModal({
   onClose,
 }) {
   return (
-    <DetailModal onClose={onClose}>
+    <DetailModal onClose={onClose} label="Strategy details">
       <StrategyDetailContent
         row={row}
         nowMs={nowMs}
@@ -2442,8 +2576,6 @@ export default function App() {
   const [initialLogsStatus] = useState(() => initialLocation.logsStatus);
   const [initialLogsQuery] = useState(() => initialLocation.logsQuery);
   const [selectedToken, setSelectedToken] = useState(getTokenFromUrl);
-  const [auctionFilter, setAuctionFilter] = useState("all");
-  const [isAuctionFilterMenuOpen, setIsAuctionFilterMenuOpen] = useState(false);
   const [balanceSortDirection, setBalanceSortDirection] = useState("desc");
   const [themePreference, setThemePreference] = useState(getStoredThemePreference);
   const [systemTheme, setSystemTheme] = useState(resolveSystemTheme);
@@ -2467,13 +2599,15 @@ export default function App() {
   const { data: alertsData, loading: alertsLoading, error: alertsError } = alerts;
   const [displayMode, setDisplayMode] = useState("usd");
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const isMobile = useMediaQuery("(max-width: 600px)");
+  const isMobile = useMediaQuery("(max-width: 780px)");
   const [expandedStrategyRows, setExpandedStrategyRows] = useState(() => new Set());
   const [expandedKickRows, setExpandedKickRows] = useState(() => new Set());
+  const [expandedRewardRows, setExpandedRewardRows] = useState(() => new Set());
   const [deployStates, setDeployStates] = useState({});
   const [deployConfirm, setDeployConfirm] = useState(null);
   const deployChecksRef = useRef(new Set());
-  const auctionFilterMenuRef = useRef(null);
+  const [tableHovered, setTableHovered] = useState(false);
+  const [tableFocused, setTableFocused] = useState(false);
 
   const handlePageChange = (page) => {
     setActivePage(page);
@@ -2540,31 +2674,6 @@ export default function App() {
       window.clearInterval(timerId);
     };
   }, []);
-
-  useEffect(() => {
-    if (!isAuctionFilterMenuOpen) {
-      return undefined;
-    }
-
-    const onMouseDown = (event) => {
-      if (auctionFilterMenuRef.current && !auctionFilterMenuRef.current.contains(event.target)) {
-        setIsAuctionFilterMenuOpen(false);
-      }
-    };
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") {
-        setIsAuctionFilterMenuOpen(false);
-      }
-    };
-
-    window.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isAuctionFilterMenuOpen]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -2661,19 +2770,6 @@ export default function App() {
     );
   }, [strategyRows]);
 
-  useEffect(() => {
-    if (selectedToken === ALL_TOKENS || !tokenOptions.length) {
-      return;
-    }
-
-    const exists = tokenOptions.some(
-      (option) => option.tokenAddress.toLowerCase() === selectedToken.toLowerCase(),
-    );
-    if (!exists) {
-      setSelectedToken(ALL_TOKENS);
-    }
-  }, [selectedToken, tokenOptions]);
-
   const visibleStrategyRows = useMemo(() => {
     return strategyRows.filter(
       (row) => (showZeroBalance || row.balances.length > 0) && (showClosedVaults || row.depositLimit !== "0"),
@@ -2691,16 +2787,6 @@ export default function App() {
             );
 
       if (!tokenMatch) {
-        return false;
-      }
-
-      const auctionMatch =
-        auctionFilter === "all"
-          ? true
-          : auctionFilter === "null"
-            ? !row.auctionAddress
-            : Boolean(row.auctionAddress);
-      if (!auctionMatch) {
         return false;
       }
 
@@ -2748,21 +2834,23 @@ export default function App() {
     });
 
     return filtered;
-  }, [visibleStrategyRows, searchTerm, selectedToken, auctionFilter, balanceSortDirection]);
+  }, [visibleStrategyRows, searchTerm, selectedToken, balanceSortDirection]);
 
+  const orderedStrategyRows = useStableRowOrder(
+    filteredStrategyRows,
+    JSON.stringify([searchTerm, selectedToken, showZeroBalance, showClosedVaults, balanceSortDirection]),
+    tableHovered || tableFocused || Boolean(deployConfirm) || Object.values(deployStates).some((state) => ["preparing", "wallet", "checking"].includes(state.status)),
+  );
 
   const latestVisibleScan = useMemo(() => {
-    if (!filteredStrategyRows.length) {
-      return summary?.latestScanAt || null;
-    }
-
-    return filteredStrategyRows.reduce((latest, row) => {
+    if (summary?.latestScanAt) return summary.latestScanAt;
+    return strategyRows.reduce((latest, row) => {
       if (!latest) {
         return row.scannedAt;
       }
       return row.scannedAt > latest ? row.scannedAt : latest;
     }, null);
-  }, [filteredStrategyRows, summary]);
+  }, [strategyRows, summary]);
 
   function toggleDisplayMode() {
     setDisplayMode((prev) => (prev === "token" ? "usd" : "token"));
@@ -2770,15 +2858,6 @@ export default function App() {
 
   function toggleBalanceSortDirection() {
     setBalanceSortDirection((prev) => (prev === "desc" ? "asc" : "desc"));
-  }
-
-  function toggleAuctionFilterMenu() {
-    setIsAuctionFilterMenuOpen((prev) => !prev);
-  }
-
-  function selectAuctionFilter(next) {
-    setAuctionFilter(next);
-    setIsAuctionFilterMenuOpen(false);
   }
 
   function toggleKickExpand(sourceAddress) {
@@ -2789,6 +2868,15 @@ export default function App() {
       } else {
         next.add(sourceAddress);
       }
+      return next;
+    });
+  }
+
+  function toggleRewardExpand(sourceAddress) {
+    setExpandedRewardRows((previous) => {
+      const next = new Set(previous);
+      if (next.has(sourceAddress)) next.delete(sourceAddress);
+      else next.add(sourceAddress);
       return next;
     });
   }
@@ -2807,17 +2895,6 @@ export default function App() {
       next.add(sourceAddress);
       return next;
     });
-  }
-
-  function handleStrategyRowKeyDown(sourceAddress, event) {
-    if (event.target !== event.currentTarget) {
-      return;
-    }
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-    event.preventDefault();
-    toggleStrategyExpand(sourceAddress);
   }
 
   function updateDeployState(sourceAddress, updates) {
@@ -3015,7 +3092,7 @@ export default function App() {
         </div>
       </header>
 
-      {activePage !== "kicks" ? <RefreshStatus state={activePage === "alerts" ? alerts : dashboard} /> : null}
+      {activePage === "alerts" || activePage === "fee-burner" ? <RefreshStatus state={activePage === "alerts" ? alerts : dashboard} nowMs={nowMs} /> : null}
 
       {activePage === "kicks" ? (
         <KickLogPage
@@ -3038,6 +3115,8 @@ export default function App() {
         <div className="toolbar-controls">
           <label className="control control-search">
             <input
+              type="search"
+              aria-label="Search strategies, vaults, tokens, addresses"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search strategies, vaults, tokens, addresses..."
@@ -3046,10 +3125,14 @@ export default function App() {
 
           <label className="control control-token">
             <select
+              aria-label="Filter by reward token"
               value={selectedToken}
               onChange={(event) => setSelectedToken(event.target.value)}
             >
               <option value={ALL_TOKENS}>All tokens</option>
+              {selectedToken !== ALL_TOKENS && !tokenOptions.some((token) => token.tokenAddress.toLowerCase() === selectedToken.toLowerCase()) ? (
+                <option value={selectedToken}>Selected token ({shortenAddress(selectedToken)})</option>
+              ) : null}
               {tokenOptions.map((token) => (
                 <option key={token.tokenAddress} value={token.tokenAddress}>
                   {token.tokenSymbol} ({token.strategyCount})
@@ -3064,7 +3147,7 @@ export default function App() {
               checked={showZeroBalance}
               onChange={(e) => setShowZeroBalance(e.target.checked)}
             />
-            <span>Show strats with no rewards</span>
+            <span>Include zero rewards</span>
           </label>
 
           <label className="toggle-filter">
@@ -3073,40 +3156,46 @@ export default function App() {
               checked={showClosedVaults}
               onChange={(e) => setShowClosedVaults(e.target.checked)}
             />
-            <span>Show retired</span>
+            <span>Include retired</span>
           </label>
         </div>
 
       </section>
 
-      <div className="toolbar-meta">
-        <span>Showing {filteredStrategyRows.length.toLocaleString()} results</span>
-        <span className="meta-sep" aria-hidden="true">&middot;</span>
-        <span>Scanned {formatTimestamp(latestVisibleScan)}</span>
+      <div className="toolbar-meta strategy-meta">
+        <span className="result-count" role="status"><strong>{filteredStrategyRows.length.toLocaleString()}</strong> of {strategyRows.length.toLocaleString()} strategies</span>
+        <RefreshStatus state={dashboard} scannedAt={latestVisibleScan} nowMs={nowMs} />
       </div>
 
       {error ? <p className="error">{error}</p> : null}
 
-      <div className="table-shell">
+      <div className="table-shell strategy-table-shell"
+        onPointerEnter={(event) => { if (event.pointerType !== "touch") setTableHovered(true); }}
+        onPointerLeave={() => setTableHovered(false)}
+        onFocusCapture={() => setTableFocused(true)}
+        onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTableFocused(false); }}>
         <table className="strategies-table">
+          <colgroup><col className="strategy-col" /><col className="auction-col" /><col className="history-col" /><col className="token-col" /></colgroup>
           <thead>
             <tr>
-              <th className="last-scan-col">Last Scan</th>
-              <th>Strategy</th>
-              <th className="auction-col">Auction</th>
-              <th className="history-col">History</th>
-              <th className="token-col">
+              <th id="strategy-heading" scope="col">Strategy</th>
+              <th id="auction-heading" scope="col" className="auction-col">Auction</th>
+              <th id="activity-heading" scope="col" className="history-col">Last activity</th>
+              <th id="rewards-heading" scope="col" className="token-col" aria-sort={balanceSortDirection === "desc" ? "descending" : "ascending"}>
+                <div className="rewards-heading"><span>Rewards</span>
                 <button
                   type="button"
                   className="th-sort-button"
                   onClick={toggleBalanceSortDirection}
+                  aria-label={`Sort rewards ${balanceSortDirection === "desc" ? "ascending" : "descending"}`}
                   title={`Sort by total token USD (${balanceSortDirection === "desc" ? "descending" : "ascending"})`}
                 >
-                  Token Balances
+                  USD
                   <span className="sort-indicator" aria-hidden="true">
                     {balanceSortDirection === "desc" ? "↓" : "↑"}
                   </span>
                 </button>
+                </div>
               </th>
             </tr>
           </thead>
@@ -3114,40 +3203,26 @@ export default function App() {
             {loadingRows ? <SkeletonRows /> : null}
             {!loadingRows && !filteredStrategyRows.length ? (
               <tr>
-                <td colSpan={5} className="empty">No strategies match the current filters.</td>
+                <td colSpan={4} className="empty">No strategies match the current filters.</td>
               </tr>
             ) : null}
             {!loadingRows
-              ? filteredStrategyRows.map((row) => (
+              ? orderedStrategyRows.map((row) => (
                   <Fragment key={row.sourceAddress}>
                     <tr
                       className={`strategy-row ${expandedStrategyRows.has(row.sourceAddress) ? "is-expanded" : ""}`}
-                      onClick={() => toggleStrategyExpand(row.sourceAddress)}
-                      onKeyDown={(event) => handleStrategyRowKeyDown(row.sourceAddress, event)}
-                      tabIndex={0}
+                      data-strategy={row.sourceAddress}
                     >
-                      <td className="mono muted last-scan-cell" data-label="Last Scan">
-                        <span className="last-scan-time" title={formatTimestamp(row.scannedAt)}>
-                          {formatRelativeTimestamp(row.scannedAt, nowMs)}
-                        </span>
-                        {row.kickGuardDisabled ? (
-                          <span
-                            className="scan-warning"
-                            title={row.kickGuardDetail || "Strategy kick disabled"}
-                            aria-label={row.kickGuardDetail || "Strategy kick disabled"}
-                            role="img"
-                          >
-                            ⚠️
-                          </span>
-                        ) : null}
-                      </td>
-                      <td data-label="Strategy">
+                      <td data-label="Strategy" headers="strategy-heading" className="strategy-identity-cell">
                         <EntityIdentity
                           primary={formatStrategyDisplayName(row.sourceName)}
                           address={row.sourceAddress}
+                          onOpen={() => toggleStrategyExpand(row.sourceAddress)}
+                          expanded={expandedStrategyRows.has(row.sourceAddress)}
                         />
+                        <RowScanStatus row={row} latestScanAt={latestVisibleScan} />
                       </td>
-                      <td className={`auction-cell${row.auctionAddress ? "" : " auction-cell-empty"}`} data-label="Auction">
+                      <td className="auction-cell" data-label="Auction" headers="auction-heading">
                         <AuctionAddressCell
                           address={row.auctionAddress}
                           version={row.auctionVersion}
@@ -3162,19 +3237,20 @@ export default function App() {
                           }
                         />
                       </td>
-                      <td className="history-cell" data-label="History">
+                      <td className="history-cell" data-label="Last activity" headers="activity-heading">
                         <KickHistoryCell
                           kicks={row.kicks}
                           nowMs={nowMs}
                           isExpanded={expandedKickRows.has(row.sourceAddress)}
                           onToggleExpand={() => toggleKickExpand(row.sourceAddress)}
-                          isMobile={isMobile}
                           fallbackAuctionAddress={row.auctionAddress}
                         />
                       </td>
-                      <td className="balances-cell" data-label="Balances">
-                        <TokenBalances
-                          balances={row.balances}
+                      <td className="balances-cell" data-label="Rewards" headers="rewards-heading">
+                        <RewardSummary
+                          row={row}
+                          expanded={expandedRewardRows.has(row.sourceAddress)}
+                          onToggleExpand={() => toggleRewardExpand(row.sourceAddress)}
                           displayMode={displayMode}
                           onToggleMode={toggleDisplayMode}
                         />

@@ -3,9 +3,26 @@ export const TOKEN = "0x2222222222222222222222222222222222222222";
 export const WANT = "0x3333333333333333333333333333333333333333";
 export const AUCTION = "0x4444444444444444444444444444444444444444";
 
+export async function contrastRatio(locator) {
+  return locator.evaluate((node) => {
+    const rgba = (color) => color.match(/[\d.]+/g).map(Number);
+    const blend = (front, back) => front.slice(0, 3).map((value, index) =>
+      value * (front[3] ?? 1) + back[index] * (1 - (front[3] ?? 1)));
+    const luminance = (color) => color
+      .map((value) => value / 255).map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+      .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    const layers = [];
+    for (let parent = node; parent; parent = parent.parentElement) layers.unshift(rgba(getComputedStyle(parent).backgroundColor));
+    const backgroundRgb = layers.reduce((back, front) => blend(front, back), [255, 255, 255]);
+    const background = luminance(backgroundRgb);
+    const foreground = luminance(blend(rgba(getComputedStyle(node).color), backgroundRgb));
+    return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+  });
+}
+
 export async function mockPublicApi(page) {
   const state = { balance: "1", failed: false, dashboardReads: 0, logReads: [], alertReads: 0, holdDashboard: null,
-    warnings: [], defaultsWarnings: [], prepareWarnings: [] };
+    warnings: [], defaultsWarnings: [], prepareWarnings: [], rows: null, latestScanAt: "2026-09-04T20:00:00Z" };
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     return url.hostname === "127.0.0.1" ? route.continue() : route.abort();
@@ -21,8 +38,8 @@ export async function mockPublicApi(page) {
       if (state.holdDashboard) await state.holdDashboard;
       if (state.failed) return route.fulfill({ status: 503, json: { detail: "fixture unavailable" } });
       data = {
-        latestScanAt: "2026-09-04T20:00:00Z",
-        rows: [{
+        latestScanAt: state.latestScanAt,
+        rows: state.rows || [{
           sourceType: "strategy", sourceAddress: STRATEGY, sourceName: "Fixture Strategy", active: true,
           wantAddress: WANT, wantSymbol: "USDC", auctionAddress: state.auctionAddress || null,
           scannedAt: "2026-09-04T20:00:00Z", depositLimit: "1", kicks: [],

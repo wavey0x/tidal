@@ -10,7 +10,10 @@ for (const theme of ["light", "dark"]) {
     await expect(page.getByText("$1.25", { exact: true })).toBeVisible();
     expect(await page.locator("html").getAttribute("data-theme")).toBeNull();
     expect(await page.evaluate(() => localStorage.getItem("tidal_theme_preference"))).toBeNull();
-    for (const button of [page.locator(".copy-trigger").first(), page.locator(".copy-trigger").last()]) {
+    const addressCopy = page.locator(".strategy-identity-cell .copy-trigger");
+    await page.getByRole("button", { name: "Expand rewards for Fixture Strategy", exact: true }).click();
+    const tokenCopy = page.getByRole("button", { name: "Copy token address for REWARD", exact: true });
+    for (const button of [addressCopy, tokenCopy]) {
       await button.click();
       await expect(button).toHaveClass(/is-copied/);
       await expect.poll(() => button.locator(".check-glyph").evaluate((node) => getComputedStyle(node).opacity)).toBe("1");

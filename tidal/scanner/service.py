@@ -8,8 +8,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import structlog
+from sqlalchemy import select
 
 from tidal.config import MonitoredFeeBurner
+from tidal.persistence import models
+from tidal.async_resources import close_client
 from tidal.lifecycle import execution_lock
 from tidal.paths import default_txn_lock_path
 from tidal.alerts.base import AlertSink
@@ -151,6 +154,14 @@ class ScannerService:
         with execution_lock(self.execution_lock_path):
             return await self._scan_once(on_progress)
 
+    async def close(self) -> None:
+        try:
+            provider = getattr(self.token_price_refresh_service, "price_provider", None)
+            if provider is not None:
+                await close_client(provider)
+        finally:
+            await close_client(self.web3_client)
+
     async def _scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
@@ -190,7 +201,7 @@ class ScannerService:
                     error_summary=f"scan aborted: {exc.__class__.__name__}",
                 )
                 self.session.commit()
-            await self._post_commit_alerts()
+            await self._post_commit_alerts(complete=False)
             raise
         await self._post_commit_alerts()
         return result
@@ -1126,12 +1137,21 @@ class ScannerService:
 
         return stats
 
-    async def _post_commit_alerts(self) -> None:
+    async def _post_commit_alerts(self, *, complete: bool = True) -> None:
         if self.alert_service is None or self.alert_dispatcher is None:
             return
         try:
             evaluation = self.alert_service.evaluate()
-            await self.alert_dispatcher.dispatch(evaluation.transitions)
+            pending = self.session.execute(select(models.app_metadata.c.notification_baseline_pending)).scalar()
+            if pending:
+                await self.alert_dispatcher.dispatch(evaluation.transitions, suppress=True)
+                # An aborted scan or a scan that deliberately omitted pricing
+                # cannot finish the first full evaluation after a restore.
+                if complete and getattr(self.token_price_refresh_service, "enabled", False):
+                    self.session.execute(models.app_metadata.update().values(notification_baseline_pending=0))
+                    self.session.commit()
+            else:
+                await self.alert_dispatcher.dispatch(evaluation.transitions)
         except Exception as exc:  # noqa: BLE001
             logger.warning("post_commit_alert_evaluation_failed", error_type=exc.__class__.__name__)
 

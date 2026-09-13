@@ -301,6 +301,7 @@ alert_deliveries = Table(
     Column("attempt_count", Integer, nullable=False, server_default="0"),
     Column("last_attempt_at", String, nullable=True),
     Column("sent_at", String, nullable=True),
+    Column("suppressed_at", String, nullable=True),
     Column("last_error", Text, nullable=True),
     CheckConstraint(
         "destination IN ('admin_alerts', 'operations_alerts')",

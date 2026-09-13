@@ -107,7 +107,8 @@ def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
         "SUCCESS",
         "run-1",
     )
-    assert revision == ("0029_transaction_ledger",)
+    from tidal.lifecycle import SCHEMA_REVISION
+    assert revision == (SCHEMA_REVISION,)
 
     command.downgrade(config, "0023_bounded_retry_alerts")
 

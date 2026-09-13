@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
+from sqlalchemy import select, text
 
 from tidal.api.errors import APIError
 from tidal.api.routes.actions import router as actions_router
@@ -19,6 +21,8 @@ from tidal.api.routes.kick import router as kick_router
 from tidal.api.routes.logs import router as logs_router
 from tidal.config import Settings
 from tidal.persistence.db import Database
+from tidal.persistence import models
+from tidal.lifecycle import SCHEMA_REVISION
 from tidal.security import redact_sensitive_text
 
 
@@ -76,8 +80,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/health")
-    async def health() -> dict[str, object]:
-        return {"status": "ok", "warnings": [], "data": {"ready": True}}
+    async def health():
+        # API readiness is deliberately independent of RPC, prices and signers.
+        # Check the actual DB; a listening process alone is not a usable API.
+        try:
+            with database.session() as session:
+                revision = session.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                identity = session.execute(select(models.app_metadata.c.database_identity)).scalar_one()
+                uuid.UUID(identity)
+                if revision != SCHEMA_REVISION:
+                    raise ValueError("incompatible schema")
+        except Exception:
+            return JSONResponse(status_code=503, content={"status": "error", "warnings": [],
+                "data": {"ready": False}, "detail": "Database is unavailable or incompatible with this release."})
+        return {"status": "ok", "warnings": [], "data": {"ready": True, "schema_revision": revision}}
 
     prefix = "/api/v1/tidal"
     app.include_router(dashboard_router, prefix=prefix, tags=["dashboard"])

@@ -20,6 +20,9 @@ class _Session:
     def rollback(self) -> None:
         self.rollbacks += 1
 
+    def execute(self, statement):
+        return SimpleNamespace(scalar=lambda: 0)
+
 
 class _RunRepository:
     def __init__(self) -> None:

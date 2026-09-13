@@ -114,7 +114,7 @@ def runtime(tmp_path, monkeypatch):
     database = Database(settings.database_url)
     session = database.session()
     binding = activation_binding(inspect_database(path)["database_identity"], 1, settings.managed_signers)
-    write_activation(tmp_path / "activation.json", binding)
+    write_activation(tmp_path / "activation.json", {**binding, "nonce_baseline": {signer.address: 7}})
     rpc = FixtureRPC(signer, path)
     reconciler = OperationReconciler(
         session=session, web3_client=rpc, auction_kicker_address=TARGET,

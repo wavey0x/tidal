@@ -31,6 +31,8 @@ app.add_typer(api_app, name="api")
 app.add_typer(scan_app, name="scan")
 app.add_typer(auth_app, name="auth")
 app.command("hold")(hold)
+from tidal.recovery_cli import register as register_recovery
+register_recovery(app)
 
 
 def _write_template(path: Path, content: str, *, force: bool) -> str:

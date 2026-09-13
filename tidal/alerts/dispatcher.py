@@ -18,9 +18,11 @@ class AlertDispatcher:
         self.session = session
         self.sink = sink
 
-    async def dispatch(self, messages: tuple[AlertMessage, ...]) -> None:
+    async def dispatch(self, messages: tuple[AlertMessage, ...], *, suppress: bool = False) -> None:
         for message in messages:
-            for destination in self.sink.destination_codes:
+            # Baseline both supported destinations even when transport is
+            # currently unconfigured; later enabling it must not replay old alerts.
+            for destination in (("admin_alerts", "operations_alerts") if suppress else self.sink.destination_codes):
                 self.session.execute(
                     sqlite_insert(models.alert_deliveries)
                     .values(
@@ -48,7 +50,13 @@ class AlertDispatcher:
                     .mappings()
                     .one()
                 )
-                if row["sent_at"] is not None or int(row["attempt_count"]) >= 3:
+                if suppress and row["sent_at"] is None and row["suppressed_at"] is None:
+                    self.session.execute(models.alert_deliveries.update().where(
+                        models.alert_deliveries.c.delivery_key == message.delivery_key,
+                        models.alert_deliveries.c.destination == destination,
+                    ).values(suppressed_at=utcnow_iso(), last_error="Suppressed during recovery baseline"))
+                    self.session.commit()
+                if suppress or row["suppressed_at"] is not None or row["sent_at"] is not None or int(row["attempt_count"]) >= 3:
                     continue
 
                 attempted_at = utcnow_iso()

@@ -37,6 +37,8 @@ app.add_typer(auth_app, name="auth")
 db_app.command("check")(db_check)
 db_app.command("import-legacy")(db_import_legacy)
 app.command("hold")(hold)
+from tidal.recovery_cli import register as register_recovery
+register_recovery(app, db_app)
 
 
 def _write_template(path: Path, content: str, *, force: bool) -> str:

@@ -65,9 +65,11 @@ class ManagedExecutor:
                 raise LifecycleError("STALE_CHAIN", "Current chain or finality evidence is stale; keep execution held.")
             latest = await self.web3_client.get_transaction_count(self.signer.address, "latest")
             pending = await self.web3_client.get_transaction_count(self.signer.address, "pending")
-            baseline = activation.get("nonce_baseline", {}).get(normalize_address(self.signer.address), 0)
+            baseline = activation.get("nonce_baseline", {}).get(normalize_address(self.signer.address))
+            if baseline is None:
+                raise LifecycleError("HELD", "Activation needs a checked account nonce; explicitly resume before sending.")
             expected = max(int(baseline), int(previous_nonce) + 1) if previous_nonce is not None else int(baseline)
-            if latest != pending or (expected and latest != expected):
+            if latest != pending or latest != expected:
                 raise LifecycleError("UNEXPECTED_NONCE", "Account activity differs from retained attempts; inspect and explicitly resume after review.")
             if "nonce" in transaction and rpc_int(transaction["nonce"]) != latest:
                 raise LifecycleError("UNEXPECTED_NONCE", "Prepared nonce is stale; prepare again from current conditions.")

@@ -1,6 +1,7 @@
 import pytest
+import uuid
 from fastapi.testclient import TestClient
-from sqlalchemy import select, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,16 @@ def test_api_cannot_write_database_and_never_loads_signer_or_starts_reconciler(t
     settings = Settings(DB_PATH=tmp_path / "tidal.db", RPC_URL="https://example.invalid",
                         TXN_KEYSTORE_PATH=str(tmp_path / "absent-key.json"), TXN_KEYSTORE_PASSPHRASE="fixture-only")
     _init_db(settings)
+    # API fixtures normally create only model tables. Health also requires
+    # the explicit lifecycle metadata supplied by migrations in a real DB.
+    from tidal.lifecycle import SCHEMA_REVISION
+    app_engine = create_engine(settings.database_url)
+    with Session(app_engine) as session:
+        session.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        session.execute(text("INSERT INTO alembic_version VALUES (:revision)"), {"revision": SCHEMA_REVISION})
+        session.execute(models.app_metadata.insert().values(id=1, database_identity=str(uuid.uuid4())))
+        session.commit()
+    app_engine.dispose()
     monkeypatch.setattr("tidal.runtime.TransactionSigner", lambda *a, **k: pytest.fail("API must not unlock a signer"))
     monkeypatch.setattr("tidal.runtime.build_web3_client", lambda *a, **k: pytest.fail("API lifespan must not start receipt RPC"))
     app = create_app(settings)
@@ -57,3 +68,20 @@ def test_api_transaction_view_reads_same_ledger_and_preserves_provisional_status
         detail = client.get(f"/api/v1/tidal/transactions/{transaction_id}", headers=headers).json()["data"]
         assert detail["status"] == "INCLUDED"
         assert detail["operations"][0]["status"] == "SUBMITTED"
+
+@pytest.mark.parametrize("state", ["missing", "incompatible"])
+def test_health_refuses_unusable_database_without_contacting_dependencies(tmp_path, state, monkeypatch):
+    from tidal.migrations import run_migrations
+    settings = Settings(DB_PATH=tmp_path / "health.db")
+    if state == "incompatible":
+        run_migrations(settings.database_url)
+        engine = create_engine(settings.database_url)
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE alembic_version SET version_num='other-release'"))
+        engine.dispose()
+    monkeypatch.setattr("tidal.runtime.build_web3_client", lambda *a, **k: pytest.fail("Health cannot need RPC"))
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/health")
+        assert response.status_code == 503 and response.json()["data"]["ready"] is False
+    if state == "missing":
+        assert not settings.resolved_db_path.exists()

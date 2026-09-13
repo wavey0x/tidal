@@ -71,7 +71,13 @@ def build_scanner_service(
     *,
     auto_settle: bool = False,
     auto_enable_tokens: bool = False,
+    recovery: bool = False,
 ) -> ScannerService:
+    if recovery:
+        # Composition excludes every external effect even if production
+        # credentials are present. Recovery is an observation-only scan.
+        auto_settle = auto_enable_tokens = False
+        settings = settings.model_copy(update={"price_refresh_enabled": False})
     web3_client = Web3Client(
         settings.rpc_url,
         timeout_seconds=settings.rpc_timeout_seconds,
@@ -139,7 +145,7 @@ def build_scanner_service(
         enabled=settings.price_refresh_enabled,
         concurrency=settings.price_concurrency,
         delay_seconds=settings.price_delay_seconds,
-        price_provider=TokenPriceAggProvider(
+        price_provider=None if recovery else TokenPriceAggProvider(
             chain_id=settings.chain_id,
             base_url=settings.token_price_agg_base_url,
             api_key=settings.token_price_agg_key,
@@ -149,8 +155,8 @@ def build_scanner_service(
         token_repository=token_repository,
     )
 
-    alert_sink = build_alert_sink(settings)
-    operation_reconciler = OperationReconciler(
+    alert_sink = NullAlertSink() if recovery else build_alert_sink(settings)
+    operation_reconciler = None if recovery else OperationReconciler(
         session=session,
         web3_client=web3_client,
         auction_kicker_address=settings.auction_kicker_address,
@@ -249,7 +255,7 @@ def build_scanner_service(
         strategy_gauge_status_reader=StrategyGaugeStatusReader(web3_client),
         scan_run_repository=scan_run_repository,
         scan_item_error_repository=scan_item_error_repository,
-        auctionscan_service=AuctionScanService(session, settings),
+        auctionscan_service=None if recovery else AuctionScanService(session, settings),
         auctionscan_enrichment_batch_size=settings.auctionscan_enrichment_batch_size,
         alert_sink=alert_sink,
         operation_reconciler=operation_reconciler,
@@ -259,8 +265,8 @@ def build_scanner_service(
                 session, settings
             )
         ),
-        alert_service=AlertService(session=session, settings=settings),
-        alert_dispatcher=AlertDispatcher(session=session, sink=alert_sink),
+        alert_service=None if recovery else AlertService(session=session, settings=settings),
+        alert_dispatcher=None if recovery else AlertDispatcher(session=session, sink=alert_sink),
     )
 
 

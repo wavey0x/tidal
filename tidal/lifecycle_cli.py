@@ -37,7 +37,7 @@ def emit_operation(operation: Callable[[], dict], *, json_output: bool) -> None:
     if not json_output and payload["warnings"]:
         render_warning_panel([item["message"] for item in payload["warnings"]])
     if payload["blockers"]:
-        raise typer.Exit(code=75 if payload["code"] in {"BUSY", "WAITING", "UNRESOLVED_ATTEMPTS"} else 1)
+        raise typer.Exit(code=75 if payload["code"] in {"BUSY", "WAITING", "UNRESOLVED_ATTEMPTS", "WAITING_FOR_RPC", "WAITING_FOR_DEPENDENCY"} else 1)
 
 
 def db_check(
@@ -47,7 +47,7 @@ def db_check(
 ) -> None:
     """Offline check; never initializes, migrates or contacts any service."""
     def run() -> dict:
-        path = database or (load_server_settings(config).resolved_db_path if config else default_db_path())
+        path = database or load_server_settings(config).resolved_db_path
         return result("OK", data=inspect_database(path))
 
     emit_operation(run, json_output=json_output)

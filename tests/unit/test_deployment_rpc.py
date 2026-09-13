@@ -29,7 +29,10 @@ async def test_slow_deploy_requests_do_not_block_health_and_excess_work_is_rejec
         return [], {}, {}, {"to": kwargs["receiver"]}
 
     monkeypatch.setattr(action_prepare, "_build_deploy_prepare_payload", preview)
-    app = create_app(Settings(db_path=tmp_path / "api.db", rpc_url=""))
+    settings = Settings(db_path=tmp_path / "api.db", rpc_url="")
+    from tidal.migrations import run_migrations
+    run_migrations(settings.database_url)
+    app = create_app(settings)
     payload = {"want": "0x" + "11" * 20, "receiver": "0x" + "22" * 20}
     path = "/api/v1/tidal/auctions/deploy/browser-prepare"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

@@ -40,7 +40,7 @@ def _require_scan_confirmation_policy(
         require_no_confirmation_for_unattended(no_confirmation=no_confirmation, command_name="scan auto-enable-tokens")
 
 
-def _run_scan_once(*, ctx: CLIContext, auto_settle: bool, auto_enable_tokens: bool) -> object:
+def _run_scan_once(*, ctx: CLIContext, auto_settle: bool, auto_enable_tokens: bool, json_output: bool = False) -> object:
     _require_scan_runtime(ctx, auto_settle=auto_settle, auto_enable_tokens=auto_enable_tokens)
     scan_start = time.monotonic()
     step_start = scan_start
@@ -62,7 +62,13 @@ def _run_scan_once(*, ctx: CLIContext, auto_settle: bool, auto_enable_tokens: bo
             auto_settle=auto_settle,
             auto_enable_tokens=auto_enable_tokens,
         )
-        return asyncio.run(scanner.scan_once(on_progress=show_progress))
+        async def run():
+            try:
+                return await scanner.scan_once(on_progress=None if json_output else show_progress)
+            finally:
+                if hasattr(scanner, "close"):
+                    await scanner.close()
+        return asyncio.run(run())
 
 
 @app.command("run")
@@ -91,6 +97,7 @@ def scan_run(
             ctx=cli_ctx,
             auto_settle=auto_settle,
             auto_enable_tokens=auto_enable_tokens,
+            json_output=json_output,
         )
     except ConfigurationError as exc:
         typer.echo(str(exc), err=True)

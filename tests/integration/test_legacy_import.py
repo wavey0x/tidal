@@ -40,7 +40,7 @@ def retained(tmp_path, monkeypatch):
         with closing(sqlite3.connect(target)) as destination:
             connection.backup(destination)
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{target}")
-    command.upgrade(cfg, "0029_transaction_ledger")
+    command.upgrade(cfg, "head")
     with closing(sqlite3.connect(outbox)) as connection:
         connection.execute("""CREATE TABLE action_report_outbox (
             id INTEGER PRIMARY KEY, base_url TEXT, action_id TEXT, tx_index INTEGER,

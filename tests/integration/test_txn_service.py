@@ -463,7 +463,8 @@ async def test_live_skip_below_threshold_not_counted(session):
 
 
 @pytest.mark.asyncio
-async def test_live_planner_prepare_error_counts_as_failure_and_persists(session):
+@pytest.mark.parametrize("dependency_unavailable", [False, True])
+async def test_live_planner_prepare_error_counts_as_failure_and_persists(session, dependency_unavailable):
     _seed_candidate(session)
     txn_run_repo = TxnRunRepository(session)
     kick_tx_repo = KickTxRepository(session)
@@ -500,6 +501,7 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
                         error_message="quote API failed: upstream timeout",
                         sell_amount="12345",
                         usd_value="2500",
+                        dependency_unavailable=dependency_unavailable,
                     ),
                 )
             ],
@@ -526,6 +528,7 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
     assert result.status == "FAILED"
     assert result.kicks_attempted == 0
     assert result.kicks_failed == 1
+    assert result.dependency_failures == int(dependency_unavailable)
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["status"] == "ERROR"

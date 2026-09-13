@@ -292,6 +292,7 @@ class TxnService:
         blocked_reason = None
         kicks_succeeded = 0
         kicks_failed = 0
+        dependency_failures = 0
         failed_messages: list[str] = []
         for skipped in plan.skipped_during_prepare:
             if skipped.result is None:
@@ -306,6 +307,8 @@ class TxnService:
             )
             kicks_attempted += attempt_delta
             kicks_failed += failure_delta
+            if skipped.result.dependency_unavailable:
+                dependency_failures += failure_delta
 
         if live:
             try:
@@ -403,4 +406,5 @@ class TxnService:
             deferred_same_auction_count=plan.deferred_same_auction_count,
             limited_candidate_count=plan.limited_count,
             failure_summary=failure_summary,
+            dependency_failures=dependency_failures,
         )

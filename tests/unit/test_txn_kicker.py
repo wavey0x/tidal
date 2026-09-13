@@ -77,7 +77,7 @@ def _pricing_policy(profile: PricingProfile) -> PricingPolicy:
     )
 
 
-async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult) -> PreparedKick:
+async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult, *, expected_type=PreparedKick):
     candidate = _candidate()
     preparer = KickPreparer(
         web3_client=object(),
@@ -107,7 +107,7 @@ async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult
             step_duration_seconds=60,
         ),
     )
-    assert isinstance(result, PreparedKick)
+    assert isinstance(result, expected_type)
     return result
 
 
@@ -523,3 +523,19 @@ async def test_resolve_delegates_intent_and_preserves_provisional_operation(sess
     assert rows[0]["status"] == "SUBMITTED"
     assert rows[0]["token_address"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert rows[0]["stuck_abort_reason"] == "inactive kicked lot with stranded inventory"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case,waiting", [("no_route", True), ("missing_curve", True), ("invalid_decimals", False)])
+async def test_quote_unavailability_is_retryable_but_invalid_quote_remains_error(case, waiting):
+    profile = PricingProfile(name="stable", start_price_buffer_bps=100, min_price_buffer_bps=250, step_decay_rate_bps=2)
+    quote = QuoteResult(
+        amount_out_raw=None if case == "no_route" else 1000 * 10**18,
+        token_out_decimals=None if case == "invalid_decimals" else 18,
+        provider_statuses={"curve": "ok" if case == "invalid_decimals" else "error", "enso": "ok"},
+        provider_amounts={"enso": 1000 * 10**18, **({"curve": 1000 * 10**18} if case == "invalid_decimals" else {})},
+    )
+    outcome = await _prepare_with_quote(profile, quote, expected_type=KickResult)
+    assert outcome.status == KickStatus.ERROR
+    assert outcome.dependency_unavailable is waiting
+    assert outcome.tx_hash is None and outcome.error_message

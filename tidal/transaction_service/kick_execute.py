@@ -263,6 +263,7 @@ class KickExecutor:
             gas_price_gwei=result.gas_price_gwei,
             block_number=result.block_number,
             error_message=persisted.error_message,
+            dependency_unavailable=result.dependency_unavailable,
             sell_amount=result.sell_amount,
             starting_price=result.starting_price,
             minimum_price=result.minimum_price,

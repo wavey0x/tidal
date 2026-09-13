@@ -169,8 +169,11 @@ def kick_run(
                          else "; ".join((run.get("failure_summary") or {"Execution is held for review": 1}).keys())}
                         for run in waiting_runs)
         if any(run["kicks_failed"] for run in runs):
-            code = "EXECUTION_ERROR"
-            blockers.append({"code": code, "message": "One or more operations failed; inspect the retained run details."})
+            dependency_only = all(run["kicks_failed"] == run["dependency_failures"] for run in runs)
+            code = "WAITING_FOR_DEPENDENCY" if dependency_only else "EXECUTION_ERROR"
+            message = ("Required quotes are unavailable; affected candidates remain unsent and will be checked next cycle."
+                       if dependency_only else "One or more operations failed; inspect the retained run details.")
+            blockers.append({"code": code, "message": message})
         return result(code, data={"runs": runs, "pending_transactions": len(pending)}, blockers=blockers)
 
     emit_operation(lambda: asyncio.run(execute()), json_output=json_output)

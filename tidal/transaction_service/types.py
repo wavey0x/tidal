@@ -217,6 +217,7 @@ class KickResult:
     live_balance_raw: int | None = None
     usd_value: str | None = None
     quote_response_json: str | None = None
+    dependency_unavailable: bool = False
     reason_code: KickSkipReason | None = None
     reason_data: dict[str, object] | None = None
     execution_report: TransactionExecutionReport | None = None
@@ -482,3 +483,4 @@ class TxnRunResult:
     deferred_same_auction_count: int = 0
     limited_candidate_count: int = 0
     failure_summary: dict[str, int] | None = None
+    dependency_failures: int = 0

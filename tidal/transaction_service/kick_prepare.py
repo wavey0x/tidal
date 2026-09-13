@@ -427,6 +427,7 @@ class KickPreparer:
                 kick_tx_id=0,
                 status=KickStatus.ERROR,
                 error_message="no quote available for this pair",
+                dependency_unavailable=True,
                 quote_response_json=quote_response_json,
             )
 
@@ -445,6 +446,7 @@ class KickPreparer:
                 kick_tx_id=0,
                 status=KickStatus.ERROR,
                 error_message=f"curve quote unavailable (status: {curve_status})",
+                dependency_unavailable=True,
                 quote_response_json=quote_response_json,
             )
 

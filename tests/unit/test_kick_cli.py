@@ -136,3 +136,24 @@ def test_missing_profile_is_explicit_instead_of_silently_inheriting_other_policy
     native.settings.execution_profiles.pop("fee_burner")
     with pytest.raises(Exception, match="Missing explicit execution profile"):
         kick_cli._profile_settings(native.settings, "fee_burner")
+
+
+@pytest.mark.parametrize("failed,dependencies,expected_exit,code", [
+    (1, 1, 75, "WAITING_FOR_DEPENDENCY"),
+    (2, 1, 1, "EXECUTION_ERROR"),
+    (1, 0, 1, "EXECUTION_ERROR"),
+])
+def test_dependency_wait_preserves_errors_and_does_not_mask_execution_failure(native, monkeypatch, failed, dependencies, expected_exit, code):
+    def build(*args, **kwargs):
+        async def run_once(**options):
+            return TxnRunResult(run_id="quote-fixture", status="FAILED", candidates_found=failed,
+                kicks_attempted=0, kicks_succeeded=0, kicks_failed=failed,
+                dependency_failures=dependencies, failure_summary={"quote unavailable": dependencies})
+        return SimpleNamespace(run_once=run_once)
+    monkeypatch.setattr(kick_cli, "build_txn_service", build)
+    response = invoke(native, "--headless", "--json", "--source-type", "strategy")
+    assert response.exit_code == expected_exit, response.output
+    payload = json.loads(response.stdout)
+    assert payload["code"] == code
+    assert payload["data"]["runs"][0]["kicks_failed"] == failed
+    assert payload["blockers"]

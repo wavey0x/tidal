@@ -84,6 +84,12 @@ backup scheduler determines cadence; adding a second destination is optional.
    retrieve a post-recovery backup, and retrieve the next scheduled backup.
    Record elapsed recovery time and any manual intervention.
 
+An unavailable route or required Curve quote leaves the affected candidate
+unsent and retains its error audit. When these are the only candidate failures,
+the kick command reports `WAITING_FOR_DEPENDENCY` (exit 75); the existing timer
+can retry normally. Malformed quote data, execution failures and unexpected
+exceptions still fail explicitly. Do not relax quote requirements to resume.
+
 The outer recovery workflow should expose two operator actions: restore into a
 held state, then resume. Its journal records completed phases so interruption
 does not require guessing which files were replaced.

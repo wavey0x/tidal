@@ -153,3 +153,20 @@ async def test_rpc_failure_preserves_the_retained_attempt():
     with pytest.raises(TimeoutError):
         await observe_transaction(rpc, saved)
     assert saved == original
+
+
+def test_missing_legacy_identity_comes_from_exact_transaction_without_account_nonce_reads():
+    from tidal.transaction_evidence import hydrate_legacy_identity
+
+    minimal = {"tx_hash": HASH, "data": retained()["data"]}
+    actual = hydrate_legacy_identity(minimal, evidence()["transaction"], chain_id=1)
+    assert actual == retained()
+
+
+@pytest.mark.parametrize("field,value", [("nonce", 999), ("signer", "0x" + "9" * 40), ("data", "0xdeadbeef")])
+def test_legacy_hydration_refuses_to_rewrite_retained_intent(field, value):
+    from tidal.transaction_evidence import hydrate_legacy_identity
+
+    with pytest.raises(EvidenceError) as error:
+        hydrate_legacy_identity({**retained(), field: value}, evidence()["transaction"], chain_id=1)
+    assert error.value.code == "LEGACY_CONFLICT"

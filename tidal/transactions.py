@@ -11,7 +11,7 @@ from tidal.lifecycle import LifecycleError, execution_lock
 from tidal.persistence import models
 from tidal.persistence.repositories import AuctionEnabledTokenRepository, KickTxRepository
 from tidal.time import utcnow_iso
-from tidal.transaction_evidence import EvidenceError, observe_transaction, rpc_int
+from tidal.transaction_evidence import EvidenceError, hydrate_legacy_identity, observe_transaction, rpc_int
 
 TERMINAL_STATUSES = frozenset({"CONFIRMED", "REVERTED", "SUPERSEDED"})
 UNRESOLVED_STATUSES = frozenset({"RECORDED", "PENDING", "INCLUDED", "REVIEW_REQUIRED"})
@@ -79,9 +79,11 @@ class LedgerReconciler:
 
     async def reconcile(self, *, transaction_ids: list[int] | None = None, limit: int = 100) -> list[dict]:
         with execution_lock(self.settings.resolved_home_path / "execution.lock"):
-            rows = self.repository.unresolved()
-            if transaction_ids is not None:
-                rows = [row for row in rows if row["id"] in transaction_ids]
+            rows = self.repository.unresolved() if transaction_ids is None else [
+                dict(row) for row in self.session.execute(select(models.transactions).where(
+                    models.transactions.c.id.in_(transaction_ids),
+                )).mappings()
+            ]
             self.session.commit()
             for row in rows[:limit]:
                 await self._reconcile_one(row)
@@ -90,6 +92,16 @@ class LedgerReconciler:
     async def _reconcile_one(self, row: dict) -> None:
         transaction_id = int(row["id"])
         try:
+            if row["legacy"] and row.get("tx_hash") and any(row.get(field) is None for field in (
+                "chain_id", "signer", "nonce", "to_address", "data", "value",
+            )):
+                identity = hydrate_legacy_identity(
+                    row, await self.web3_client.get_transaction(str(row["tx_hash"])),
+                    chain_id=self.settings.chain_id,
+                )
+                self.repository.update(transaction_id, **identity)
+                self.session.commit()
+                row = {**row, **identity}
             evidence = await observe_transaction(self.web3_client, row)
         except EvidenceError as exc:
             self.repository.update(transaction_id, status="REVIEW_REQUIRED", error_message=f"{exc.code}: {exc}")
@@ -123,7 +135,10 @@ class LedgerReconciler:
         operation_rows = [dict(item) for item in self.session.execute(
             select(models.kick_txs).where(models.kick_txs.c.transaction_id == transaction_id)
         ).mappings()]
-        if not operation_rows and not row["legacy"]:
+        business_action = str(row["operation"]).replace("-", "_") in {
+            "kick", "resolve_auction", "settle", "sweep", "sweep_auction", "enable_tokens", "legacy_unknown",
+        }
+        if not operation_rows and (not row["legacy"] or business_action):
             self.repository.update(transaction_id, status="REVIEW_REQUIRED", error_message="Managed transaction has no linked business operations", **common)
             self.session.commit()
             return
@@ -161,3 +176,42 @@ class LedgerReconciler:
         except BaseException:
             self.session.rollback()
             raise
+
+    async def resolve_with_replacement(self, *, transaction_id: int, replacement_hash: str, note: str) -> dict:
+        """Explicitly verify external nonce resolution; never send or retry."""
+        if not note.strip():
+            raise LifecycleError("REVIEW_NOTE_REQUIRED", "Describe the reviewed replacement or cancellation.")
+        with execution_lock(self.settings.resolved_home_path / "execution.lock"):
+            original = self.repository.get(transaction_id)
+            if original["status"] in TERMINAL_STATUSES:
+                return original
+            self.session.commit()
+            await self._reconcile_one(original)
+            original = self.repository.get(transaction_id)
+            if original["status"] in TERMINAL_STATUSES:
+                return original
+            if any(original.get(field) is None for field in ("chain_id", "signer", "nonce", "tx_hash")):
+                raise LifecycleError("INCOMPLETE_IDENTITY", "Original signer, chain, nonce and hash must be known before nonce resolution.")
+            if HexBytes(replacement_hash) == HexBytes(original["tx_hash"]):
+                raise LifecycleError("INVALID_REPLACEMENT", "The replacement hash must differ from the original attempt.")
+            self.session.commit()
+            identity = hydrate_legacy_identity({
+                "tx_hash": replacement_hash, "chain_id": original["chain_id"],
+                "signer": original["signer"], "nonce": original["nonce"],
+            }, await self.web3_client.get_transaction(replacement_hash), chain_id=self.settings.chain_id)
+            evidence = await observe_transaction(self.web3_client, identity)
+            if not evidence.finalized:
+                raise LifecycleError("UNRESOLVED_ATTEMPTS", "Replacement is not finalized; original attempt remains unresolved.")
+            # Consuming the exact nonce resolves the original attempt. A
+            # replacement's own successful receipt does not prove that the
+            # original kick/settlement happened, even with similar calldata.
+            self.repository.update(
+                transaction_id, status="SUPERSEDED", resolved_by_hash=identity["tx_hash"],
+                operator_note=note.strip(), verified_at=utcnow_iso(), error_message=None,
+            )
+            self.session.execute(update(models.kick_txs).where(
+                models.kick_txs.c.transaction_id == transaction_id,
+                models.kick_txs.c.status == "SUBMITTED",
+            ).values(status="SUPERSEDED", error_message="Original attempt superseded by verified finalized nonce consumption"))
+            self.session.commit()
+            return self.repository.get(transaction_id)

@@ -56,3 +56,28 @@ def hold(json_output: JsonOption = False) -> None:
             return result("HELD", data={"activated": False})
 
     emit_operation(run, json_output=json_output)
+
+
+def db_import_legacy(
+    source_database: Path = typer.Option(..., "--source-database", help="Protected original pre-consolidation main DB."),
+    outbox: Path = typer.Option(..., "--outbox", help="Protected matching legacy operator outbox."),
+    config: ConfigOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    """Import retained submissions without signing, RPC reads or delivery."""
+    from tidal.legacy_import import import_legacy
+    from tidal.persistence.db import Database
+
+    def run() -> dict:
+        settings = load_server_settings(config)
+        inspect_database(settings.resolved_db_path)
+        database = Database(settings.database_url)
+        try:
+            with database.session() as session:
+                return result("IMPORTED_AND_HELD", data=import_legacy(
+                    settings=settings, session=session, source_database=source_database, outbox=outbox,
+                ))
+        finally:
+            database.engine.dispose()
+
+    emit_operation(run, json_output=json_output)

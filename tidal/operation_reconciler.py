@@ -271,13 +271,13 @@ class OperationReconciler:
         from tidal.transactions import LedgerReconciler
 
         retained = self.session.execute(select(models.transactions).where(
-            models.transactions.c.tx_hash == tx_hash.lower(), models.transactions.c.legacy == 0,
+            models.transactions.c.tx_hash == tx_hash.lower(),
         )).mappings().first()
-        if retained is not None:
+        if retained is not None and (self.lifecycle_settings is not None or not retained["legacy"]):
             if self.lifecycle_settings is None:
                 return "native_reconciliation_settings_missing"
-            # New managed attempts can only be resolved from fresh, finalized
-            # evidence. Never let an old scanner callback bypass that contract.
+            # Native runtime callbacks, including retained legacy work, require
+            # fresh canonical and finalized evidence before business updates.
             native = LedgerReconciler(
                 session=self.session, settings=self.lifecycle_settings,
                 web3_client=self.web3_client, operation_reconciler=self,

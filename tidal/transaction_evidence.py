@@ -54,6 +54,44 @@ class ChainEvidence:
     finalized: bool
 
 
+def hydrate_legacy_identity(retained: Mapping[str, object], transaction: dict, *, chain_id: int) -> dict:
+    """Fill missing legacy fields only from the exact retained transaction.
+
+    Today's account nonce is never a source for historical identity. Any
+    retained field disagreement stops hydration, including unsigned intent.
+    """
+    try:
+        identity = {
+            "tx_hash": "0x" + _hash(transaction["hash"]).hex(),
+            "chain_id": rpc_int(transaction["chainId"]),
+            "signer": _address(transaction["from"]), "nonce": rpc_int(transaction["nonce"]),
+            "to_address": _address(transaction["to"]),
+            "data": "0x" + bytes(HexBytes(transaction["input"])).hex(),
+            "value": str(rpc_int(transaction["value"])),
+        }
+        if _hash(retained["tx_hash"]) != _hash(identity["tx_hash"]) or identity["chain_id"] != chain_id:
+            raise EvidenceError("LEGACY_CONFLICT", "Historical transaction hash or chain differs from the retained evidence.")
+        for field, observed in identity.items():
+            value = retained.get(field)
+            if value is None:
+                continue
+            if field in {"nonce", "chain_id"}:
+                value = rpc_int(value)
+            elif field == "value":
+                value = str(rpc_int(value))
+            elif field in {"signer", "to_address"}:
+                value = _address(value)
+            elif field in {"data", "tx_hash"}:
+                value = "0x" + bytes(HexBytes(value)).hex()
+            if value != observed:
+                raise EvidenceError("LEGACY_CONFLICT", f"Historical transaction disagrees with retained {field}.")
+        return identity
+    except EvidenceError:
+        raise
+    except (TypeError, ValueError, KeyError) as exc:
+        raise EvidenceError("INCOMPLETE_IDENTITY", "Exact historical transaction identity is unavailable.") from exc
+
+
 def verify_evidence(
     retained: Mapping[str, object], *, transaction: dict, receipt: dict,
     block: dict, finalized_head: dict, chain_id: int,

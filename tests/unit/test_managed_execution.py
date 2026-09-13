@@ -2,6 +2,7 @@ import sqlite3
 import time
 from contextlib import closing
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from eth_account import Account
@@ -287,6 +288,59 @@ async def test_conflicting_receipt_block_remains_held(runtime):
     result = await submit(runtime)
     assert result["status"] == "REVIEW_REQUIRED"
     assert runtime.session.execute(select(models.kick_txs.c.status)).scalar_one() == "SUBMITTED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finalized", [100, 102])
+async def test_explicit_replacement_requires_finality_and_never_confirms_original_business(runtime, finalized):
+    original = await submit(runtime)
+    replacement_hash = "0x" + "ef" * 32
+    original_get_tx = runtime.rpc.get_transaction
+
+    async def replacement_tx(tx_hash):
+        tx = await original_get_tx(tx_hash)
+        return {**tx, "input": "0x", "value": 0}
+
+    async def receipt(tx_hash, *, timeout_seconds):
+        if tx_hash == original["tx_hash"]:
+            raise TransactionNotFound(tx_hash)
+        return {"transactionHash": replacement_hash, "from": runtime.signer.address, "to": TARGET,
+                "status": 1, "blockNumber": 101, "blockHash": BLOCK, "transactionIndex": 2}
+
+    runtime.rpc.get_transaction = replacement_tx
+    runtime.rpc.get_transaction_receipt = receipt
+    runtime.rpc.finalized = finalized
+    if finalized == 100:
+        with pytest.raises(LifecycleError, match="not finalized"):
+            await runtime.executor.reconciler.resolve_with_replacement(
+                transaction_id=original["id"], replacement_hash=replacement_hash, note="Fixture cancellation reviewed",
+            )
+        assert runtime.executor.repository.get(original["id"])["status"] == "PENDING"
+    else:
+        result = await runtime.executor.reconciler.resolve_with_replacement(
+            transaction_id=original["id"], replacement_hash=replacement_hash, note="Fixture cancellation reviewed",
+        )
+        assert result["status"] == "SUPERSEDED"
+        assert result["resolved_by_hash"] == replacement_hash
+        row = runtime.session.execute(select(models.kick_txs)).mappings().one()
+        assert row["status"] == "SUPERSEDED"
+        assert row["sell_amount"] is None
+    assert runtime.rpc.sends == runtime.signer.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_higher_nonce_is_not_evidence_of_the_original_business_outcome(runtime):
+    original = await submit(runtime)
+    wrong = {**await runtime.rpc.get_transaction("0x" + "ef" * 32), "nonce": 8}
+    runtime.rpc.get_transaction = AsyncMock(return_value=wrong)
+    from tidal.transaction_evidence import EvidenceError
+    with pytest.raises(EvidenceError) as error:
+        await runtime.executor.reconciler.resolve_with_replacement(
+            transaction_id=original["id"], replacement_hash=wrong["hash"], note="Fixture review",
+        )
+    assert error.value.code == "LEGACY_CONFLICT"
+    assert runtime.executor.repository.get(original["id"])["status"] == "PENDING"
+    assert runtime.rpc.sends == 1
 
 
 @pytest.mark.asyncio

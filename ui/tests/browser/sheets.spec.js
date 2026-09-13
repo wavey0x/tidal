@@ -84,7 +84,7 @@ for (const theme of ["light", "dark"]) {
   }
 }
 
-test("content swipes scroll rather than drag the sheet; only the header dismisses", async ({ browser }) => {
+test("content scrolls normally; a downward pull at the top follows the finger and dismisses", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     const page = await context.newPage();
@@ -98,15 +98,221 @@ test("content swipes scroll rather than drag the sheet; only the header dismisse
     await swipe(page, session, 230, 500, -260);
     await expect.poll(() => body.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
     await expect(dialog).toHaveCSS("transform", "none");
-    await body.evaluate(node => { node.scrollTop = 0; });
+    // A scroll that started below the top never turns into a dismissal.
     await swipe(page, session, 230, 250, 180);
-    await expect(dialog).toBeVisible();
     await expect(dialog).toHaveCSS("transform", "none");
-    const header = await dialog.locator(".kick-modal-header").boundingBox();
-    await swipe(page, session, 100, header.y + 25, 130);
+    await body.evaluate(node => { node.scrollTop = 0; });
+    const start = await dialog.boundingBox();
+    const content = await body.boundingBox();
+    const x = 230, y = content.y + 20;
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 140 }] });
+    await expect.poll(async () => (await dialog.boundingBox()).y - start.y).toBeGreaterThan(120);
+    expect(await body.evaluate(node => node.scrollTop)).toBe(0);
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await expect(dialog).toHaveCount(0);
   } finally { await context.close(); }
 });
+
+for (const path of ["/", "/logs"]) {
+  test(`${path}: mouse drags settle, reverse, dismiss, and reopen without stale state`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await sheetFixture(page);
+    await page.goto(path);
+    const opener = page.getByRole("button", { name: /^Show details for / }).first();
+    const dialog = page.getByRole("dialog");
+    const startDrag = async () => {
+      await expect(dialog).toHaveCSS("transform", "none");
+      const box = await dialog.boundingBox();
+      await page.mouse.move(195, box.y + 9);
+      await page.mouse.down();
+      return box.y + 9;
+    };
+    await opener.click();
+    let y = await startDrag();
+    await page.mouse.move(195, y + 30, { steps: 5 });
+    await page.waitForTimeout(140); // Holding a short pull is not a flick.
+    await page.mouse.up();
+    await expect(dialog).toHaveCSS("transform", "none");
+    y = await startDrag();
+    await page.mouse.move(195, y + 180, { steps: 5 });
+    await page.mouse.move(195, y + 140, { steps: 4 });
+    await page.mouse.up();
+    await expect(dialog).toHaveCSS("transform", "none");
+    y = await startDrag();
+    await page.mouse.move(195, y + 180, { steps: 8 });
+    await page.mouse.up();
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
+    await opener.click();
+    await expect(dialog).toHaveCSS("transform", "none");
+    await dialog.getByRole("button", { name: "Close details" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test(`${path}: cancelled touch pulls recover and header swipes dismiss`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    try {
+      const page = await context.newPage();
+      await sheetFixture(page);
+      await page.goto(path);
+      const opener = page.getByRole("button", { name: /^Show details for / }).first();
+      await opener.tap();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toHaveCSS("transform", "none");
+      const session = await context.newCDPSession(page);
+      const header = await dialog.locator(".kick-modal-header").boundingBox();
+      const x = 195, y = header.y + 9;
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 150 }] });
+      await expect(dialog).toHaveAttribute("data-dragging", "true");
+      await session.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+      await expect(dialog).toHaveCSS("transform", "none");
+      await dialog.getByRole("button", { name: "Close details" }).tap();
+      await expect(dialog).toHaveCount(0);
+      await opener.tap();
+      await expect(dialog).toHaveCSS("transform", "none");
+      await swipe(page, session, x, y, 150);
+      await expect(dialog).toHaveCount(0);
+    } finally { await context.close(); }
+  });
+}
+
+test("sheets preserve page position and lock the background until the last nested dialog closes", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    const page = await context.newPage();
+    const state = await mockPublicApi(page);
+    state.rows = Array.from({ length: 20 }, (_, i) => ({ sourceType: "strategy", sourceAddress: `0x${String(i + 100).padStart(40, "0")}`,
+      sourceName: `Fixture ${i}`, active: true, depositLimit: "1", wantAddress: WANT, wantSymbol: "USDC",
+      balances: [{ tokenAddress: TOKEN, tokenSymbol: "REWARD", normalizedBalance: "1", tokenPriceUsd: "1", tokenDecimals: 18 }],
+      scannedAt: new Date().toISOString() }));
+    await mockWallet(page);
+    await page.goto("/");
+    const opener = page.getByRole("button", { name: "Show details for Fixture 15", exact: true });
+    await opener.scrollIntoViewIfNeeded();
+    const scrollY = await page.evaluate(() => window.scrollY);
+    expect(scrollY).toBeGreaterThan(0);
+    await opener.tap();
+    await expect(page.locator("#root")).toHaveAttribute("inert", "");
+    await expect(page.locator("body")).toHaveCSS("position", "fixed");
+    await page.getByRole("button", { name: /Deploy auction/i }).tap();
+    await expect(page.locator(".kick-modal-backdrop")).toHaveAttribute("inert", "");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".deploy-modal")).toHaveCount(0);
+    await expect(page.locator(".kick-modal-backdrop")).not.toHaveAttribute("inert");
+    await expect(page.locator("body")).toHaveCSS("position", "fixed");
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator("#root")).not.toHaveAttribute("inert");
+    await expect(page.locator("body")).toHaveCSS("position", "static");
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+    await expect(opener).toBeFocused();
+    expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
+  } finally { await context.close(); }
+});
+
+test("short sheets fit content and backdrop/close/Escape respect reduced motion", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockPublicApi(page);
+  await page.goto("/");
+  const opener = page.getByRole("button", { name: /^Show details for / }).first();
+  for (const method of ["backdrop", "close", "escape"]) {
+    await opener.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toHaveCSS("transform", "none");
+    expect((await dialog.boundingBox()).height).toBeLessThan(600);
+    expect(await dialog.evaluate(node => node.getAnimations().length)).toBe(0);
+    if (method === "backdrop") await page.mouse.click(10, 10);
+    else if (method === "close") await dialog.getByRole("button", { name: "Close details" }).click();
+    else await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
+  }
+});
+
+test("resizing away from a mobile sheet under confirmation restores the page after cancellation", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockPublicApi(page);
+  await mockWallet(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Show details for / }).first().click();
+  await page.getByRole("button", { name: /Deploy auction/i }).click();
+  await expect(page.locator(".deploy-modal")).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(page.locator(".kick-modal")).toHaveCount(0);
+  await expect(page.locator("body")).toHaveCSS("position", "fixed");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator("body")).toHaveCSS("position", "static");
+  await expect(page.locator("html")).toHaveCSS("overflow-y", "scroll");
+  await expect(page.locator("#root")).not.toHaveAttribute("inert");
+  await page.getByRole("tab", { name: "Logs", exact: true }).click();
+  await expect(page).toHaveURL(/\/logs/);
+  expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
+});
+
+test("horizontal swipes, interrupted drags and copy controls leave the sheet usable", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+    permissions: ["clipboard-read", "clipboard-write"] });
+  try {
+    const page = await context.newPage();
+    await sheetFixture(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: /^Show details for / }).first().tap();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toHaveCSS("transform", "none");
+    const session = await context.newCDPSession(page);
+    const header = await dialog.locator(".kick-modal-header").boundingBox();
+    const x = 195, y = header.y + 9;
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + 70, y: y + 10 }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + 70, y: y + 150 }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect(dialog).toHaveCSS("transform", "none");
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 150 }] });
+    await expect(dialog).toHaveAttribute("data-dragging", "true");
+    // A second finger must cancel a pull, never dismiss the sheet.
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 0, x, y: y + 150 }, { id: 1, x: x + 80, y: y + 150 }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect(dialog).toHaveCSS("transform", "none");
+    const copy = dialog.locator(".strategy-sheet-heading .copy-trigger");
+    await copy.tap();
+    await expect(copy).toHaveClass(/is-copied/);
+    await dialog.getByRole("button", { name: "Close details" }).tap();
+    await expect(dialog).toHaveCount(0);
+  } finally { await context.close(); }
+});
+
+for (const type of ["sheet", "confirmation"]) {
+  test(`${type}: crossing the backdrop boundary does not close; clicking outside does`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockPublicApi(page);
+    await mockWallet(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: /^Show details for / }).first().click();
+    if (type === "confirmation") await page.getByRole("button", { name: /Deploy auction/i }).click();
+    const dialog = page.getByRole("dialog", { name: type === "sheet" ? "Strategy details" : "Deploy auction" });
+    await expect(dialog).toHaveCSS("transform", "none");
+    const box = await dialog.boundingBox();
+    const inside = { x: box.x + 20, y: box.y + 25 };
+    for (const [start, end] of [[inside, { x: 10, y: 10 }], [{ x: 10, y: 10 }, inside]]) {
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(end.x, end.y, { steps: 6 });
+      await page.mouse.up();
+      await expect(dialog).toBeVisible();
+    }
+    await page.mouse.move(10, 10);
+    await page.mouse.down();
+    await expect(dialog).toBeVisible();
+    await page.mouse.up();
+    await expect(page.locator(type === "sheet" ? ".kick-modal" : ".deploy-modal")).toHaveCount(0);
+    expect(await page.evaluate(() => window.walletFixture.sends)).toBe(0);
+  });
+}
 
 for (const theme of ["light", "dark"]) {
   test(`${theme}: strategy sheets prioritize balances consistently and keep context accessible`, async ({ browser }, testInfo) => {
@@ -213,7 +419,12 @@ for (const theme of ["light", "dark"]) {
           await page.keyboard.press("Tab");
           await expect(dialog.locator(".strategy-sheet-heading a")).toBeFocused();
         }
-        await dialog.getByRole("button", { name: "Close details" }).tap();
+        // WebKit also supports dragging the same handle with a mouse/trackpad.
+        const header = await dialog.locator(".kick-modal-header").boundingBox();
+        await page.mouse.move(195, header.y + 9);
+        await page.mouse.down();
+        await page.mouse.move(195, header.y + 159, { steps: 8 });
+        await page.mouse.up();
         await expect(dialog).toHaveCount(0);
         await page.setViewportSize({ width: 390, height: 844 });
       }

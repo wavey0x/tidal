@@ -70,7 +70,10 @@ an installed Chrome instead of Playwright's Chromium, run
 The mobile sheet regressions also run WebKit, including when Chrome is selected
 for the main suite. They check viewport resizing, scrolling to the final item,
 and disclosure focus. Chromium additionally exercises pinch-zoom viewport sizes,
-touch scrolling, header-only dismissal, and nested deployment cancellation.
+touch scrolling, downward pulls from the top of the content, mouse and touch
+header drags, interrupted/reversed gestures, reduced motion, and nested
+deployment cancellation with focus and page-position restoration. Short sheets
+fit their content; longer sheets keep the header visible and scroll internally.
 
 ## Endpoints
 

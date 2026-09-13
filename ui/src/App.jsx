@@ -5,6 +5,7 @@ import { keccak_256 } from "js-sha3";
 import { useLiveData } from "./useLiveData";
 import { useStableRowOrder } from "./useStableRowOrder";
 import { useDialogFocus } from "./useDialogFocus";
+import { useSheetGesture } from "./useSheetGesture";
 import { useVisibleViewport } from "./useVisibleViewport";
 
 const ALL_TOKENS = "__all__";
@@ -956,7 +957,7 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   const backdropRef = useRef(null);
   const cancelRef = useRef(null);
   const titleId = useId();
-  useDialogFocus(dialogRef, onCancel, cancelRef);
+  const backdropHandlers = useDialogFocus(dialogRef, onCancel, cancelRef);
   useVisibleViewport(backdropRef);
 
   const spec = payload || {};
@@ -984,7 +985,7 @@ function DeployConfirmModal({ payload, onConfirm, onCancel }) {
   }
 
   return createPortal(
-    <div ref={backdropRef} className="deploy-modal-backdrop" onMouseDown={onCancel}>
+    <div ref={backdropRef} className="deploy-modal-backdrop" {...backdropHandlers}>
       <div ref={dialogRef} className="deploy-modal" role="dialog" aria-modal="true"
         aria-labelledby={titleId} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
         <h2 id={titleId} className="deploy-modal-title">Deploy auction</h2>
@@ -1345,47 +1346,17 @@ function DetailPanel({ colSpan, children }) {
 
 function DetailModal({ onClose, label = "Activity details", header, children }) {
   const sheetRef = useRef(null);
+  const headerRef = useRef(null);
   const bodyRef = useRef(null);
   const backdropRef = useRef(null);
   const closeRef = useRef(null);
-  const dismissTimerRef = useRef(null);
-  const dragRef = useRef(null);
 
-  useDialogFocus(sheetRef, onClose, closeRef);
+  const dismiss = useSheetGesture(sheetRef, headerRef, bodyRef, backdropRef, onClose);
+  const backdropHandlers = useDialogFocus(sheetRef, dismiss, closeRef);
   useVisibleViewport(backdropRef);
-  useEffect(() => () => clearTimeout(dismissTimerRef.current), []);
-
-  function onDragStart(e) {
-    if (e.pointerType === "mouse" || !e.isPrimary || e.target.closest("button, a, input, summary")) return;
-    dragRef.current = { pointerId: e.pointerId, startY: e.clientY, startTime: Date.now(), dy: 0 };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  }
-
-  function onDragMove(e) {
-    const d = dragRef.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    d.dy = Math.max(0, e.clientY - d.startY);
-    sheetRef.current.style.transition = "none";
-    sheetRef.current.style.transform = `translateY(${d.dy}px)`;
-  }
-
-  function onDragEnd(e) {
-    const d = dragRef.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    dragRef.current = null;
-    const velocity = d.dy / Math.max(1, Date.now() - d.startTime);
-    const dismiss = e.type !== "pointercancel" && (d.dy > 80 || (d.dy > 20 && velocity > 0.5));
-    sheetRef.current.style.transition = "transform 200ms ease-out";
-    if (dismiss) {
-      sheetRef.current.style.transform = "translateY(100%)";
-      dismissTimerRef.current = setTimeout(onClose, 200);
-    } else {
-      sheetRef.current.style.transform = "none";
-    }
-  }
 
   return createPortal(
-    <div ref={backdropRef} className="kick-modal-backdrop" onMouseDown={onClose}>
+    <div ref={backdropRef} className="kick-modal-backdrop" {...backdropHandlers}>
       <div
         ref={sheetRef}
         className="kick-modal"
@@ -1395,11 +1366,10 @@ function DetailModal({ onClose, label = "Activity details", header, children }) 
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="kick-modal-header" onPointerDown={onDragStart} onPointerMove={onDragMove}
-          onPointerUp={onDragEnd} onPointerCancel={onDragEnd}>
+        <div ref={headerRef} className="kick-modal-header">
           <div className="kick-modal-handle" aria-hidden="true" />
           <div className="kick-modal-heading">{header || label}</div>
-          <button ref={closeRef} type="button" className="kick-modal-close" onClick={onClose} aria-label="Close details" title="Close details">
+          <button ref={closeRef} type="button" className="kick-modal-close" onClick={dismiss} aria-label="Close details" title="Close details">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
           </button>
         </div>

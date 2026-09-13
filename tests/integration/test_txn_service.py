@@ -17,7 +17,7 @@ from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
 from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy
 from tidal.transaction_service.service import TxnService
-from tidal.transaction_service.kick_execute import BatchExecutionBlocked
+from tidal.transaction_service.kick_execute import BatchExecutionBlocked, KickExecutor
 from tidal.lifecycle import LifecycleError
 from tidal.transaction_service.types import (
     KickCandidate,
@@ -498,44 +498,19 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
                         kick_tx_id=0,
                         status=KickStatus.ERROR,
                         error_message="quote API failed: upstream timeout",
+                        sell_amount="12345",
+                        usd_value="2500",
                     ),
                 )
             ],
         )
     )
-    executor = MagicMock()
-
-    def _persist_fail(run_id, candidate, now_iso, *, status, error_message, **kwargs):  # noqa: ANN001
-        kick_tx_id = kick_tx_repo.insert(
-            {
-                "run_id": run_id,
-                "operation_type": "kick",
-                "source_type": candidate.source_type,
-                "source_address": candidate.source_address,
-                "strategy_address": candidate.source_address,
-                "token_address": candidate.token_address,
-                "auction_address": candidate.auction_address,
-                "status": status.value if isinstance(status, KickStatus) else status,
-                "created_at": now_iso,
-                "error_message": error_message,
-                "price_usd": candidate.price_usd,
-                "want_address": candidate.want_address,
-                "usd_value": kwargs.get("usd_value"),
-            }
-        )
-        return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
-
-    def _record_prepare_failure(*, run_id, candidate, result):  # noqa: ANN001
-        return _persist_fail(
-            run_id,
-            candidate,
-            datetime.now(timezone.utc).isoformat(),
-            status=result.status,
-            error_message=result.error_message,
-            usd_value=result.usd_value,
-        )
-
-    executor.record_prepare_failure = MagicMock(side_effect=_record_prepare_failure)
+    executor = KickExecutor(
+        web3_client=MagicMock(), signer=MagicMock(),
+        kick_tx_repository=kick_tx_repo, tx_builder=MagicMock(),
+        base_fee_cap_gwei=1, max_priority_fee_gwei=2,
+        max_gas_limit=500000, chain_id=1, managed_executor=MagicMock(),
+    )
     executor.managed_executor.reconciler.reconcile = AsyncMock(return_value=[])
 
     service = TxnService(
@@ -551,11 +526,16 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
     assert result.status == "FAILED"
     assert result.kicks_attempted == 0
     assert result.kicks_failed == 1
-    executor.record_prepare_failure.assert_called_once()
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["status"] == "ERROR"
     assert rows[0]["error_message"] == "quote API failed: upstream timeout"
+
+    assert rows[0]["requested_sell_amount"] == "12345"
+    assert rows[0]["sell_amount"] is None
+    assert rows[0]["transaction_id"] is None
+    assert rows[0]["tx_hash"] is None
+    executor.managed_executor.submit.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1054,3 +1034,46 @@ async def test_dry_run_keeps_one_candidate_per_auction(session):
     assert len(kick_txs) == 1
     assert kick_txs[0]["source_type"] == "fee_burner"
     assert kick_txs[0]["token_address"] == "0xtokenfb1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("failure", ["base_fee_unavailable", "base_fee_cap", "estimate", "gas_cap"])
+async def test_kick_execution_pre_send_failure_keeps_requested_amount_without_submission(session, batch_size, failure):
+    repository = KickTxRepository(session)
+    web3 = MagicMock()
+    web3.get_base_fee = AsyncMock(return_value=100000000)
+    web3.estimate_gas = AsyncMock(return_value=100000)
+    expected = KickStatus.ERROR
+    if failure == "base_fee_unavailable":
+        web3.get_base_fee.side_effect = RuntimeError("RPC unavailable")
+    elif failure == "base_fee_cap":
+        web3.get_base_fee.return_value = 2000000000
+        expected = KickStatus.SKIP
+    elif failure == "estimate":
+        web3.estimate_gas.side_effect = RuntimeError("execution reverted")
+        expected = KickStatus.ESTIMATE_FAILED
+    else:
+        web3.estimate_gas.return_value = 500000 * batch_size + 1
+    builder = MagicMock()
+    builder._kicker_contract.return_value = (_evm_address("a"), None)
+    managed = MagicMock()
+    executor = KickExecutor(web3_client=web3, signer=MagicMock(),
+        kick_tx_repository=repository, tx_builder=builder,
+        base_fee_cap_gwei=1, max_priority_fee_gwei=2,
+        max_gas_limit=500000, chain_id=1, managed_executor=managed)
+    candidate = KickCandidate(source_type="strategy", source_address=_evm_address("1"),
+        token_address=_evm_address("2"), auction_address=_evm_address("3"),
+        normalized_balance="1000", price_usd="2.5", want_address=_evm_address("4"),
+        usd_value=2500.0, decimals=18)
+    prepared = [_make_prepared_kick(candidate) for _ in range(batch_size)]
+    results = await executor._execute_tx(prepared, "0x1234", "failure-audit")
+    assert [item.status for item in results] == [expected] * batch_size
+    rows = session.execute(select(models.kick_txs)).mappings().all()
+    assert len(rows) == batch_size
+    for row in rows:
+        assert row["requested_sell_amount"] == prepared[0].sell_amount_str
+        assert row["sell_amount"] is None
+        assert row["transaction_id"] is None and row["tx_hash"] is None
+        assert row["error_message"]
+    managed.submit.assert_not_called()

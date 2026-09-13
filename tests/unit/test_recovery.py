@@ -3,6 +3,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from eth_account import Account
 
 import pytest
 from sqlalchemy import select
@@ -17,6 +18,29 @@ from tidal.scanner.service import ScannerService
 from tidal.time import utcnow_iso
 from tidal.types import ScanRunResult
 from tests.unit.test_managed_execution import runtime, submit, TOKEN, AUCTION
+
+
+def test_configuration_check_unlocks_original_fixture_key_without_db_rpc_or_secret_output(recovery_runtime, monkeypatch):
+    from tidal.config import ExecutionProfile
+    state = recovery_runtime
+    state.settings.resolved_txn_keystore_path.write_text(json.dumps(Account.encrypt(
+        state.signer.account.key, "fixture-secret-only", kdf="pbkdf2", iterations=1000)))
+    state.settings.txn_keystore_passphrase = "fixture-secret-only"
+    state.settings.execution_profiles = {name: ExecutionProfile(txn_usd_threshold=threshold,
+        txn_base_fee_cap_gwei=1, txn_require_curve_quote=name != "fee_burner")
+        for name, threshold in [("scan", 250), ("strategy", 100), ("fee_burner", 50)]}
+    monkeypatch.setattr(recovery, "build_web3_client", lambda *_: pytest.fail("No RPC during config validation"))
+    state.session.close()
+    state.session.bind.dispose()
+    state.path.rename(state.path.with_suffix(".retained"))
+    checked = recovery.check_configuration(state.settings)
+    assert checked["code"] == "CONFIGURATION_VALID"
+    assert set(checked["data"]["signers"].values()) == {state.signer.address}
+    assert "fixture-secret-only" not in json.dumps(checked)
+    assert not state.path.exists()
+    state.settings.txn_keystore_passphrase = "wrong-passphrase"
+    with pytest.raises(LifecycleError, match="cannot be unlocked"):
+        recovery.check_configuration(state.settings)
 
 
 @pytest.fixture

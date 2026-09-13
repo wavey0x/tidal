@@ -36,6 +36,28 @@ def configured_signer(settings) -> str:
         raise LifecycleError("WRONG_SIGNER", "Configured encrypted keystore identity cannot be inspected.") from exc
 
 
+def check_configuration(settings) -> dict:
+    """Validate recoverable credentials with the native loader, without DB/RPC."""
+    from tidal.transaction_service.signer import TransactionSigner
+    try:
+        signer = TransactionSigner(str(settings.resolved_txn_keystore_path), settings.txn_keystore_passphrase)
+    except Exception as exc:
+        raise LifecycleError("WRONG_SIGNER", "Configured encrypted keystore cannot be unlocked with the selected secret file.") from exc
+    if set(settings.managed_signers) != {"scan", "kick"} or set(settings.managed_signers.values()) != {signer.address}:
+        raise LifecycleError("WRONG_SIGNER", "Declared scan/kick identities differ from the recovered key.")
+    if configured_signer(settings) != signer.address:
+        raise LifecycleError("WRONG_SIGNER", "Keystore public identity differs from its encrypted key.")
+    if set(settings.execution_profiles) != {"scan", "strategy", "fee_burner"}:
+        raise LifecycleError("INCOMPLETE_POLICY", "Declare the scan, strategy and fee-burner execution policies.")
+    return result("CONFIGURATION_VALID", data={
+        "chain_id": settings.chain_id, "signers": settings.managed_signers,
+        "database_path": str(settings.resolved_db_path), "home_path": str(settings.resolved_home_path),
+        "config_path": str(settings.resolved_config_path), "secret_file": str(settings.resolved_env_path),
+        "keystore_path": str(settings.resolved_txn_keystore_path),
+        "execution_profiles": {name: policy.model_dump() for name, policy in settings.execution_profiles.items()},
+    })
+
+
 def observation_readiness(settings, session) -> dict:
     latest = session.execute(select(models.scan_runs).order_by(models.scan_runs.c.started_at.desc()).limit(1)).mappings().first()
     if latest is None:

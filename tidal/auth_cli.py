@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 from tidal.cli_context import CLIContext
 from tidal.cli_options import ConfigOption
 from tidal.persistence import models
+from tidal.lifecycle import execution_lock
 
 app = typer.Typer(help="API key management", no_args_is_help=True)
 
@@ -31,7 +32,7 @@ def auth_create(
 ) -> None:
     """Create a new API key for an operator."""
     cli_ctx = CLIContext(config)
-    with cli_ctx.session() as session:
+    with execution_lock(cli_ctx.settings.resolved_home_path / "execution.lock"), cli_ctx.session() as session:
         existing = session.execute(
             select(models.api_keys.c.label).where(models.api_keys.c.label == label)
         ).first()
@@ -61,7 +62,7 @@ def auth_list(
 ) -> None:
     """List all API keys."""
     cli_ctx = CLIContext(config)
-    with cli_ctx.session() as session:
+    with cli_ctx.session(read_only=True) as session:
         rows = session.execute(
             select(
                 models.api_keys.c.label,
@@ -89,7 +90,7 @@ def auth_revoke(
 ) -> None:
     """Revoke an API key by label."""
     cli_ctx = CLIContext(config)
-    with cli_ctx.session() as session:
+    with execution_lock(cli_ctx.settings.resolved_home_path / "execution.lock"), cli_ctx.session() as session:
         row = session.execute(
             select(models.api_keys.c.label, models.api_keys.c.revoked_at).where(
                 models.api_keys.c.label == label

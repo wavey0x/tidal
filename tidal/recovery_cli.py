@@ -41,6 +41,12 @@ def status(config: ConfigOption = None, json_output: JsonOption = False):
     _invoke(config, json_output, recovery.status, read_only=True)
 
 
+def check_config(config: ConfigOption = None, json_output: JsonOption = False):
+    """Check the original encrypted key and policy without opening the DB or RPC."""
+    configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
+    emit_operation(lambda: recovery.check_configuration(load_server_settings(config)), json_output=json_output)
+
+
 def reconcile(
     config: ConfigOption = None, json_output: JsonOption = False,
     transaction_id: int | None = typer.Option(None, "--transaction-id", min=1),
@@ -76,6 +82,7 @@ def prepare_restore(
 
 
 def register(app, db_app=None):
+    app.command("check-config")(check_config)
     app.command("status")(status)
     app.command("reconcile")(reconcile)
     app.command("refresh")(refresh)

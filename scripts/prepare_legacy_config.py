@@ -6,6 +6,7 @@ Run with the new release's interpreter. Child stdout carries private settings
 only to this process, never to the terminal or deployment journal.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,23 @@ print(json.dumps(result))
 SECRET_FIELDS = {'rpc_url', 'token_price_agg_key', 'telegram_bot_token', 'telegram_admin_alert_chat_id',
                  'telegram_operations_alert_chat_id', 'txn_keystore_passphrase', 'tidal_api_key'}
 PROFILE_FIELDS = {'txn_usd_threshold', 'txn_base_fee_cap_gwei', 'txn_require_curve_quote', 'txn_max_gas_limit'}
+
+
+def copy_keystore(source, destination, verified_address):
+    """Retain ciphertext and fill optional public metadata for silent inspection.
+
+    Some original encrypted files omit `address`. Native legacy decryption has
+    established this value. Never re-encrypt or change an existing declaration;
+    the new native check-config validates the resulting copy.
+    """
+    content = Path(source).read_bytes()
+    original = json.loads(content)
+    if 'address' not in original:
+        annotated = {**original, 'address': verified_address.lower().removeprefix('0x')}
+        Path(destination).write_text(json.dumps(annotated, sort_keys=True) + '\n')
+    else:
+        Path(destination).write_bytes(content)
+    return hashlib.sha256(content).hexdigest()
 
 
 def prepare(legacy_python, repository, home, output, destination):
@@ -96,7 +114,7 @@ def prepare(legacy_python, repository, home, output, destination):
     (output / 'server.yml').write_text(yaml.safe_dump(policy, sort_keys=False))
     (output / 'server.env').write_text(''.join(key + '=' + json.dumps(str(value)) + '\n' for key, value in sorted(secrets.items())))
     source_key = Path(old['scan']['keystore_path'])
-    (output / 'server-keystore.json').write_bytes(source_key.read_bytes())
+    original_key_sha256 = copy_keystore(source_key, output / 'server-keystore.json', old['scan']['signer'])
     for path in output.iterdir():
         path.chmod(0o600)
     checked = subprocess.run([sys.executable, '-I', '-m', 'tidal.cli', 'check-config', '--json'],
@@ -111,7 +129,7 @@ def prepare(legacy_python, repository, home, output, destination):
               'execution_profiles': policy['execution_profiles'], 'legacy_different_fields': different,
               'legacy_configurations': {name: row['config_path'] for name, row in old.items()},
               'legacy_secret_files': {name: row['secret_path'] for name, row in old.items()},
-              'original_keystore': str(source_key)}
+              'original_keystore': str(source_key), 'original_keystore_sha256': original_key_sha256}
     (output / 'preflight.json').write_text(json.dumps(result, sort_keys=True) + '\n')
     (output / 'preflight.json').chmod(0o600)
     return result

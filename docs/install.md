@@ -37,6 +37,11 @@ It never fetches a moving branch or installs the server-backup infrastructure.
 Prepare the original encrypted key and effective legacy configuration with the
 new release's interpreter before the first cutover:
 
+The conversion retains the original encrypted key material. When its optional
+public `address` field is absent, the copied file receives the address verified
+by original native decryption. This enables silent identity inspection during
+recovery. The original file and its checksum remain preserved.
+
 ```bash
 RELEASE/.venv/bin/python RELEASE/scripts/prepare_legacy_config.py --legacy-python /home/wavey/tidal/venv/bin/python --output /home/wavey/tidal-cutover-inputs
 sudo bash RELEASE/deploy-tidal.sh install --archive /home/wavey/tidal-artifacts/ARCHIVE_SHA256.tar.gz --sha256 ARCHIVE_SHA256 --configuration /home/wavey/tidal-cutover-inputs

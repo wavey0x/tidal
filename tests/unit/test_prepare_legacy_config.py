@@ -50,7 +50,9 @@ def test_effective_policy_and_secrets_are_preserved_without_public_disclosure(tm
     assert profiles["fee_burner"]["txn_usd_threshold"] == 50
     assert [profiles[name]["txn_max_gas_limit"] for name in ("scan", "strategy", "fee_burner")] == [500000, 2500000, 2500000]
     assert policy["txn_data_freshness_limit_seconds"] == 1200
-    assert (output / "server-keystore.json").read_bytes() == key.read_bytes()
+    saved_key = json.loads((output / "server-keystore.json").read_text())
+    assert saved_key.pop('address') == old['scan']['signer'].removeprefix('0x')
+    assert saved_key == json.loads(key.read_text())
     private = dotenv_values(output / "server.env")
     assert private["TXN_KEYSTORE_PASSPHRASE"] == "private-pass"
     assert private["RPC_URL"] == old["scan"]["settings"]["rpc_url"]
@@ -70,3 +72,11 @@ def test_unexpected_identity_or_policy_difference_refuses_before_creating_candid
         prepare_module.prepare("/old/python", tmp_path, tmp_path / ".tidal", tmp_path / "candidate", tmp_path / "installed")
     assert not (tmp_path / "candidate").exists()
     assert len(calls) == 1
+
+
+def test_existing_keystore_public_metadata_is_never_rewritten(tmp_path):
+    original, destination = tmp_path / 'original', tmp_path / 'copy'
+    original.write_text('{"address": "already-declared", "crypto": "retained"}')
+    before = original.read_bytes()
+    prepare_module.copy_keystore(original, destination, '0x' + '1' * 40)
+    assert original.read_bytes() == destination.read_bytes() == before

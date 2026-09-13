@@ -81,7 +81,7 @@ def init_config(
 @db_app.command("migrate")
 def db_migrate(config: ConfigOption = None) -> None:
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config, mode="server")
+    cli_ctx = CLIContext(config)
     if not cli_ctx.settings.resolved_db_path.is_file():
         raise typer.BadParameter("Database is missing; use db init or restore explicitly.")
     with execution_lock(default_txn_lock_path()):
@@ -94,7 +94,7 @@ def db_migrate(config: ConfigOption = None) -> None:
 def db_init(config: ConfigOption = None) -> None:
     """Explicitly initialize empty state. Execution remains held."""
     configure_logging(output_mode=OutputMode.TEXT)
-    settings = CLIContext(config, mode="server").settings
+    settings = CLIContext(config).settings
     with execution_lock(default_txn_lock_path()):
         if settings.resolved_db_path.exists():
             raise typer.BadParameter("Database already exists; inspect or migrate it explicitly.")
@@ -116,7 +116,7 @@ def db_repair_auction_rounds(
     import asyncio
 
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config, mode="server")
+    cli_ctx = CLIContext(config)
     settings = cli_ctx.settings
     database = Database(settings.database_url)
     web3_client = build_web3_client(settings)
@@ -180,7 +180,7 @@ def db_clear_no_fill_suspension(
     token_address = normalize_cli_address(token, param_hint="--token")
     assert auction_address is not None and token_address is not None
 
-    cli_ctx = CLIContext(config, mode="server")
+    cli_ctx = CLIContext(config)
     database = Database(cli_ctx.settings.database_url)
     with database.session() as session:
         repo = KickTxRepository(session)
@@ -222,7 +222,7 @@ def db_clear_no_fill_suspension(
 @api_app.command("serve")
 def api_serve(config: ConfigOption = None) -> None:
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config, mode="server")
+    cli_ctx = CLIContext(config)
     settings = cli_ctx.settings
     uvicorn.run(
         create_app(settings),

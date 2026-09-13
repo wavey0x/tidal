@@ -1,5 +1,7 @@
-from tidal.config import load_client_settings, load_server_settings
-from tidal.control_plane.outbox import default_action_report_outbox_path
+import pytest
+import yaml
+from tidal.config import load_settings, load_server_settings
+from tidal.resources import read_template_text
 from tidal.paths import default_txn_lock_path
 
 
@@ -24,102 +26,6 @@ def _clear_runtime_env(monkeypatch) -> None:
         "TXN_MAX_BASE_FEE_GWEI",
     ):
         monkeypatch.delenv(key, raising=False)
-
-
-def test_load_client_settings_defaults_to_tidal_home_paths(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text(
-        "txn_keystore_path: keys/ops.json\n",
-        encoding="utf-8",
-    )
-    (cli_home / ".env").write_text("RPC_URL=https://example-rpc.invalid\n", encoding="utf-8")
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-
-    settings = load_client_settings()
-
-    assert settings.resolved_home_path == app_home
-    assert settings.resolved_config_path == cli_home / "config.yaml"
-    assert settings.resolved_env_path == cli_home / ".env"
-    assert settings.resolved_db_path == app_home / "server" / "tidal.db"
-    assert settings.resolved_txn_keystore_path == cli_home / "keys" / "ops.json"
-    assert settings.prepared_action_max_age_seconds == 300
-    assert settings.txn_base_fee_cap_gwei == 5.0
-    assert settings.rpc_url == "https://example-rpc.invalid"
-
-
-def test_load_client_settings_uses_tidal_config_override_and_config_local_env(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    home_root.mkdir(parents=True)
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text("chain_id: 1\n", encoding="utf-8")
-    (cli_home / ".env").write_text("RPC_URL=https://home.invalid\n", encoding="utf-8")
-
-    config_dir = tmp_path / "custom-config"
-    config_dir.mkdir()
-    config_path = config_dir / "client.yaml"
-    config_path.write_text(
-        "txn_keystore_path: keys/override.json\n",
-        encoding="utf-8",
-    )
-    (config_dir / ".env").write_text("RPC_URL=https://config-dir.invalid\n", encoding="utf-8")
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-    monkeypatch.setenv("TIDAL_CONFIG", str(config_path))
-
-    settings = load_client_settings()
-
-    assert settings.resolved_config_path == config_path
-    assert settings.resolved_env_path == config_dir / ".env"
-    assert settings.resolved_db_path == app_home / "server" / "tidal.db"
-    assert settings.resolved_txn_keystore_path == config_dir / "keys" / "override.json"
-    assert settings.rpc_url == "https://config-dir.invalid"
-
-
-def test_load_client_settings_uses_explicit_env_override(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text("chain_id: 1\n", encoding="utf-8")
-    (cli_home / ".env").write_text("RPC_URL=https://home.invalid\n", encoding="utf-8")
-
-    explicit_env_path = tmp_path / "secrets.env"
-    explicit_env_path.write_text("RPC_URL=https://override.invalid\n", encoding="utf-8")
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-    monkeypatch.setenv("TIDAL_ENV_FILE", str(explicit_env_path))
-
-    settings = load_client_settings()
-
-    assert settings.resolved_env_path == explicit_env_path
-    assert settings.rpc_url == "https://override.invalid"
-
-
-def test_load_client_settings_reads_prepared_action_max_age_seconds_from_config(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text(
-        "prepared_action_max_age_seconds: 45\n",
-        encoding="utf-8",
-    )
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-
-    settings = load_client_settings()
-
-    assert settings.prepared_action_max_age_seconds == 45
 
 
 def test_load_server_settings_reads_data_freshness_limit_seconds_from_config(tmp_path, monkeypatch) -> None:
@@ -153,62 +59,6 @@ kick:
     settings = load_server_settings()
 
     assert settings.txn_data_freshness_limit_seconds == 1234
-
-
-def test_load_client_settings_reads_base_fee_cap_from_config(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text(
-        "txn_base_fee_cap_gwei: 8\n",
-        encoding="utf-8",
-    )
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-
-    settings = load_client_settings()
-
-    assert settings.txn_base_fee_cap_gwei == 8.0
-
-
-def test_load_client_settings_ignores_removed_base_fee_cap_names(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text(
-        "txn_max_base_fee_gwei: 99\n",
-        encoding="utf-8",
-    )
-    (cli_home / ".env").write_text("TXN_MAX_BASE_FEE_GWEI=88\n", encoding="utf-8")
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-
-    settings = load_client_settings()
-
-    assert settings.txn_base_fee_cap_gwei == 5.0
-
-
-def test_load_client_settings_env_overrides_base_fee_cap(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    app_home = home_root / ".tidal"
-    cli_home = app_home / "cli"
-    cli_home.mkdir(parents=True)
-    (cli_home / "config.yaml").write_text(
-        "txn_base_fee_cap_gwei: 8\n",
-        encoding="utf-8",
-    )
-    (cli_home / ".env").write_text("TXN_BASE_FEE_CAP_GWEI=7\n", encoding="utf-8")
-
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
-
-    settings = load_client_settings()
-
-    assert settings.txn_base_fee_cap_gwei == 7.0
 
 
 def test_load_server_settings_uses_project_config_and_embedded_kick(tmp_path, monkeypatch) -> None:
@@ -319,11 +169,75 @@ def test_load_server_settings_requires_kick_mapping(tmp_path, monkeypatch) -> No
         raise AssertionError("expected load_server_settings to require a kick mapping")
 
 
-def test_default_outbox_and_lock_paths_live_under_tidal_home(tmp_path, monkeypatch) -> None:
-    home_root = tmp_path / "home"
-    _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("HOME", str(home_root))
 
-    app_home = home_root / ".tidal"
-    assert default_action_report_outbox_path() == app_home / "server" / "action_outbox.db"
-    assert default_txn_lock_path() == app_home / "execution.lock"
+@pytest.fixture
+def unified(tmp_path, monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    home = tmp_path / "home"
+    monkeypatch.setenv("TIDAL_HOME", str(home))
+    config = tmp_path / "config" / "server.yaml"
+    config.parent.mkdir()
+    values = yaml.safe_load(read_template_text("server.yaml"))
+    config.write_text(yaml.safe_dump(values))
+    monkeypatch.setenv("TIDAL_CONFIG", str(config))
+    return home, config, values
+
+
+def test_config_override_is_shared_by_every_local_command(unified):
+    from tidal.cli_context import CLIContext
+    home, config, _ = unified
+    settings = load_settings()
+    assert settings.resolved_config_path == config
+    assert settings.resolved_env_path == home / "server" / ".env"
+    assert CLIContext().settings.resolved_config_path == config
+    assert settings.kick_config.no_fill_policy.retry_delays_minutes == (720, 1440)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("prepared_action_max_age_seconds", 45),
+    ("txn_base_fee_cap_gwei", 8),
+    ("txn_data_freshness_limit_seconds", 1234),
+])
+def test_native_configuration_preserves_execution_limits(unified, field, value):
+    _, config, values = unified
+    values[field] = value
+    config.write_text(yaml.safe_dump(values))
+    assert getattr(load_settings(), field) == value
+
+
+def test_process_environment_overrides_selected_secret_file_then_yaml(unified, monkeypatch):
+    home, config, values = unified
+    values["txn_base_fee_cap_gwei"] = 8
+    config.write_text(yaml.safe_dump(values))
+    env = home / "server" / ".env"
+    env.parent.mkdir(parents=True)
+    env.write_text("TXN_BASE_FEE_CAP_GWEI=7\n")
+    assert load_settings().txn_base_fee_cap_gwei == 7
+    monkeypatch.setenv("TXN_BASE_FEE_CAP_GWEI", "6")
+    assert load_settings().txn_base_fee_cap_gwei == 6
+
+
+def test_explicit_environment_and_relative_keystore_use_one_config_root(unified, monkeypatch):
+    _, config, values = unified
+    values["txn_keystore_path"] = "keys/native.json"
+    config.write_text(yaml.safe_dump(values))
+    env = config.parent / "selected.env"
+    env.write_text("RPC_URL=https://selected.invalid\n")
+    monkeypatch.setenv("TIDAL_ENV_FILE", str(env))
+    settings = load_settings()
+    assert settings.rpc_url == "https://selected.invalid"
+    assert settings.resolved_env_path == env
+    assert settings.resolved_txn_keystore_path == config.parent / "keys" / "native.json"
+
+
+def test_removed_fee_cap_aliases_cannot_override_native_policy(unified, monkeypatch):
+    _, config, values = unified
+    values["txn_max_base_fee_gwei"] = 99
+    config.write_text(yaml.safe_dump(values))
+    monkeypatch.setenv("TXN_MAX_BASE_FEE_GWEI", "88")
+    assert load_settings().txn_base_fee_cap_gwei == 5
+
+
+def test_shared_lock_lives_outside_replaceable_database_directory(unified):
+    home, _, _ = unified
+    assert default_txn_lock_path() == home / "execution.lock"

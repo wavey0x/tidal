@@ -27,7 +27,6 @@ from tidal.constants import CORE_REWARD_TOKENS, YEARN_AUCTION_REQUIRED_GOVERNANC
 from tidal.normalizers import normalize_address, short_address, to_decimal_string
 from tidal.persistence import models
 from tidal.persistence.db import Database
-from tidal.transaction_service.signer import TransactionSigner
 
 
 @dataclass(slots=True)
@@ -521,62 +520,6 @@ class AuctionTokenEnabler:
         if normalize_address(owner) == normalize_address(caller_address):
             return True
         return bool(kicker.functions.keeper(checksum_caller).call())
-
-    def send_enable_transaction(
-        self,
-        *,
-        signer: TransactionSigner,
-        inspection: AuctionInspection,
-        tokens: list[str],
-    ) -> tuple[str, int]:
-        kicker_address = self._require_auction_kicker_address()
-        if not inspection.governance_matches_required:
-            raise RuntimeError(
-                "auction governance does not match the configured Yearn trade handler; "
-                "enable-tokens only supports standard Yearn auctions via AuctionKicker"
-            )
-        if not self.is_authorized_kicker(kicker_address, signer.address):
-            raise RuntimeError(
-                f"{to_checksum_address(signer.address)} is not an authorized keeper on "
-                f"{to_checksum_address(kicker_address)}"
-            )
-
-        enable_fn = self._enable_tokens_function(
-            kicker_address=kicker_address,
-            inspection=inspection,
-            tokens=tokens,
-        )
-
-        latest_block = self.w3.eth.get_block("latest")
-        base_fee = int(latest_block.get("baseFeePerGas") or 0)
-        try:
-            priority_fee = int(self.w3.eth.max_priority_fee)
-        except Exception:  # noqa: BLE001
-            priority_fee = self.w3.to_wei(1, "gwei")
-
-        if base_fee > 0:
-            max_fee = int(base_fee * 2 + priority_fee)
-        else:
-            max_fee = int(self.w3.eth.gas_price)
-            priority_fee = 0
-
-        tx = enable_fn.build_transaction(
-            {
-                "from": signer.checksum_address,
-                "chainId": int(self.w3.eth.chain_id),
-                "nonce": int(self.w3.eth.get_transaction_count(signer.checksum_address, "pending")),
-                "maxFeePerGas": max_fee,
-                "maxPriorityFeePerGas": priority_fee,
-            }
-        )
-        gas_estimate = int(self.w3.eth.estimate_gas(tx))
-        tx["gas"] = int(gas_estimate * 1.2)
-
-        signed_tx = signer.sign_transaction(tx)
-        tx_hash = self.w3.eth.send_raw_transaction(signed_tx).hex()
-        if not tx_hash.startswith("0x"):
-            tx_hash = "0x" + tx_hash
-        return tx_hash, gas_estimate
 
     def _auction_contract(self, auction_address: str):
         return self.w3.eth.contract(

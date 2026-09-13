@@ -2,24 +2,22 @@
 
 Precedence (highest wins): env vars > YAML config > Python defaults.
 
-Client commands load ``~/.tidal/cli/config.yaml`` by default.
-Server commands load ``config/server.yaml`` by default.
-Client secrets live in ``~/.tidal/cli/.env`` by default.
-Server secrets live in ``~/.tidal/server/.env`` by default.
+Every command loads ``config/server.yaml`` (or an explicit --config) and
+``~/.tidal/server/.env`` (or TIDAL_ENV_FILE). There is no operator client config.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 from dotenv import dotenv_values
 from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from tidal.paths import default_config_path, default_env_path, default_server_config_path, default_server_env_path, resolve_path, tidal_home
+from tidal.paths import default_server_config_path, default_server_env_path, resolve_path, tidal_home
 from tidal.transaction_service.kick_policy import KickConfig, build_kick_config
 
 
@@ -52,9 +50,15 @@ class Settings(BaseSettings):
     )
 
     _resolved_home_path: Path = PrivateAttr(default_factory=tidal_home)
-    _resolved_config_path: Path = PrivateAttr(default_factory=default_config_path)
-    _resolved_env_path: Path = PrivateAttr(default_factory=default_env_path)
+    _resolved_config_path: Path = PrivateAttr(default_factory=lambda: default_server_config_path() or Path("config/server.yaml").resolve())
+    _resolved_env_path: Path = PrivateAttr(default_factory=default_server_env_path)
     _kick_config: KickConfig | None = PrivateAttr(default=None)
+
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
+        # The process environment deliberately overrides the selected YAML
+        # and secret file. Explicit action profiles are applied afterwards.
+        return env_settings, init_settings, dotenv_settings, file_secret_settings
 
     rpc_url: str | None = Field(default=None, alias="RPC_URL")
     db_path: Path | None = Field(default=None, alias="DB_PATH")
@@ -312,79 +316,23 @@ def _resolve_server_config_path(config_path: Path | None = None) -> Path:
     raise FileNotFoundError(f"Server config file not found. Pass --config or create {hint}.")
 
 
-def _resolve_env_path(
-    config_path: Path,
-    *,
-    mode: Literal["client", "server"],
-    use_home_fallback: bool,
-) -> Path:
-    env_override = os.getenv("TIDAL_ENV_FILE")
-    if env_override:
-        return _resolve_explicit_file_path(env_override, label="Environment file")
-
-    if mode == "server":
-        return default_server_env_path()
-
-    config_dir_env_path = (config_path.parent / ".env").resolve()
-    if config_dir_env_path.is_file():
-        return config_dir_env_path
-    if not use_home_fallback:
-        return config_dir_env_path
-
-    return default_env_path()
-
-
-def load_settings(
-    config_path: Path | None = None,
-    *,
-    mode: Literal["client", "server"] = "client",
-) -> Settings:
-    """Load client or server settings from resolved config and env paths."""
-    if mode == "server":
-        resolved_config_path = _resolve_server_config_path(config_path)
-        use_home_env_fallback = False
-    else:
-        explicit = _resolve_explicit_or_env_config_path(config_path)
-        if explicit is not None:
-            resolved_config_path = explicit
-            use_home_env_fallback = False
-        else:
-            resolved_config_path = default_config_path()
-            use_home_env_fallback = True
-    resolved_env_path = _resolve_env_path(
-        resolved_config_path,
-        mode=mode,
-        use_home_fallback=use_home_env_fallback,
-    )
-
-    config_data: dict[str, Any] = {}
-    if resolved_config_path.is_file():
-        config_data = _load_yaml_config(resolved_config_path)
+def load_settings(config_path: Path | None = None) -> Settings:
+    """Load the single configuration and its explicitly selected secret file."""
+    resolved_config_path = _resolve_server_config_path(config_path)
+    override = os.getenv("TIDAL_ENV_FILE")
+    resolved_env_path = _resolve_explicit_file_path(override, label="Environment file") if override else default_server_env_path()
+    config_data = _load_yaml_config(resolved_config_path)
     kick_raw = config_data.pop("kick", None)
-    if mode == "server" and not isinstance(kick_raw, dict):
-        raise ValueError(f"Server config must define a 'kick' mapping: {resolved_config_path}")
-
-    env_data: dict[str, Any] = {}
-    if resolved_env_path.is_file():
-        env_data = {
-            key: value
-            for key, value in dotenv_values(resolved_env_path).items()
-            if value is not None
-        }
-
+    if not isinstance(kick_raw, dict):
+        raise ValueError(f"Config must define a 'kick' mapping: {resolved_config_path}")
+    env_data = {
+        key: value for key, value in dotenv_values(resolved_env_path).items() if value is not None
+    } if resolved_env_path.is_file() else {}
     settings = Settings(**{**config_data, **env_data})
-    settings.bind_runtime_paths(
-        home_path=tidal_home(),
-        config_path=resolved_config_path,
-        env_path=resolved_env_path,
-    )
-    settings.bind_kick_config(build_kick_config(kick_raw) if mode == "server" else None)
+    settings.bind_runtime_paths(home_path=tidal_home(), config_path=resolved_config_path, env_path=resolved_env_path)
+    settings.bind_kick_config(build_kick_config(kick_raw))
     return settings
 
 
-def load_client_settings(config_path: Path | None = None) -> Settings:
-    return load_settings(config_path, mode="client")
-
-
-def load_server_settings(config_path: Path | None = None) -> Settings:
-    return load_settings(config_path, mode="server")
+# Retain the server spelling for existing native callers of the same loader.
+load_server_settings = load_settings

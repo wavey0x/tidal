@@ -6,15 +6,11 @@ import os
 from pathlib import Path
 
 _APP_HOME_DIRNAME = ".tidal"
-_CLI_DIRNAME = "cli"
 _SERVER_DIRNAME = "server"
-_CONFIG_FILENAME = "config.yaml"
 _SERVER_CONFIG_DIRNAME = "config"
 _SERVER_CONFIG_FILENAME = "server.yaml"
 _ENV_FILENAME = ".env"
 _DB_FILENAME = "tidal.db"
-_ACTION_OUTBOX_FILENAME = "action_outbox.db"
-_TXN_LOCK_FILENAME = "txn_daemon.lock"
 
 
 def resolve_path(path: str | Path) -> Path:
@@ -27,18 +23,6 @@ def tidal_home() -> Path:
     if override:
         return resolve_path(override)
     return (Path.home() / _APP_HOME_DIRNAME).resolve()
-
-
-def default_config_path() -> Path:
-    return default_cli_dir() / _CONFIG_FILENAME
-
-
-def default_env_path() -> Path:
-    return default_cli_dir() / _ENV_FILENAME
-
-
-def default_cli_dir() -> Path:
-    return tidal_home() / _CLI_DIRNAME
 
 
 def default_server_data_dir() -> Path:
@@ -66,10 +50,6 @@ def default_server_config_path(start: str | Path | None = None) -> Path | None:
 
 def default_db_path() -> Path:
     return default_server_data_dir() / _DB_FILENAME
-
-
-def default_action_outbox_path() -> Path:
-    return default_server_data_dir() / _ACTION_OUTBOX_FILENAME
 
 
 def default_txn_lock_path() -> Path:

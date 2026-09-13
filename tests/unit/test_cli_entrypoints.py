@@ -33,25 +33,20 @@ def test_server_cli_only_exposes_runtime_commands() -> None:
     assert "logs" not in result.output
 
 
-def test_operator_init_creates_tidal_home_layout(tmp_path, monkeypatch) -> None:
+def test_operator_init_creates_the_shared_runtime_configuration(tmp_path, monkeypatch) -> None:
     app_home = tmp_path / "operator-home"
     monkeypatch.setenv("TIDAL_HOME", str(app_home))
 
     runner = CliRunner()
-    result = runner.invoke(operator_app, ["init"])
+    result = runner.invoke(operator_app, ["init", "--dest", str(tmp_path / "config")])
 
     assert result.exit_code == 0
-    assert (app_home / "cli" / "config.yaml").is_file()
-    assert (app_home / "cli" / ".env").is_file()
-    scaffold = (app_home / "cli" / "config.yaml").read_text(encoding="utf-8")
-    env_scaffold = (app_home / "cli" / ".env").read_text(encoding="utf-8")
-    assert "https://api.tidal.wavey.info" in scaffold
-    assert "prepared_action_max_age_seconds: 300" in scaffold
-    assert "auction_kicker_address:" not in scaffold
-    assert env_scaffold.index("TIDAL_API_KEY") < env_scaffold.index("RPC_URL")
-    assert "Client dir:" in result.output
-    assert "Config:" in result.output
-    assert str(app_home / "cli" / "config.yaml") in result.output
+    scaffold = (tmp_path / "config" / "server.yaml").read_text(encoding="utf-8")
+    assert "execution_profiles:" in scaffold
+    assert "auction_kicker_address:" in scaffold
+    assert (tmp_path / "config" / ".env.example").is_file()
+    assert not (app_home / "cli").exists()
+    assert str(tmp_path / "config" / "server.yaml") in result.output
 
 
 def test_server_init_config_creates_tracked_server_config(tmp_path, monkeypatch) -> None:

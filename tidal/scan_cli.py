@@ -82,7 +82,7 @@ def scan_run(
     """Run a single scan cycle."""
 
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config, mode="server")
+    cli_ctx = CLIContext(config)
     try:
         _require_scan_confirmation_policy(
             auto_settle=auto_settle,

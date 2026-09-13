@@ -18,7 +18,7 @@ app = typer.Typer(help="Local auction operations", no_args_is_help=True)
 def _run(*, action, auction, config, json_output, no_confirmation, keystore, password_file,
          token=None, extra_tokens=None, force=False):
     require_no_confirmation_for_json(json_output=json_output, no_confirmation=no_confirmation)
-    ctx = CLIContext(config, mode="server")
+    ctx = CLIContext(config)
     auction = normalize_cli_address(auction, param_hint="AUCTION")
     token = normalize_cli_address(token, param_hint="--token")
     if force and token is None:

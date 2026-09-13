@@ -42,7 +42,7 @@ def native(tmp_path, monkeypatch):
         return SimpleNamespace(run_once=run_once)
 
     monkeypatch.setattr(kick_cli.CLIContext, "resolve_execution", unlock)
-    monkeypatch.setattr(kick_cli.CLIContext, "control_plane_client", lambda *a, **k: pytest.fail("Native kick cannot depend on the API"))
+    assert not hasattr(kick_cli.CLIContext, "control_plane_client")
     monkeypatch.setattr(kick_cli, "build_txn_service", build)
     return SimpleNamespace(config=config, captured=captured, unlocks=unlocks, settings=settings)
 

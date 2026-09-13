@@ -60,7 +60,7 @@ def kick_inspect(
     show_all: bool = typer.Option(False, "--show-all", help="Show deferred and limited candidates."),
 ) -> None:
     """Read current candidates locally; no signer or API credentials required."""
-    ctx = CLIContext(config, mode="server")
+    ctx = CLIContext(config)
     selected = _normalize_source_type_filter(source_type)
     def inspect() -> dict:
         profiles = [selected] if selected else ["strategy", "fee_burner"]
@@ -109,7 +109,7 @@ def kick_run(
     if allow_no_fill_retry and headless:
         raise typer.BadParameter("--allow-no-fill-retry cannot be used with --headless")
     configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
-    ctx = CLIContext(config, mode="server")
+    ctx = CLIContext(config)
 
     def confirm(summary):
         if summary.get("kicks"):

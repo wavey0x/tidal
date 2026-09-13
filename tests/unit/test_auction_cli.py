@@ -37,8 +37,7 @@ def native(tmp_path, monkeypatch):
         state.calls.append(kwargs)
         return state.outcome
     monkeypatch.setattr(auction_cli.CLIContext, "resolve_execution", unlock)
-    monkeypatch.setattr(auction_cli.CLIContext, "control_plane_client",
-                        lambda *a, **k: pytest.fail("Local auction execution must not call the API"))
+    assert not hasattr(auction_cli.CLIContext, "control_plane_client")
     monkeypatch.setattr(auction_cli, "run_auction_action", execute)
     return state
 

@@ -25,7 +25,6 @@ from tidal.chain.contracts.abis import (
 from tidal.constants import YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS
 from tidal.normalizers import normalize_address
 from tidal.time import utcnow_iso
-from tidal.transaction_service.signer import TransactionSigner
 
 SINGLE_AUCTION_FACTORY_ABI = SUPPORTED_AUCTION_FACTORY_ABI
 SINGLE_AUCTION_ABI = SUPPORTED_AUCTION_ABI
@@ -340,56 +339,4 @@ def preview_deployment(
         gas_estimate=gas_estimate,
         preview_error=preview_error,
         gas_error=gas_error,
-    )
-
-
-def send_live_deployment(
-    w3: Web3,
-    *,
-    signer: TransactionSigner,
-    factory_address: str,
-    want: str,
-    receiver: str,
-    governance: str,
-    starting_price: int,
-    salt: str,
-    receipt_timeout: int = 300,
-) -> AuctionDeployExecution:
-    approved_auction_spec_for_factory(factory_address)
-    validate_starting_price_raw(factory_address, starting_price)
-    factory = w3.eth.contract(address=to_checksum_address(factory_address), abi=SINGLE_AUCTION_FACTORY_ABI)
-    create_fn = factory.functions.createNewAuction(
-        to_checksum_address(want),
-        to_checksum_address(receiver),
-        to_checksum_address(governance),
-        starting_price,
-        HexBytes(salt),
-    )
-
-    max_fee, priority_fee = derive_fee_settings(w3)
-    nonce = int(w3.eth.get_transaction_count(signer.checksum_address, "pending"))
-    tx = create_fn.build_transaction(
-        {
-            "from": signer.checksum_address,
-            "chainId": int(w3.eth.chain_id),
-            "nonce": nonce,
-            "maxFeePerGas": max_fee,
-            "maxPriorityFeePerGas": priority_fee,
-        }
-    )
-    gas_estimate = int(w3.eth.estimate_gas(tx))
-    tx["gas"] = int(gas_estimate * 1.2)
-
-    signed_tx = signer.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed_tx).hex()
-    if not tx_hash.startswith("0x"):
-        tx_hash = "0x" + tx_hash
-    broadcast_at = utcnow_iso()
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=receipt_timeout)
-    return AuctionDeployExecution(
-        tx_hash=tx_hash,
-        broadcast_at=broadcast_at,
-        receipt_status=int(receipt["status"]),
-        block_number=receipt.get("blockNumber"),
-        gas_used=receipt.get("gasUsed"),
     )

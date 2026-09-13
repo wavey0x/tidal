@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -15,7 +15,6 @@ from tidal.cli_support import (
     resolve_sender_address,
 )
 from tidal.config import Settings, load_settings
-from tidal.control_plane.client import ControlPlaneClient
 from tidal.errors import AddressNormalizationError, ConfigurationError
 from tidal.normalizers import normalize_address
 from tidal.persistence.db import Database
@@ -51,31 +50,18 @@ class ExecutionContext:
 @dataclass(slots=True)
 class CLIContext:
     config_path: Path | None = None
-    mode: Literal["client", "server"] = "client"
-    api_base_url: str | None = None
-    api_key: str | None = None
     settings: Settings = field(init=False)
 
     def __post_init__(self) -> None:
-        self.settings = load_settings(self.config_path, mode=self.mode)
-        if self.api_base_url is None:
-            self.api_base_url = self.settings.tidal_api_base_url
-        if self.api_key is None:
-            self.api_key = self.settings.tidal_api_key
+        self.settings = load_settings(self.config_path)
 
     def require_rpc(self) -> None:
         if not self.settings.rpc_url:
             raise ConfigurationError("RPC_URL is required for this command")
 
-    def require_api(self, *, auth: bool = True) -> None:
-        if not self.api_base_url:
-            raise ConfigurationError("TIDAL_API_BASE_URL is required for this command")
-        if auth and not self.api_key:
-            raise ConfigurationError("TIDAL_API_KEY is required for this command")
-
     @contextmanager
-    def session(self) -> "Iterator[object]":
-        db = Database(self.settings.database_url)
+    def session(self, *, read_only: bool = False) -> "Iterator[object]":
+        db = Database(self.settings.database_url, read_only=read_only)
         try:
             with db.session() as session:
                 yield session
@@ -89,18 +75,6 @@ class CLIContext:
     def web3_client(self) -> "Web3Client":
         self.require_rpc()
         return build_web3_client(self.settings)
-
-    def control_plane_client(self, *, auth: bool = True) -> ControlPlaneClient:
-        self.require_api(auth=auth)
-        return ControlPlaneClient(
-            base_url=str(self.api_base_url),
-            token=str(self.api_key) if self.api_key else "",
-            timeout_seconds=self.settings.tidal_api_request_timeout_seconds,
-        )
-
-    def verify_authenticated_api_access(self) -> None:
-        with self.control_plane_client(auth=True) as client:
-            client.verify_authenticated_access()
 
     def resolve_execution(
         self,

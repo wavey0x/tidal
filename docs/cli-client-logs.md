@@ -1,6 +1,6 @@
-# CLI Client: `tidal logs`
+# `tidal logs`
 
-`tidal logs` is the read-only history surface for recent kick attempts and scan runs exposed by the API.
+`tidal logs` reads recent business operations and scan runs directly from the local database using the same read models as the API.
 
 ## Subcommands
 
@@ -45,4 +45,4 @@ tidal logs show <run_id>
 
 - These commands are safe to use without transaction-signing credentials.
 - `--json` is useful when exporting or post-processing historical data.
-- The data comes from the server-side audit tables, not from local CLI state.
+- The data comes from the single local database; no API URL or key is needed.

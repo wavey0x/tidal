@@ -1,30 +1,15 @@
-# Tidal Docs
+# Tidal
 
-Tidal is Yearn's auction operations stack. It scans strategy and fee-burner inventories, caches balances and prices in SQLite, exposes that state through a FastAPI control plane, and lets CLI clients prepare and broadcast auction transactions with local wallet signing.
+Tidal runs auction observation and managed execution on one host, with one
+runtime, one SQLite database and one configuration. The dashboard and API read
+that state. Local commands prepare actions under a shared lock, retain each
+transaction identity before broadcasting, and reconcile finalized outcomes.
 
-## Start Here
+Start with [installation](install.md), the [operator guide](operator-guide.md)
+or [backup and recovery](recovery.md). For implementation details, see
+[architecture](architecture.md), [configuration](config.md),
+[CLI reference](cli-reference.md) and [API reference](api-reference.md).
 
-- Most users: [Install](install.md) then [CLI Client Guide](operator-guide.md)
-- Running the shared server: [Install](install.md) then [Server Operator Guide](server-ops.md)
-- Developing from source: [Install](install.md) then [Local Development](local-dev.md)
-
-## Docs Map
-
-- Setup and first-day workflows:
-  [Install](install.md), [CLI Client Guide](operator-guide.md), [Server Operator Guide](server-ops.md)
-- Exact command docs:
-  [CLI Command Map](cli-reference.md)
-- Runtime files and settings:
-  [Configuration](config.md)
-- System behavior:
-  [Architecture](architecture.md), [Pricing](pricing.md), [Kick Selection](kick-selection.md)
-- HTTP surface:
-  [API Reference](api-reference.md)
-
-## Source Of Truth
-
-These docs are meant to explain the current system, not preserve historical plans. When behavior disagrees with prose, prefer the code:
-
-- CLI surface: `tidal --help` and `tidal-server --help`
-- API surface: FastAPI routes in `tidal/api/routes/`
-- Config schema: `tidal/config.py`
+Auction behavior is described in [pricing](pricing.md) and
+[kick selection](kick-selection.md). The runtime consolidation preserves these
+policies, including exact historical amounts and no-fill retry delays.

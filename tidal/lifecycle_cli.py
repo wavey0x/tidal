@@ -55,6 +55,19 @@ def db_check(
     emit_operation(run, json_output=json_output)
 
 
+def db_snapshot(
+    output: Path = typer.Option(..., "--output", help="New snapshot file; existing files are never replaced."),
+    config: ConfigOption = None,
+    database: Path | None = typer.Option(None, "--database", help="Snapshot this DB without loading credentials or configuration."),
+    timeout_seconds: int = typer.Option(300, "--timeout-seconds", min=1),
+    json_output: JsonOption = False,
+) -> None:
+    """Online coherent backup, verified before publication; no runtime activation."""
+    from tidal.snapshot import snapshot
+    emit_operation(lambda: snapshot(database or load_server_settings(config).resolved_db_path,
+        output, timeout_seconds=timeout_seconds), json_output=json_output)
+
+
 def hold(json_output: JsonOption = False) -> None:
     """Hold native execution; deployment/restore must also stop existing units."""
     def run() -> dict:

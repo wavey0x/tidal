@@ -30,7 +30,7 @@ The action that starts a new auction lot with a computed sell amount, starting p
 
 ## Prepare
 
-The server-side step that validates a candidate and computes the exact transaction inputs and confirmation summary before signing.
+The stateless step that validates a candidate and computes unsigned transaction inputs and a confirmation summary. Managed commands prepare locally under the shared execution lock.
 
 ## Broadcast
 
@@ -42,7 +42,15 @@ The observed transaction result after broadcast, including status, block number,
 
 ## Action
 
-An API-audited prepared workflow item such as kick, deploy, enable-tokens, or settle. Actions carry audit state across prepare, broadcast, and receipt reporting.
+An intended operation such as kick, enablement or settlement. Preparation creates no durable action job. A managed submission records one transaction identity linked to all affected business operations.
+
+## Activation
+
+Local permission to execute, bound to the database UUID, chain, declared signers and checked account nonce. It is excluded from backups and recreated only by explicit native resume.
+
+## Finality
+
+Canonical finalized chain evidence matching a retained transaction's exact identity and intent. Receipt inclusion alone is provisional and continues to block that signer.
 
 ## Shortlist
 

@@ -1,30 +1,17 @@
-# Server Operator: `tidal-server api`
-
-`tidal-server api` serves the FastAPI control plane used by the dashboard and the CLI client.
-
-## Subcommands
-
-- `serve`
-
-## Common Invocation
+# `tidal api`
 
 ```bash
-tidal-server api serve --config config/server.yaml
+tidal api serve --config /path/to/server.yaml
 ```
 
-## Runtime Behavior
+Serve the read-only API from an existing compatible database. Default binding is
+`0.0.0.0:8787`; production should select its declared loopback listener and reverse
+proxy. `TIDAL_API_HOST` and `TIDAL_API_PORT` override those defaults.
 
-The API process binds to `0.0.0.0:8787` by default.
-Override with environment variables or explicit `config/server.yaml` keys only when you need non-default wiring:
+Startup neither creates nor migrates state. It constructs no signer,
+broadcaster or background receipt worker. Unsigned previews remain stateless.
+`/health` checks actual schema/identity; chain, price and execution readiness are
+reported separately by `tidal status`.
 
-- `tidal_api_host`
-- `tidal_api_port`
-
-In production, it is normally placed behind a reverse proxy or TLS terminator.
-
-## Operational Notes
-
-- Run `tidal-server db migrate` before starting the API.
-- The public Alerts endpoint is read-only. API-reported receipts use the same
-  finalizer as local execution, while the scanner performs the bounded backlog pass.
-- The API is the control plane for `tidal`, not the holder of private keys. Signing stays on the CLI client or the server operator host that explicitly broadcasts.
+The restored API can start while worker activation and dependencies are held.
+See [API reference](api-reference.md) and [recovery](recovery.md).

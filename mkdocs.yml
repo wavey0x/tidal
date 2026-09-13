@@ -25,14 +25,15 @@ nav:
   - Getting Started:
     - Overview: index.md
     - Install: install.md
-    - CLI Client Guide: operator-guide.md
+    - Operator Guide: operator-guide.md
     - Server Operator Guide: server-ops.md
+    - Backup and Recovery: recovery.md
   - Guides:
     - Architecture: architecture.md
     - Local Development: local-dev.md
   - Reference:
     - CLI Command Map: cli-reference.md
-    - CLI Client:
+    - Local Commands:
       - Init (`tidal init`): cli-client-init.md
       - Kick (`tidal kick`): cli-client-kick.md
       - Auction (`tidal auction`): cli-client-auction.md

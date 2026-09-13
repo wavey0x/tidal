@@ -88,9 +88,9 @@ curve quote unavailable (status: ...)
 
 Pricing profiles come from the server's `kick:` section in `config/server.yaml`.
 
-For API-backed `tidal` workflows, that means the tracked server config on the runtime preparing the action, not the local workstation copy.
+Local commands, schedules and stateless API previews use the shared runtime configuration.
 
-If a confirmation panel shows an unexpected decay or profile, check the server runtime first.
+If a confirmation panel shows an unexpected decay or profile, inspect the selected configuration and execution profile.
 
 Each profile defines:
 

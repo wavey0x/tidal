@@ -1,56 +1,23 @@
-# Server Operator: `tidal-server db`
+# `tidal db`
 
-`tidal-server db` is the database maintenance entry point.
-
-## Subcommands
-
-- `migrate`: apply the current Alembic schema migrations
-- `repair-auction-rounds`: audit every retained auction round; add `--apply` to
-  replay receipts, discover settlement logs, rebuild links, and baseline
-  inactive historical evidence the chain can no longer prove
-- `clear-no-fill-suspension`: preview an exact pair's no-fill reset; add
-  `--apply` to mark the newest completed no-fill as the reviewed baseline
-
-## Common Invocation
+Database lifecycle is explicit. Services do not initialize or migrate at startup.
 
 ```bash
-tidal-server db migrate --config config/server.yaml
-tidal-server db repair-auction-rounds --config config/server.yaml
-tidal-server db clear-no-fill-suspension --auction 0x... --token 0x... --config config/server.yaml
+tidal db check --database /path/to/tidal.db --json
+tidal db snapshot --database /path/to/tidal.db --output /backup/new.sqlite3 --json
 ```
 
-For the one-time full repair:
+`db init` deliberately creates empty held state and refuses an existing file.
+`db migrate` upgrades while held. The first consolidation migration requires
+separate protected original `--source-database` and `--outbox` files so useful
+submission evidence is imported before old action tables are retired.
 
-```bash
-tidal-server db repair-auction-rounds --apply --config config/server.yaml
-tidal-server db repair-auction-rounds --apply --config config/server.yaml
-```
+`db prepare-restore --credential-file FILE --json` rotates API access, marks
+prices stale and prepares notification suppression while preserving history.
+`db repair-auction-rounds` requires an exact `--auction` and `--token`; preview
+before `--apply`. It refuses unresolved attempts and does not baseline other
+pairs. `db clear-no-fill-suspension` is a separate explicit policy override for
+a selected pair, with a read-only preview before `--apply`.
 
-The second apply must report `Mutations: 0` before automation resumes.
-
-## When To Run It
-
-Run migrations:
-
-- during first-time bootstrap
-- after upgrading the installed package
-- as an `ExecStartPre=` step before API or scanner startup
-
-## Notes
-
-- `migrate` is safe to run repeatedly.
-- It does not require `RPC_URL`.
-- It operates on the database path resolved from `config/server.yaml` and any `TIDAL_*` path overrides.
-- Run `repair-auction-rounds --apply` only while API, scanner, and kick scheduling
-  are stopped.
-- Back up the SQLite database and run `PRAGMA integrity_check` first.
-- Apply mode covers retained history without shortlist, activity, threshold, or
-  ignore filtering. Each transaction receipt is replayed once and settlement
-  logs are scanned once per auction.
-- Apply mode may mark an unprovable round as a reviewed historical baseline only
-  when a later round superseded it or the exact auction/token pair is inactive.
-  Runtime reconciliation never creates baselines.
-- `clear-no-fill-suspension` preserves every operation and moves only the retry
-  cutoff. It refuses to cross ambiguous evidence. A newer incomplete round
-  remains enforced and becomes the first round in the fresh retry sequence.
-- Active or otherwise unresolved current evidence continues to fail the audit.
+Follow [backup and recovery](recovery.md) for the complete sequence. The
+`tidal-server db` entry point addresses the same commands and same state.

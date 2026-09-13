@@ -1,42 +1,14 @@
-# CLI Client: `tidal init`
+# `tidal init`
 
-`tidal init` creates the default workstation home for the CLI client.
-
-## Common Invocation
+Scaffold the one shared configuration and secret-file example:
 
 ```bash
-tidal init
+tidal init --dest config
 ```
 
-Overwrite the scaffolded files intentionally:
+Existing files are kept unless `--force` is explicit. This command does not
+create a database, key, remote client or activation. Fill the shared policy and
+select a private `TIDAL_ENV_FILE`; see [configuration](config.md).
 
-```bash
-tidal init --force
-```
-
-## What It Writes
-
-The command creates:
-
-- `~/.tidal/cli/config.yaml`
-- `~/.tidal/cli/.env`
-
-## When To Use It
-
-Run `tidal init` when:
-
-- setting up a new workstation
-- you want to regenerate the latest scaffold files with `--force`
-
-Use `tidal-server init-config` for tracked server config in the repo.
-
-## What To Edit Next
-
-After initialization, the usual next steps for a CLI client are:
-
-1. Put `TIDAL_API_KEY` in `~/.tidal/cli/.env`.
-2. If you are using `https://api.tidal.wavey.info`, get that API key from wavey.
-3. Confirm `tidal_api_base_url` in `~/.tidal/cli/config.yaml`.
-4. Add keystore-related values if you will send transactions locally.
-
-See [Configuration](config.md) for the setting-level breakdown.
+Use `tidal db init` only for deliberately empty state. Restore or explicitly
+migrate existing state using [the recovery procedure](recovery.md).

@@ -1,182 +1,41 @@
 # Architecture
 
-## Purpose
+One runtime owns observation, preparation, managed execution and recovery. One
+SQLite database stores discovered state, policy history, business operations,
+notification delivery state and a single transaction ledger. One YAML policy
+and one secret file supply every service and local command.
 
-Tidal exists to answer two operational questions quickly and safely:
+The API opens read-only database connections. Dashboard reads and unsigned
+previews create no action job, outbox or receipt task. The API constructs no
+signer, broadcaster or background reconciliation loop. Browser-wallet
+deployment remains a separate, stateless wallet flow.
 
-1. What auction actions are currently worth taking?
-2. How can a CLI client prepare and broadcast those actions without giving the server custody of private keys?
+## Managed execution
 
-The design splits shared state from signing authority. The server owns the database and background jobs. CLI clients keep keys local.
+Local scanner, kick and auction commands share a stable host lock outside the
+database directory. Preparation rechecks current state, policy and prices.
+The common sender verifies activation, signer, chain freshness, expected nonce
+and quote age. It signs in memory, then atomically commits the exact hash,
+signer, nonce, unsigned intent and every business-operation link before one RPC
+broadcast. Signed bytes are not persisted.
 
-## Overview Diagram
+One unresolved attempt blocks the signer, including an included transaction
+that has not finalized. Reconciliation fetches fresh transaction, receipt,
+canonical block and finalized-head evidence. Business changes are committed
+atomically only when intent and required events match. Missing or conflicting
+evidence remains visible for review. There is no automatic rebroadcast,
+replacement or nonce-based guess about an unknown historical transaction.
 
-![Tidal architecture overview](assets/architecture-overview.svg)
+## Recovery boundary
 
-## Main Components
+Tidal owns DB validation, legacy migration, transaction proof, current-state
+refresh, notification baselines, scoped policy repair and activation. The backup
+system owns snapshot storage, credentials, artifact retention, file replacement,
+service fencing and the restore journal. It calls native commands rather than
+querying Tidal tables or importing its internal classes.
 
-| Component | Responsibility | Main code |
-|---|---|---|
-| Scanner | Builds the cached dataset: sources, balances, auctions, prices, enabled tokens | `tidal/scanner/service.py` |
-| Persistence | Shared SQLite schema, migrations, repository helpers | `tidal/persistence/`, `alembic/` |
-| Transaction service | Selects candidates, inspects auctions, prepares actions, and supports server-owned scan-side auction maintenance | `tidal/transaction_service/` |
-| API | Exposes read models and action preparation over HTTP | `tidal/api/app.py` |
-| Read models | Dashboard rows, kick logs, scan logs, run details | `tidal/read/` |
-| CLI client | API-backed inspection and action execution with local wallet signing | `tidal/cli.py` |
-| Server runtime CLI | Runtime/admin entrypoint for migrations, scans, API, auth | `tidal/server_cli.py` |
-| UI | Read-only monitoring plus CLI client action flows | `ui/src/App.jsx` |
-| Contract | On-chain `AuctionKicker` helper used for atomic kick execution | `contracts/src/AuctionKicker.sol` |
-
-## End-To-End Flow
-
-```text
-Yearn contracts / auctions / token APIs
-                |
-                v
-           scanner service
-                |
-                v
-             SQLite
-                |
-                +--> FastAPI control plane --> dashboard UI
-                |
-                +--> FastAPI control plane --> CLI client
-                                              |
-                                              v
-                                       local wallet signing
-                                              |
-                                              v
-                                           Ethereum
-                                              |
-                                              v
-                                      broadcast/receipt audit
-                                              |
-                                              v
-                                            SQLite
-```
-
-## Data Flow
-
-### 1. Scanner
-
-The scanner reads on-chain state and writes the current cache into SQLite.
-
-It is responsible for:
-
-- discovering Yearn strategies and their vault context
-- loading configured fee burners
-- resolving strategy and fee-burner token balances
-- refreshing token USD prices from `prices.wavey.info`
-- mapping sources to auctions
-- caching enabled-token status per auction
-- optionally auto-settling stale auctions
-
-### 2. Read Path
-
-The UI and CLI client do not query SQLite directly. They read through the FastAPI control plane.
-
-That gives one shared source of truth for:
-
-- dashboard rows
-- kick logs
-- scan logs
-- action audit history
-- prepare-time logic
-
-### 3. Action Preparation
-
-For mutating workflows, the server prepares actions but does not hold the wallet.
-
-The normal CLI client path is:
-
-1. CLI calls the API to inspect or prepare an action.
-2. API returns calldata, pricing context, and audit identifiers.
-3. CLI signs locally using a Foundry keystore or explicit keystore file.
-4. CLI broadcasts locally.
-5. CLI reports broadcast and receipt details back to the API.
-
-This keeps signing authority on the CLI client machine while the server remains the source of shared state and audit history.
-
-## Kick Pipeline
-
-The kick flow is intentionally split between cached ranking and just-in-time pricing.
-
-### Cached phase
-
-The shortlist is built from cached scanner outputs:
-
-- cached source balances
-- cached sell-token USD prices
-- cached auction mappings
-- cached enabled-token data
-
-This phase is cheap and stable enough to rank opportunities.
-
-Token logos are not scanner state. The dashboard derives a stable
-`prices.wavey.info/token-logos/{chain_id}/{address}` resource identifier from
-each token identity, and the browser fetches owned image bytes independently.
-Tidal never validates, downloads, or persists logo URLs.
-
-### Just-in-time phase
-
-When a specific candidate is prepared:
-
-- live source balance is read again
-- the final sell size is computed
-- a live `/v1/quote` call is made for the exact candidate
-- start and floor prices are derived from that live quote
-- a just-in-time `/v1/price` call is made for the want token to power the confirmation warning
-
-The key rule is that live quote data is used to price the transaction, not to rank the shortlist.
-
-## Storage Model
-
-SQLite is the canonical datastore. This repo configures SQLite with:
-
-- WAL mode
-- `busy_timeout`
-- SQLAlchemy session management in `tidal/persistence/db.py`
-
-The database stores:
-
-- latest scanner snapshots
-- token metadata and prices
-- scan run history
-- kick transaction history
-- API action audit rows
-- API keys
-
-## Trust Boundaries
-
-### Server
-
-The server is trusted with:
-
-- RPC access
-- database ownership
-- API key validation
-- action preparation
-- audit persistence
-
-The server is not trusted with:
-
-- CLI client private keys
-
-### CLI Client
-
-The CLI client is trusted with:
-
-- local keystore access
-- local transaction signing
-- local broadcast
-
-The CLI depends on the API for shared state and prepared payloads, but the signing step stays local.
-
-## Useful Entry Points
-
-- Scanner loop: `tidal/scanner/service.py`
-- Kick shortlist: `tidal/transaction_service/evaluator.py`
-- Kick prepare logic: `tidal/transaction_service/kicker.py`
-- API app assembly: `tidal/api/app.py`
-- CLI client HTTP client: `tidal/control_plane/client.py`
-- Dashboard UI: `ui/src/App.jsx`
+Recovery refresh constructs observation-only services with no signer, price
+client or notification transport. Historical amounts, timestamps, round links,
+no-fill delays and reviewed baselines survive. Current quotes can wait for a
+provider while the API serves restored data. See [recovery](recovery.md) for the
+concrete operator sequence and acceptance evidence.

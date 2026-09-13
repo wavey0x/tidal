@@ -17,7 +17,7 @@ from tidal.cli_options import ConfigOption, JsonOption
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
 from tidal.lifecycle import clear_activation, execution_lock
-from tidal.lifecycle_cli import db_check, db_import_legacy, hold, emit_operation
+from tidal.lifecycle_cli import db_check, db_import_legacy, db_snapshot, hold, emit_operation
 from tidal.paths import default_activation_path, default_txn_lock_path
 from tidal.persistence.db import Database
 from tidal.persistence.repositories import KickTxRepository
@@ -35,6 +35,7 @@ app.add_typer(scan_app, name="scan")
 app.add_typer(api_app, name="api")
 app.add_typer(auth_app, name="auth")
 db_app.command("check")(db_check)
+db_app.command("snapshot")(db_snapshot)
 db_app.command("import-legacy")(db_import_legacy)
 app.command("hold")(hold)
 from tidal.recovery_cli import register as register_recovery

@@ -43,14 +43,15 @@ def check_configuration(settings) -> dict:
         signer = TransactionSigner(str(settings.resolved_txn_keystore_path), settings.txn_keystore_passphrase)
     except Exception as exc:
         raise LifecycleError("WRONG_SIGNER", "Configured encrypted keystore cannot be unlocked with the selected secret file.") from exc
-    if set(settings.managed_signers) != {"scan", "kick"} or set(settings.managed_signers.values()) != {signer.address}:
+    declared = {profile: normalize_address(address) for profile, address in settings.managed_signers.items()}
+    if set(declared) != {"scan", "kick"} or set(declared.values()) != {signer.address}:
         raise LifecycleError("WRONG_SIGNER", "Declared scan/kick identities differ from the recovered key.")
     if configured_signer(settings) != signer.address:
         raise LifecycleError("WRONG_SIGNER", "Keystore public identity differs from its encrypted key.")
     if set(settings.execution_profiles) != {"scan", "strategy", "fee_burner"}:
         raise LifecycleError("INCOMPLETE_POLICY", "Declare the scan, strategy and fee-burner execution policies.")
     return result("CONFIGURATION_VALID", data={
-        "chain_id": settings.chain_id, "signers": settings.managed_signers,
+        "chain_id": settings.chain_id, "signers": declared,
         "database_path": str(settings.resolved_db_path), "home_path": str(settings.resolved_home_path),
         "config_path": str(settings.resolved_config_path), "secret_file": str(settings.resolved_env_path),
         "keystore_path": str(settings.resolved_txn_keystore_path),

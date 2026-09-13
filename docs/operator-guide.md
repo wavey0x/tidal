@@ -1,222 +1,53 @@
-# CLI Client Guide
+# Operator guide
 
-Use this page after [Install](install.md). It focuses on day-to-day CLI-client use, not package installation.
-
-## Role Of The CLI Client
-
-`tidal` is the API-backed CLI client. It does not own the shared database. It reads and prepares actions through the control-plane API, then signs and sends transactions locally.
-
-That split matters:
-
-- the server owns shared state and audit history
-- the CLI client owns private-key access
-
-## First-Time Setup
-
-At minimum, put the API auth values in `~/.tidal/cli/.env` or export them in your shell:
+Run `tidal` locally on the application host over SSH, using the same release and
+configuration as its services. Commands do not need a remote operator API key.
 
 ```bash
-export TIDAL_API_BASE_URL=https://api.tidal.wavey.info
-export TIDAL_API_KEY=<cli-client-api-key>
-```
-
-If you are using `https://api.tidal.wavey.info`, API keys are provided by wavey on request.
-
-You can also pass `--api-base-url` and `--api-key` per command, but `~/.tidal/cli/.env` is the normal path.
-
-Client-side config values that are often useful in `~/.tidal/cli/config.yaml`:
-
-- `tidal_api_base_url`
-- `tidal_api_request_timeout_seconds`
-- `prepared_action_max_age_seconds`
-- `txn_max_gas_limit` for API-prepared auction management actions such as `enable-tokens`
-- shared RPC timeout settings if you also do local prepare/send work
-
-For API-backed `tidal` workflows, prepared kick behavior comes from the server's tracked `config/server.yaml`, not the workstation.
-
-That means:
-
-- editing local `~/.tidal/cli/config.yaml` does not change the server-side `kick:` policy
-- edit `config/server.yaml` on the server checkout if you want shared prepare behavior to change
-- the authoritative pricing, ignore, and cooldown rules live under `kick:` in that file
-
-## Wallet Configuration
-
-Transaction-sending commands load the signer from keystore configuration:
-
-- `TXN_KEYSTORE_PATH`: default keystore path
-- `TXN_KEYSTORE_PASSPHRASE`: default keystore password
-- `--keystore`: explicit keystore path override
-- `--password-file`: file containing the keystore password
-
-The keystore secrets themselves usually live in `~/.tidal/cli/.env`:
-
-- `TXN_KEYSTORE_PATH`
-- `TXN_KEYSTORE_PASSPHRASE`
-
-Example:
-
-```bash
-tidal kick run
-```
-
-The sender address is inferred from the resolved keystore.
-
-## Read-Only Workflows
-
-Inspect recent kicks:
-
-```bash
+tidal status --config /path/to/server.yaml --json
+tidal kick inspect --source-type strategy
 tidal logs kicks
-tidal logs kicks --status CONFIRMED
-tidal logs kicks --source 0xSource
-```
-
-Inspect scan history:
-
-```bash
 tidal logs scans
+tidal logs show RUN_ID
 ```
 
-Inspect one historical run:
+Inspect and log commands do not sign. A dry run can prepare diagnostics without
+unlocking a key or sending, but writes local diagnostic history:
 
 ```bash
-tidal logs show <run_id>
+tidal kick run --source-type strategy --dry-run --json
 ```
 
-Inspect current kick candidates:
+After explicit activation, interactive commands show a confirmation before
+submission. Scheduled runs use the existing policies:
+
+| Profile | Minimum value | Base fee cap | Curve quote |
+|---|---:|---:|---|
+| Scanner | $250 | 5 gwei | Required |
+| Strategy kick | $100 | 1 gwei | Required |
+| Fee-burner kick | $50 | 1 gwei | Optional |
 
 ```bash
-tidal kick inspect
-tidal kick inspect --source-type fee-burner
-tidal kick inspect --auction 0xAuction
-tidal kick inspect --show-all
+tidal kick run --source-type strategy
+tidal kick run --source-type fee-burner
+tidal auction enable-tokens 0xAUCTION
+tidal auction settle 0xAUCTION --token 0xTOKEN
+tidal auction sweep 0xAUCTION --token 0xTOKEN
 ```
 
-## Kick Workflow
+Only use `--headless` or `--no-confirmation` for deliberately unattended work.
+JSON output for live actions requires explicit unattended consent. One-off
+policy overrides remain available; use each command's `--help`. Browser wallet
+deployment remains available through the UI; the managed CLI does not deploy
+auctions.
 
-### Run
+The shared sender commits transaction identity and all business links before
+broadcast. A returned hash or receipt inclusion is not yet final success.
+`tidal reconcile` checks retained hashes without resending. A pending attempt
+blocks further sends by that signer. Do not clear it because a request timed out.
 
-```bash
-tidal kick run
-```
-
-The CLI will:
-
-1. inspect candidates
-2. prepare the next exact candidate through the API
-3. show a confirmation summary
-4. sign locally
-5. send locally
-6. report broadcast and receipt data back to the API
-
-The client saves the signed transaction's hash in its local outbox before sending.
-A lost send response or a crash does not authorize another attempt. The identity
-remains saved independently of API report delivery until a receipt confirms or
-reverts it. Later executions first reconcile saved hashes and refuse to sign
-while an earlier submission remains unresolved. This can include a crash before
-the transaction reached the RPC: investigate the retained hash rather than
-automatically replacing it or deleting the outbox. Report-delivery retries never
-resubmit signed transactions.
-
-Because preparation happens through the API, the confirmation panel reflects server-side `config/server.yaml` policy.
-The client also enforces a local age limit for prepared transactions. If you wait longer than `prepared_action_max_age_seconds` before sending, that prepared transaction is skipped and you need to re-run.
-
-For unattended execution:
-
-```bash
-tidal kick run --no-confirmation
-```
-
-For timer or service execution:
-
-```bash
-tidal kick run --headless
-```
-
-Headless mode skips confirmation, emits compact line-oriented logs, keeps preparing and sending the current ready queue until it is cleared, skipped, or blocked, and exits successfully for normal no-op outcomes.
-
-Useful flags:
-
-- `--limit`: cap how many candidates are considered
-- `--source-type`: `strategy` or `fee-burner`
-- `--source`: target one source address
-- `--auction`: target one auction
-- `--min-usd-value`: override the server `txn_usd_threshold` for this inspect or run
-- `--no-confirmation`: skip interactive confirmation
-- `--headless`: use unattended service-mode output, drain the ready queue, and use no-op success exits
-- `--verbose`: show more diagnostic detail
-- `--no-require-curve`: relax Curve quote strictness for this run
-
-## Auction Workflows
-
-### Deploy an auction
-
-```bash
-tidal auction deploy \
-  --want 0xWant \
-  --receiver 0xReceiver \
-  --starting-price 1234
-```
-
-### Enable auction tokens
-
-```bash
-tidal auction enable-tokens 0xAuction
-tidal auction enable-tokens 0xAuction --extra-token 0xToken
-tidal auction enable-tokens 0xAuction --extra-token 0xTokenA --extra-token 0xTokenB
-```
-
-### Settle an active auction
-
-```bash
-tidal auction settle 0xAuction
-tidal auction settle 0xAuction --token 0xActiveToken
-tidal auction settle 0xAuction --sweep
-```
-
-## Confirmations And Warnings
-
-The kick confirmation view separates:
-
-- auction details: sell amount, quoted output, start/min prices, pricing profile
-- send details: sender, gas estimate, gas limit, base fee, max fee
-
-One important warning compares:
-
-- the live quote output amount
-- against the evaluated spot output implied by cached sell-token USD value and a just-in-time want-token USD price
-
-The threshold is controlled by `txn_quote_spot_warning_threshold_pct`.
-
-See [Pricing](pricing.md) for the exact formula.
-
-## Failure Modes To Expect
-
-Common CLI client-facing failures:
-
-- `curve quote unavailable`: the fresh quote succeeded overall, but Curve did not provide a usable route and strict Curve mode was enabled
-- `below threshold on live balance`: cached shortlist value looked large enough, but the current on-chain balance does not
-- `database is locked; retry the request`: the server hit SQLite write contention
-- API 401: invalid or missing bearer token
-
-## When To Use `tidal-server` Instead
-
-Use `tidal-server` only when you are operating the server itself:
-
-- database migration
-- scan execution
-- API serving
-- API key management
-
-For kick, auction, and log workflows, use `tidal` even if you are standing on the server host. Point it at the local API and keep the keystore local to that machine.
-
-## Command Reference
-
-Use these pages when you need exact command shapes or flag guidance:
-
-- [CLI Command Map](cli-reference.md)
-- [CLI Client: `tidal init`](cli-client-init.md)
-- [CLI Client: `tidal kick`](cli-client-kick.md)
-- [CLI Client: `tidal auction`](cli-client-auction.md)
-- [CLI Client: `tidal logs`](cli-client-logs.md)
+`tidal hold` removes activation. `tidal resume` checks current dependencies,
+signing identity and nonce before activating; it does not start timers. See
+[recovery](recovery.md) for service fencing, unknown history and replacement
+proof. The no-fill delays remain 720 and 1440 minutes; recovery does not reset
+them or rewrite old timestamps.

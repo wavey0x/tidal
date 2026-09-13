@@ -152,23 +152,25 @@ Once a candidate is selected for preparation, Tidal does the expensive work only
 6. derive start price and minimum price from the live quote
 7. estimate gas and show confirmation
 
-This keeps CLI client latency proportional to the candidate being acted on, not to the whole shortlist.
+This keeps preparation work proportional to the selected candidate.
 
 The scanner refreshes strategy kick guard status during normal runs. For Curve-style strategies,
 it reads the strategy gauge and then the gauge `is_killed()` flag. A killed gauge is persisted as
 disabled and causes prepare to skip that strategy with `strategy gauge is killed`. Manual
 operator runs can bypass only this guard with `tidal kick run --allow-killed-gauge`.
 
-## CLI Client Flow Versus Daemon Flow
+## Local execution flow
 
-The CLI client API-backed flow is intentionally one-by-one:
+Interactive and scheduled commands share the local execution owner:
 
 - inspect using cached ordering
 - prepare one candidate
 - confirm and send
-- move to the next candidate
+- retain identity and all business links before broadcasting once
+- reconcile the exact transaction; a pending or unfinalized attempt blocks further sends
 
-That means cached prices are used for ranking, while quote freshness is preserved for the actual transaction.
+Cached prices rank candidates; fresh quotes determine transaction contents.
+Explicit batching combines compatible operations into one retained transaction.
 
 ## Why A Candidate Can Fall Out During Prepare
 

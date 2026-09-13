@@ -46,7 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             database.engine.dispose()
 
-    app = FastAPI(title="Tidal Control Plane", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Tidal API", version="1.0.0", lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.database = database
 
@@ -93,7 +93,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             return JSONResponse(status_code=503, content={"status": "error", "warnings": [],
                 "data": {"ready": False}, "detail": "Database is unavailable or incompatible with this release."})
-        return {"status": "ok", "warnings": [], "data": {"ready": True, "schema_revision": revision}}
+        return {"status": "ok", "warnings": [], "data": {"ready": True,
+            "schema_revision": revision, "database_identity": str(uuid.UUID(identity))}}
 
     prefix = "/api/v1/tidal"
     app.include_router(dashboard_router, prefix=prefix, tags=["dashboard"])

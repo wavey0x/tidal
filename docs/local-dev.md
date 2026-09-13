@@ -1,185 +1,44 @@
-# Local Development
+# Local development
 
-This guide is for contributors and local server operators working from a repo checkout.
-
-## Prerequisites
-
-- Python 3.12+
-- Node.js 20+ for the dashboard UI
-- Foundry for contract tests and deployment scripts
-- A mainnet RPC URL
-
-## Backend Setup
+Use the committed dependency lock and a separate development database:
 
 ```bash
-uv sync --extra dev
-```
-
-This creates the local project environment from `uv.lock`, installs the package, and includes the `dev` extra for tests and docs work.
-
-Use `uv run ...` for Python-side commands from the checkout instead of activating a manual venv.
-
-## Secrets And Config
-
-Initialize the local client home and tracked server config first:
-
-```bash
+uv sync --frozen --extra dev
 uv run tidal init
-uv run tidal-server init-config
+uv run tidal db init --config config/server.yaml
+uv run tidal api serve --config config/server.yaml
 ```
 
-Put client secrets in `~/.tidal/cli/.env`:
+Select `TIDAL_HOME`, `DB_PATH` and a private `TIDAL_ENV_FILE` explicitly when
+working alongside production settings. All commands share one configuration;
+there is no CLI client home or remote operator API mode. See [configuration](config.md).
+
+For fixture-based tests and docs:
 
 ```bash
-TIDAL_API_KEY=...
-RPC_URL=https://...
+uv run pytest tests/unit tests/integration
+uv run mkdocs build --strict
 ```
 
-Put shared server runtime settings in `config/server.yaml`.
-Put server secrets in `~/.tidal/server/.env`, or set `TIDAL_ENV_FILE=config/.env` for repo-local work.
+Unit/integration tests prohibit live network access. Keep real signing keys and
+delivery credentials out of fixtures. Contract/fork tests in `contracts/` and
+`tests/fork/` are separate and need their explicitly configured fork environment.
 
-The tracked server config already includes:
-
-- scanner defaults
-- multicall and pricing settings
-- monitored fee burners
-- the embedded `kick:` policy block
-
-Some deployment-wiring values stay in code by default:
-
-- `tidal_api_host = 0.0.0.0`
-- `tidal_api_port = 8787`
-- `token_price_agg_base_url = https://prices.wavey.info`
-- `auctionscan_base_url = https://auctionscan.info`
-- `auctionscan_api_base_url = https://auctionscan.info/api`
-
-Settings precedence is:
-
-```text
-environment variables > config/server.yaml > Python defaults
-```
-
-See [Configuration](config.md) for the full schema.
-
-## Initialize The Database
-
-```bash
-uv run tidal-server db migrate --config config/server.yaml
-```
-
-This applies Alembic migrations to the configured SQLite database.
-
-## Create An API Key
-
-If you want to exercise authenticated API flows locally:
-
-```bash
-uv run tidal-server auth create --label yourname
-```
-
-The command prints a plaintext key once. Keep it somewhere safe, then export it:
-
-```bash
-export TIDAL_API_KEY=<printed-key>
-```
-
-## Run The Backend
-
-Run one scan:
-
-```bash
-uv run tidal-server scan run --config config/server.yaml
-```
-
-Start the API:
-
-```bash
-uv run tidal-server api serve --config config/server.yaml
-```
-
-By default the API listens on `0.0.0.0:8787`. Override with `TIDAL_API_HOST` and `TIDAL_API_PORT`, or add explicit YAML keys, only if needed.
-
-## Use The CLI Client Against Local API
-
-```bash
-export TIDAL_API_BASE_URL=http://127.0.0.1:8787
-
-uv run tidal kick inspect
-uv run tidal logs kicks
-uv run tidal kick run
-```
-
-For broadcast flows you also need wallet configuration:
-
-- `TXN_KEYSTORE_PATH`
-- `TXN_KEYSTORE_PASSPHRASE`
-- optional `--keystore`
-- optional `--password-file`
-
-## Run The Dashboard UI
+For the UI:
 
 ```bash
 cd ui
-npm install
-npm run dev
-```
-
-Then open `http://localhost:5173`.
-
-The dev UI now defaults to proxying `/api/v1/tidal` to the production API:
-
-```bash
-TIDAL_API_PROXY_TARGET=https://api.tidal.wavey.info
-```
-
-To point at a local API instead:
-
-```bash
+npm ci
 TIDAL_API_PROXY_TARGET=http://127.0.0.1:8787 npm run dev
+npm test
+npm run build
+npm run test:browser
 ```
 
-Browser reads and wallet-deployment preparation use public endpoints. Do not add
-operator keys to frontend environment variables; authenticated operator actions
-belong in the CLI.
+The UI needs only public API URL configuration. Its browser fixtures do not send
+production transactions. Follow the repository's light/dark theme, contrast and
+copy-affordance checks before shipping UI changes.
 
-## Run Tests
-
-Python tests:
-
-```bash
-uv run pytest
-```
-
-You can also scope to unit, integration, or fork tests:
-
-```bash
-uv run pytest tests/unit
-uv run pytest tests/integration
-uv run pytest tests/fork
-```
-
-Contract tests:
-
-```bash
-cd contracts
-MAINNET_URL=$RPC_URL forge test -vvv
-```
-
-## Preview The Docs Site
-
-```bash
-uv run mkdocs serve
-```
-
-The local docs site will be available at `http://127.0.0.1:8000`.
-
-## Recommended First Session
-
-If you are new to the repo, the fastest way to build context is:
-
-1. Run `uv run tidal-server db migrate`
-2. Run `uv run tidal-server scan run`
-3. Run `uv run tidal-server api serve`
-4. Open the UI locally
-5. Run `uv run tidal kick inspect`
-6. Read [Architecture](architecture.md) and [Kick Selection](kick-selection.md)
+Production [release preparation](install.md) packages the maintained runtime,
+locked wheels and built UI. Rehearse installation and recovery with networking
+disabled and fixture identities before changing live service paths.

@@ -1,106 +1,57 @@
 # Tidal
 
-Tidal is Yearn's auction operations stack. It scans strategy and fee-burner inventories, caches balances and token prices in SQLite, prepares auction actions through a control-plane API, supports local transaction signing from a CLI client, and exposes a dashboard for monitoring the resulting state.
-
-Documentation lives in [`docs/`](./docs/index.md). The intended hosted docs domain is `https://docs.tidal.wavey.info`.
-
-## Production Components
-
-| Component | Role | Entry point |
-|---|---|---|
-| `tidal-server` | Server runtime CLI for migrations, scans, API serving, and API key management | `tidal.server_cli:app` |
-| `tidal` | CLI client for API-backed inspection, preparation, signing, sending, and log inspection | `tidal.cli:app` |
-| `ui/` | React dashboard for strategies, fee burners, logs, and CLI client actions | `ui/src/App.jsx` |
-| `contracts/` | Foundry project for the on-chain `AuctionKicker` helper contract | `contracts/src/AuctionKicker.sol` |
-
-## System Shape
+Tidal discovers Yearn strategy and fee-burner inventory, operates auctions and
+serves a monitoring dashboard. One local runtime owns one SQLite database and
+one managed transaction ledger. Operators run native commands on the host over
+SSH; the API serves read-only data and stateless unsigned previews.
 
 ```text
-scanner -> SQLite -> FastAPI control plane -> dashboard UI
-                                  ^
-                                  |
-                       CLI client prepare/read calls
-                                  |
-                           local wallet signing
-                                  |
-                               Ethereum
+scanner ────────────> SQLite ────────────> read-only API ──> dashboard
+                         ↑
+local commands ──> shared managed sender ──> Ethereum
+                         ↑
+                retained transaction identity
 ```
 
-The server owns the database, scans, API, and audit history. CLI clients keep private keys local: the CLI asks the API to prepare actions, signs and sends transactions locally, and reports broadcast/receipt data back to the API.
+Every managed send commits its exact identity, unsigned intent and business
+links before broadcasting once. Pending and unfinalized attempts block the
+signer. Canonical finalized evidence is required before business outcomes change.
+There is no remote operator outbox, receipt-report protocol or background API
+receipt worker.
 
-## Quick Start
+## Start here
 
-### Backend contributor
+- [Installation](docs/install.md) and [local development](docs/local-dev.md).
+- [Operator guide](docs/operator-guide.md) and [command reference](docs/cli-reference.md).
+- [Backup, legacy migration and recovery](docs/recovery.md).
+- [Architecture](docs/architecture.md), [configuration](docs/config.md) and [API](docs/api-reference.md).
+- [Pricing](docs/pricing.md) and [kick selection](docs/kick-selection.md).
+
+For a deliberately new development database:
 
 ```bash
-uv sync --extra dev
+uv sync --frozen --extra dev
 uv run tidal init
-uv run tidal-server init-config
-uv run tidal-server db migrate --config config/server.yaml
-uv run tidal-server scan run --config config/server.yaml
-uv run tidal-server api serve --config config/server.yaml
+uv run tidal db init --config config/server.yaml
+uv run tidal api serve --config config/server.yaml
 ```
 
-Required setup:
+All commands use `config/server.yaml` or an explicit `--config`, and one selected
+secret file (`~/.tidal/server/.env` by default, overridden by `TIDAL_ENV_FILE`).
+Execution starts held. Existing databases require explicit migration or restore;
+services never initialize or migrate state at startup. `tidal-server` remains a
+compatibility entry point into the same runtime.
 
-- Run `uv run tidal init` to scaffold client files under `~/.tidal/cli/`.
-- Run `uv run tidal-server init-config` to scaffold tracked server files under `config/`.
-- Put client secrets in `~/.tidal/cli/.env`.
-- Put server secrets in `~/.tidal/server/.env`, or point `TIDAL_ENV_FILE` somewhere explicit.
-- Put authoritative server runtime and kick policy in `config/server.yaml`.
-- If you want the UI locally, run `cd ui && npm install && npm run dev`.
+Production recovery uses a retained Linux release built by
+`scripts/build_release.py`, with Python, SQLite, pinned wheels and the built UI.
+`scripts/prepare_release.py` installs it offline. Retain the original encrypted
+key, effective configuration and a verified native SQLite snapshot together.
+Keep activation local and recreate it only through explicit `tidal resume`.
 
-### CLI client
+## Repository
 
-```bash
-export TIDAL_API_BASE_URL=https://api.tidal.wavey.info
-export TIDAL_API_KEY=<cli-client-api-key>
-
-tidal kick inspect
-tidal kick run
-tidal kick run --no-confirmation
-```
-
-For the hosted API at `https://api.tidal.wavey.info`, API keys are provided by wavey on request.
-
-Transaction-sending commands load the wallet from `TXN_KEYSTORE_PATH` and `TXN_KEYSTORE_PASSPHRASE` by default. Use `--keystore` and `--password-file` only when you need a per-command override. The sender address is inferred from the resolved keystore.
-
-To upgrade an existing tool install to the latest Tidal:
-
-```bash
-uv tool install --reinstall git+ssh://git@github.com/wavey0x/tidal.git
-```
-
-## Repository Map
-
-- [`tidal/scanner/`](./tidal/scanner/) discovers strategies, fee burners, balances, and auction mappings, then refreshes cached token metadata and prices.
-- [`tidal/transaction_service/`](./tidal/transaction_service/) shortlists kick candidates, prepares actions, prices lots, and records transaction results.
-- [`tidal/api/`](./tidal/api/) serves the FastAPI control plane at `/api/v1/tidal`.
-- [`tidal/read/`](./tidal/read/) exposes read models for dashboard rows, logs, runs, and action history.
-- [`tidal/persistence/`](./tidal/persistence/) plus [`alembic/`](./alembic/) define the shared SQLite schema and migrations.
-- [`ui/`](./ui/) contains the React dashboard and Vercel configuration.
-- [`contracts/`](./contracts/) contains the Foundry contract, scripts, and tests for `AuctionKicker`.
-- [`tests/`](./tests/) contains unit, integration, and fork coverage.
-
-## Where To Go Next
-
-- Start with the docs landing page: [`docs/index.md`](./docs/index.md)
-- Quick install guide: [`docs/install.md`](./docs/install.md)
-- System overview: [`docs/architecture.md`](./docs/architecture.md)
-- Local development: [`docs/local-dev.md`](./docs/local-dev.md)
-- CLI client guide: [`docs/operator-guide.md`](./docs/operator-guide.md)
-- Server operator guide: [`docs/server-ops.md`](./docs/server-ops.md)
-- CLI command map: [`docs/cli-reference.md`](./docs/cli-reference.md)
-- API reference: [`docs/api-reference.md`](./docs/api-reference.md)
-- Configuration reference: [`docs/config.md`](./docs/config.md)
-
-## Code Entry Points
-
-- Scanner: [`tidal/scanner/service.py`](./tidal/scanner/service.py)
-- Kick engine: [`tidal/transaction_service/service.py`](./tidal/transaction_service/service.py)
-- Kick shortlist logic: [`tidal/transaction_service/evaluator.py`](./tidal/transaction_service/evaluator.py)
-- FastAPI app: [`tidal/api/app.py`](./tidal/api/app.py)
-- CLI client: [`tidal/cli.py`](./tidal/cli.py)
-- Server operator CLI: [`tidal/server_cli.py`](./tidal/server_cli.py)
-- Dashboard UI: [`ui/src/App.jsx`](./ui/src/App.jsx)
-- Contract: [`contracts/src/AuctionKicker.sol`](./contracts/src/AuctionKicker.sol)
+`tidal/scanner/` owns observation, `tidal/transaction_service/` owns auction
+policy/preparation, `tidal/execution.py` owns managed signing and submission,
+`tidal/transactions.py` owns reconciliation, and `tidal/recovery.py` exposes
+native recovery operations. `tidal/api/` and `tidal/read/` share read models.
+`ui/` contains the dashboard; `contracts/` contains the AuctionKicker contracts.

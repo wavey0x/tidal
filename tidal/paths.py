@@ -73,4 +73,9 @@ def default_action_outbox_path() -> Path:
 
 
 def default_txn_lock_path() -> Path:
-    return default_server_data_dir() / _TXN_LOCK_FILENAME
+    return tidal_home() / "execution.lock"
+
+
+def default_activation_path() -> Path:
+    """Local authorization state; never an input to database backup/restore."""
+    return tidal_home() / "activation.json"

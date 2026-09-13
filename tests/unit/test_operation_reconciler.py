@@ -36,7 +36,7 @@ MINED_AT = datetime.fromtimestamp(1_754_131_200, tz=timezone.utc).isoformat()
 
 @pytest.fixture
 def session(tmp_path):
-    database = Database(f"sqlite:///{tmp_path / 'reconciler.db'}")
+    database = Database(f"sqlite:///{tmp_path / 'reconciler.db'}", create=True)
     models.metadata.create_all(database.engine)
     session = database.session()
     session.execute(

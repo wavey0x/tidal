@@ -25,6 +25,7 @@ def _isolate_runtime_env(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_path, monkeypatch) -> None:
+    _isolate_runtime_env(tmp_path, monkeypatch)
     project_root = tmp_path / "repo"
     config_dir = project_root / "config"
     config_dir.mkdir(parents=True)
@@ -49,6 +50,7 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
 
     def fake_run_migrations(database_url: str) -> None:
         captured_urls.append(database_url)
+        run_migrations(database_url)
 
     monkeypatch.delenv("DB_PATH", raising=False)
     monkeypatch.delenv("TIDAL_HOME", raising=False)
@@ -64,7 +66,7 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
     runner = CliRunner()
 
     monkeypatch.chdir(cwd_a)
-    result_a = runner.invoke(app, ["db", "migrate"])
+    result_a = runner.invoke(app, ["db", "init"])
     monkeypatch.chdir(cwd_b)
     result_b = runner.invoke(app, ["db", "migrate"])
 

@@ -28,7 +28,7 @@ NOW = "2026-01-01T00:00:00+00:00"
 
 @pytest.fixture
 def database(tmp_path):
-    db = Database(f"sqlite:///{tmp_path / 'actions.db'}")
+    db = Database(f"sqlite:///{tmp_path / 'actions.db'}", create=True)
     models.metadata.create_all(db.engine)
     yield db
     db.engine.dispose()

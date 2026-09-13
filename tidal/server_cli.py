@@ -16,6 +16,9 @@ from tidal.cli_context import CLIContext, normalize_cli_address
 from tidal.cli_options import ConfigOption
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
+from tidal.lifecycle import clear_activation, execution_lock
+from tidal.lifecycle_cli import db_check, hold
+from tidal.paths import default_activation_path, default_txn_lock_path
 from tidal.persistence.db import Database
 from tidal.persistence.repositories import KickTxRepository
 from tidal.runtime import build_web3_client
@@ -31,6 +34,8 @@ app.add_typer(db_app, name="db")
 app.add_typer(scan_app, name="scan")
 app.add_typer(api_app, name="api")
 app.add_typer(auth_app, name="auth")
+db_app.command("check")(db_check)
+app.command("hold")(hold)
 
 
 def _write_template(path: Path, content: str, *, force: bool) -> str:
@@ -74,9 +79,26 @@ def init_config(
 def db_migrate(config: ConfigOption = None) -> None:
     configure_logging(output_mode=OutputMode.TEXT)
     cli_ctx = CLIContext(config, mode="server")
-    cli_ctx.settings.resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
-    run_migrations(cli_ctx.settings.database_url)
+    if not cli_ctx.settings.resolved_db_path.is_file():
+        raise typer.BadParameter("Database is missing; use db init or restore explicitly.")
+    with execution_lock(default_txn_lock_path()):
+        clear_activation(default_activation_path())
+        run_migrations(cli_ctx.settings.database_url)
     typer.echo("migrations applied")
+
+
+@db_app.command("init")
+def db_init(config: ConfigOption = None) -> None:
+    """Explicitly initialize empty state. Execution remains held."""
+    configure_logging(output_mode=OutputMode.TEXT)
+    settings = CLIContext(config, mode="server").settings
+    with execution_lock(default_txn_lock_path()):
+        if settings.resolved_db_path.exists():
+            raise typer.BadParameter("Database already exists; inspect or migrate it explicitly.")
+        clear_activation(default_activation_path())
+        settings.resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+        run_migrations(settings.database_url)
+    typer.echo("database initialized; execution held")
 
 
 @db_app.command("repair-auction-rounds")

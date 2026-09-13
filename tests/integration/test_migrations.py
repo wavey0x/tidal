@@ -107,7 +107,7 @@ def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
         "SUCCESS",
         "run-1",
     )
-    assert revision == ("0027_verify_api_receipts",)
+    assert revision == ("0028_application_identity",)
 
     command.downgrade(config, "0023_bounded_retry_alerts")
 

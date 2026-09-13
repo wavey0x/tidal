@@ -28,7 +28,7 @@ NOW = datetime(2026, 8, 2, 12, tzinfo=timezone.utc)
 
 @pytest.fixture
 def session(tmp_path):
-    database = Database(f"sqlite:///{tmp_path / 'alerts.db'}")
+    database = Database(f"sqlite:///{tmp_path / 'alerts.db'}", create=True)
     models.metadata.create_all(database.engine)
     session = database.session()
     session.execute(
@@ -519,8 +519,10 @@ async def test_telegram_message_is_compact_escaped_and_disables_previews(
 
 def test_alerts_endpoint_is_public_and_read_only(tmp_path) -> None:
     settings = Settings(DB_PATH=tmp_path / "api.db")
+    setup_database = Database(settings.database_url, create=True)
+    models.metadata.create_all(setup_database.engine)
+    setup_database.engine.dispose()
     app = create_app(settings)
-    models.metadata.create_all(app.state.database.engine)
     with TestClient(app) as client:
         response = client.get("/api/v1/tidal/alerts")
     assert response.status_code == 200

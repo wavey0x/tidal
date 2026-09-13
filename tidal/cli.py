@@ -16,12 +16,21 @@ from tidal.paths import (
     tidal_home,
 )
 from tidal.resources import read_template_text
+from tidal.server_cli import db_app, api_app
+from tidal.scan_cli import app as scan_app
+from tidal.auth_cli import app as auth_app
+from tidal.lifecycle_cli import hold
 
 app = typer.Typer(help="Tidal operator CLI")
 
 app.add_typer(auction_app, name="auction")
 app.add_typer(kick_app, name="kick")
 app.add_typer(logs_app, name="logs")
+app.add_typer(db_app, name="db")
+app.add_typer(api_app, name="api")
+app.add_typer(scan_app, name="scan")
+app.add_typer(auth_app, name="auth")
+app.command("hold")(hold)
 
 
 def _write_template(path: Path, content: str, *, force: bool) -> str:

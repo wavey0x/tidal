@@ -17,6 +17,18 @@ from sqlalchemy import (
 
 metadata = MetaData()
 
+app_metadata = Table(
+    "app_metadata",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("database_identity", String, nullable=False),
+    Column("notification_baseline_pending", Integer, nullable=False, server_default="0"),
+    Column("recovery_refreshed_at", String, nullable=True),
+    Column("recovery_block_number", Integer, nullable=True),
+    Column("recovery_block_hash", String, nullable=True),
+    CheckConstraint("id = 1", name="ck_app_metadata_singleton"),
+)
+
 vaults = Table(
     "vaults",
     metadata,

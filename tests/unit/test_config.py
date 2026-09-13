@@ -326,4 +326,4 @@ def test_default_outbox_and_lock_paths_live_under_tidal_home(tmp_path, monkeypat
 
     app_home = home_root / ".tidal"
     assert default_action_report_outbox_path() == app_home / "server" / "action_outbox.db"
-    assert default_txn_lock_path() == app_home / "server" / "txn_daemon.lock"
+    assert default_txn_lock_path() == app_home / "execution.lock"

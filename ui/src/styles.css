@@ -2,6 +2,9 @@
   color-scheme: light;
   --bg: #fafaf8;
   --surface: #f0f1ee;
+  --overlay-bg: #ffffff;
+  --overlay-edge: rgba(36, 40, 42, 0.14);
+  --overlay-shadow: rgba(20, 24, 22, 0.18);
   --text-primary: #24282a;
   --text-secondary: #626867;
   --text-faint: #626867;
@@ -241,6 +244,9 @@
   color-scheme: dark;
   --bg: #181a1b;
   --surface: #202324;
+  --overlay-bg: var(--surface);
+  --overlay-edge: rgba(255, 255, 255, 0.16);
+  --overlay-shadow: rgba(0, 0, 0, 0.5);
   --text-primary: #eceeed;
   --text-secondary: #a1aaa7;
   --text-faint: #a1aaa7;
@@ -259,6 +265,9 @@
     color-scheme: dark;
     --bg: #181a1b;
     --surface: #202324;
+    --overlay-bg: var(--surface);
+    --overlay-edge: rgba(255, 255, 255, 0.16);
+    --overlay-shadow: rgba(0, 0, 0, 0.5);
     --text-primary: #eceeed;
     --text-secondary: #a1aaa7;
     --text-faint: #a1aaa7;
@@ -1674,6 +1683,12 @@ tbody tr:focus-within > td {
 
 /* ── Kick detail drawer (mobile) ── */
 
+/* Raised surfaces and a fine edge keep overlays distinct in both themes. */
+.kick-modal,
+.deploy-modal {
+  background: var(--overlay-bg);
+}
+
 .kick-modal-backdrop,
 .deploy-modal-backdrop {
   position: fixed;
@@ -1700,7 +1715,6 @@ tbody tr:focus-within > td {
   z-index: 101;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
   border-radius: 16px 16px 0 0;
   width: 100%;
   max-width: 640px;
@@ -1708,7 +1722,9 @@ tbody tr:focus-within > td {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 1px var(--overlay-edge),
+    0 -4px 16px rgba(0, 0, 0, 0.12),
+    0 -20px 64px var(--overlay-shadow);
 }
 
 .kick-modal[data-dragging] { user-select: none; }
@@ -1789,8 +1805,9 @@ tbody tr:focus-within > td {
 
 .deploy-modal {
   z-index: 101;
-  background: var(--bg);
-  border: 1px solid var(--divider-strong);
+  border: 1px solid var(--overlay-edge);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12),
+    0 20px 64px var(--overlay-shadow);
   border-radius: 8px;
   padding: 16px;
   width: 400px;

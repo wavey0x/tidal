@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import QuoteResult
-from tidal.transaction_service.kick_execute import KickExecutor
+from tidal.transaction_service.kick_execute import KickExecutor, BatchExecutionBlocked
+from tidal.lifecycle import LifecycleError
 from tidal.transaction_service.kick_policy import PricingPolicy, PricingProfile
 from tidal.transaction_service.kick_prepare import KickPreparer
 from tidal.transaction_service.kick_tx import KickTxBuilder
@@ -21,9 +22,25 @@ from tidal.transaction_service.types import (
     KickCandidate,
     KickSkipReason,
     KickStatus,
+    KickResult,
     PreparedKick,
     PreparedResolveAuction,
 )
+
+
+@pytest.mark.asyncio
+async def test_batch_fallback_preserves_completed_attempt_when_next_send_is_held():
+    first = KickResult(kick_tx_id=1, tx_hash="0x" + "11" * 32, status=KickStatus.SUBMITTED)
+    executor = KickExecutor(web3_client=object(), signer=SimpleNamespace(checksum_address="fixture"),
+        kick_tx_repository=object(), tx_builder=MagicMock(), base_fee_cap_gwei=1,
+        max_priority_fee_gwei=2, max_gas_limit=500000, chain_id=1)
+    executor._estimate_transaction_data = AsyncMock(return_value=(None, "active auction"))
+    executor.execute_single = AsyncMock(side_effect=[first, LifecycleError("UNRESOLVED_ATTEMPTS", "First attempt is pending")])
+    with pytest.raises(BatchExecutionBlocked) as caught:
+        await executor.execute_batch([object(), object(), object()], "fixture-run")
+    assert caught.value.results == (first,)
+    assert caught.value.code == "UNRESOLVED_ATTEMPTS"
+    assert executor.execute_single.await_count == 2
 
 
 @pytest.fixture

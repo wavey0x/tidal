@@ -17,6 +17,8 @@ from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
 from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy
 from tidal.transaction_service.service import TxnService
+from tidal.transaction_service.kick_execute import BatchExecutionBlocked
+from tidal.lifecycle import LifecycleError
 from tidal.transaction_service.types import (
     KickCandidate,
     KickPlan,
@@ -820,6 +822,24 @@ async def test_live_batch_orders_candidates_by_descending_usd_value(session):
         if call.args and call.args[0] == "txn_candidates_ranked"
     )
     assert [entry["token"] for entry in ranked_call.kwargs["candidates"]] == ["0xtoken2", "0xtoken1"]
+
+
+@pytest.mark.asyncio
+async def test_partial_batch_fallback_records_attempt_count_and_waiting_result(session):
+    for index in (1, 2):
+        _seed_candidate(session, strategy_address=f"0xstrategy{index}", token_address=f"0xtoken{index}",
+            auction_address=f"0xauction{index}", want_address=f"0xwant{index}")
+    executor = MagicMock()
+    executor.execute_batch = AsyncMock(side_effect=BatchExecutionBlocked(
+        LifecycleError("UNRESOLVED_ATTEMPTS", "First send remains pending"),
+        [KickResult(kick_tx_id=1, status=KickStatus.SUBMITTED, tx_hash="0x" + "11" * 32)],
+    ))
+    service = _build_txn_service(session, executor=executor)
+    result = await service.run_once(live=True)
+    assert result.status == "WAITING"
+    assert result.kicks_attempted == 1 and result.kicks_succeeded == result.kicks_failed == 0
+    row = session.execute(select(models.txn_runs)).mappings().one()
+    assert row["status"] == "WAITING" and row["kicks_attempted"] == 1
 
 
 @pytest.mark.asyncio

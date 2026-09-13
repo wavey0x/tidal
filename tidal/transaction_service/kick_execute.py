@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import structlog
+from tidal.lifecycle import LifecycleError
 
 from tidal.auction_price_units import format_buffer_pct
 from tidal.time import utcnow_iso
@@ -24,6 +25,13 @@ from tidal.transaction_service.types import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+class BatchExecutionBlocked(LifecycleError):
+    """Preserve results already retained before a fallback sequence is held."""
+    def __init__(self, cause: LifecycleError, results: list[KickResult]):
+        super().__init__(cause.code, str(cause))
+        self.results = tuple(results)
 
 
 class KickExecutor:
@@ -517,7 +525,13 @@ class KickExecutor:
             sender_address=signer.checksum_address,
         )
         if _is_active_auction_error(estimate_error):
-            return [await self.execute_single(prepared_kick, run_id) for prepared_kick in prepared_kicks]
+            results = []
+            try:
+                for prepared_kick in prepared_kicks:
+                    results.append(await self.execute_single(prepared_kick, run_id))
+            except LifecycleError as exc:
+                raise BatchExecutionBlocked(exc, results) from exc
+            return results
         return await self._execute_tx(prepared_kicks, batch_intent.data, run_id)
 
     async def execute_single(

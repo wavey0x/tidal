@@ -57,12 +57,54 @@ async def test_unrecorded_mempool_activity_refuses_resume_and_clears_activation(
 async def test_known_pending_attempt_allows_observation_but_blocks_sender(recovery_runtime):
     state = recovery_runtime
     await submit(state)
+    state.session.execute(models.scan_runs.insert().values(run_id="fresh", started_at=utcnow_iso(), status="SUCCESS",
+        vaults_seen=0, strategies_seen=0, pairs_seen=0, pairs_succeeded=0, pairs_failed=0))
+    state.session.commit()
     result = await recovery.resume(state.settings, state.session)
     assert result["code"] == "RUNNING" and result["warnings"][0]["code"] == "UNRESOLVED_ATTEMPTS"
     report = await recovery.status(state.settings, state.session, web3=state.rpc)
     assert report["data"]["pending_count"] == 1
     assert all(not item["may_send"] for item in report["data"]["managed_signers"].values())
     assert state.rpc.sends == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observation", ["missing", "stale", "failed"])
+async def test_populated_database_needs_complete_current_observations(recovery_runtime, observation):
+    state = recovery_runtime
+    state.session.execute(models.tokens.insert().values(address=TOKEN, chain_id=1, decimals=18,
+        first_seen_at="old", last_seen_at="old"))
+    state.session.execute(models.kick_txs.insert().values(run_id="old", operation_type="kick",
+        token_address=TOKEN, auction_address=AUCTION, status="CONFIRMED", created_at="old"))
+    if observation != "missing":
+        state.session.execute(models.scan_runs.insert().values(run_id="observation",
+            started_at="2020-01-01T00:00:00+00:00" if observation == "stale" else utcnow_iso(),
+            status="FAILED" if observation == "failed" else "SUCCESS",
+            vaults_seen=0, strategies_seen=0, pairs_seen=0, pairs_succeeded=0, pairs_failed=0))
+    state.session.commit()
+    with pytest.raises(LifecycleError, match="observations"):
+        await recovery.resume(state.settings, state.session)
+    report = await recovery.status(state.settings, state.session, web3=state.rpc)
+    assert not report["data"]["observations"]["ready"]
+    assert all(not item["may_send"] for item in report["data"]["managed_signers"].values())
+    assert state.signer.calls == state.rpc.sends == 0
+
+
+@pytest.mark.asyncio
+async def test_status_detects_account_activity_after_activation_without_mutating_it(recovery_runtime):
+    state = recovery_runtime
+    await recovery.resume(state.settings, state.session)
+    activation_path = state.settings.resolved_home_path / "activation.json"
+    before = activation_path.read_bytes()
+    ready = await recovery.status(state.settings, state.session, web3=state.rpc)
+    assert all(item["may_send"] for item in ready["data"]["managed_signers"].values())
+    state.rpc.get_transaction_count = AsyncMock(return_value=8)
+    report = await recovery.status(state.settings, state.session, web3=state.rpc)
+    assert all(not item["may_send"] and item["nonce"]["expected"] == 7
+               for item in report["data"]["managed_signers"].values())
+    assert report["data"]["runtime"]["sqlite"]
+    assert activation_path.read_bytes() == before
+    assert state.signer.calls == state.rpc.sends == 0
 
 
 @pytest.mark.asyncio

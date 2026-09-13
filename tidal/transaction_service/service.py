@@ -10,6 +10,7 @@ from pathlib import Path
 import structlog
 
 from tidal.lifecycle import LifecycleError, execution_lock
+from tidal.transaction_service.kick_execute import BatchExecutionBlocked
 from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.time import utcnow_iso
 from tidal.transaction_service.types import (
@@ -335,6 +336,13 @@ class TxnService:
                             kicks_failed += f
                             kicks_attempted += a
             except LifecycleError as exc:
+                if isinstance(exc, BatchExecutionBlocked):
+                    kicks_attempted += len(exc.results)
+                    for completed in exc.results:
+                        s, f, a = self._tally_exec_result(completed, failed_messages)
+                        kicks_succeeded += s
+                        kicks_failed += f
+                        kicks_attempted += a
                 blocked_reason = f"{exc.code}: {exc}"
                 logger.info("txn_execution_waiting", run_id=run_id, reason=blocked_reason)
         else:

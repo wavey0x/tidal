@@ -8,6 +8,8 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
+import sys
 
 from hexbytes import HexBytes
 from sqlalchemy import func, select
@@ -24,6 +26,35 @@ from tidal.runtime import build_scanner_service, build_web3_client
 from tidal.time import utcnow_iso
 from tidal.transaction_evidence import rpc_int
 from tidal.transactions import LedgerReconciler, TransactionRepository
+
+
+def configured_signer(settings) -> str:
+    try:
+        address = json.loads(settings.resolved_txn_keystore_path.read_text())["address"]
+        return normalize_address("0x" + str(address).removeprefix("0x"))
+    except (OSError, TypeError, KeyError, ValueError, AttributeError) as exc:
+        raise LifecycleError("WRONG_SIGNER", "Configured encrypted keystore identity cannot be inspected.") from exc
+
+
+def observation_readiness(settings, session) -> dict:
+    latest = session.execute(select(models.scan_runs).order_by(models.scan_runs.c.started_at.desc()).limit(1)).mappings().first()
+    if latest is None:
+        pristine = not any(session.execute(select(table).limit(1)).first() is not None
+            for table in (models.vaults, models.strategies, models.fee_burners, models.kick_txs, models.transactions))
+        return {"ready": pristine, "pristine": pristine, "latest_scan": None,
+                "reason": None if pristine else "Current observations are missing; run refresh --recovery."}
+    critical = session.execute(select(models.scan_item_errors.c.id).where(
+        models.scan_item_errors.c.run_id == latest["run_id"],
+        models.scan_item_errors.c.stage.not_in(("PRICE_READ", "AUCTIONSCAN_ENRICHMENT", "OPERATION_RECONCILIATION")),
+    )).first()
+    try:
+        age = time.time() - datetime.fromisoformat(str(latest["started_at"]).replace("Z", "+00:00")).timestamp()
+        fresh = 0 <= age <= settings.txn_data_freshness_limit_seconds
+    except (ValueError, TypeError):
+        fresh = False
+    ready = latest["status"] == "SUCCESS" and critical is None and fresh
+    return {"ready": ready, "pristine": False, "latest_scan": latest["run_id"],
+            "reason": None if ready else "Current observations are incomplete or stale; run refresh --recovery."}
 
 
 async def chain_readiness(settings, web3) -> dict:
@@ -80,19 +111,39 @@ async def status(settings, session, *, web3=None) -> dict:
     info = inspect_database(settings.resolved_db_path)
     blockers, warnings = [], []
     activated = False
+    activation = {}
     try:
         binding = activation_binding(info["database_identity"], settings.chain_id, settings.managed_signers)
-        require_activation(settings.resolved_home_path / "activation.json", binding)
+        activation = require_activation(settings.resolved_home_path / "activation.json", binding)
         activated = True
     except LifecycleError as exc:
         warnings.append({"code": exc.code, "message": str(exc)})
     pending = TransactionRepository(session).unresolved()
+    observations = observation_readiness(settings, session)
+    if not observations["ready"]:
+        warnings.append({"code": "INCOMPLETE_REFRESH", "message": observations["reason"]})
+    try:
+        signer = configured_signer(settings)
+    except LifecycleError as exc:
+        signer = None
+        warnings.append({"code": exc.code, "message": str(exc)})
     session.commit()
     chain = None
     own_client = web3 is None
+    nonces = {}
     try:
         web3 = web3 or build_web3_client(settings)
         chain = await chain_readiness(settings, web3)
+        for address in set(settings.managed_signers.values()):
+            address = normalize_address(address)
+            latest = rpc_int(await web3.get_transaction_count(address, "latest"))
+            mempool = rpc_int(await web3.get_transaction_count(address, "pending"))
+            retained = session.execute(select(func.max(models.transactions.c.nonce)).where(
+                models.transactions.c.chain_id == settings.chain_id, models.transactions.c.signer == address)).scalar()
+            baseline = activation.get("nonce_baseline", {}).get(address)
+            expected = None if baseline is None else max(int(baseline), retained + 1 if retained is not None else 0)
+            nonces[address] = {"latest": latest, "pending": mempool, "expected": expected,
+                               "ready": expected is not None and latest == mempool == expected}
     except LifecycleError as exc:
         blockers.append({"code": exc.code, "message": str(exc)})
     except Exception as exc:
@@ -103,14 +154,19 @@ async def status(settings, session, *, web3=None) -> dict:
     if pending:
         warnings.append({"code": "UNRESOLVED_ATTEMPTS", "message": f"{len(pending)} retained attempt(s) block their affected signers."})
     data = {**info, "api_can_serve": True, "chain_reads_ready": chain is not None,
+            "runtime": {"python": sys.version.split()[0], "sqlite": sqlite3.sqlite_version,
+                        "executable": sys.executable, "package_path": str(Path(__file__).parent)},
+            "observations": observations,
             "activated": activated, "chain": chain, "prices": price_readiness(settings, session),
             "pending_count": sum(row["status"] != "REVIEW_REQUIRED" for row in pending),
             "review_count": sum(row["status"] == "REVIEW_REQUIRED" for row in pending),
             "unresolved_transactions": pending,
-            "managed_signers": {profile: {"address": address, "may_send": activated and chain is not None
+            "managed_signers": {profile: {"address": address, "nonce": nonces.get(address.lower()),
+                "may_send": activated and chain is not None and not blockers and observations["ready"]
+                and signer == address.lower() and nonces.get(address.lower(), {}).get("ready", False)
                 and not any(row["signer"] is None or row["signer"] == address.lower() for row in pending)}
                 for profile, address in settings.managed_signers.items()}}
-    return result("WAITING_FOR_RPC" if blockers else "RUNNING" if activated else "HELD", data=data, blockers=blockers, warnings=warnings)
+    return result(blockers[0]["code"] if blockers else "RUNNING" if activated else "HELD", data=data, blockers=blockers, warnings=warnings)
 
 
 async def reconcile(settings, session, *, transaction_id=None, replacement_hash=None, note=None) -> dict:
@@ -126,9 +182,24 @@ async def reconcile(settings, session, *, transaction_id=None, replacement_hash=
                 await reconciler.resolve_with_replacement(transaction_id=transaction_id, replacement_hash=replacement_hash, note=note)
             else:
                 await reconciler.reconcile(transaction_ids=[transaction_id] if transaction_id is not None else None)
+            warnings = []
+            if transaction_id is None:
+                # Current retained open rounds only; a historical gap stays a
+                # scoped operator review, never a restore-time indexing job.
+                pairs = []
+                for row in reversed(reconciler.operations.kick_repo.list_confirmed_kicks()):
+                    if row.get("historical_baseline"):
+                        continue
+                    pair = (str(row["auction_address"]), str(row["token_address"]))
+                    if pair not in pairs and reconciler.operations.kick_repo.latest_confirmed_unclosed_kick(*pair):
+                        pairs.append(pair)
+                if len(pairs) > 25:
+                    warnings.append({"code": "KNOWN_HISTORY_LIMIT", "message": "Checked 25 known open pairs; select older pairs with db repair-auction-rounds for review."})
+                errors = await reconciler.operations.discover_direct_settlements(pairs=pairs[:25])
+                warnings.extend({"code": error.error_code.upper(), "message": error.error_message} for error in errors)
             pending = reconciler.repository.unresolved()
             blockers = [{"code": "UNRESOLVED_ATTEMPTS", "message": f"{len(pending)} retained attempt(s) still require evidence or review."}] if pending else []
-            return result("UNRESOLVED_ATTEMPTS" if pending else "OK", data={"unresolved_transactions": pending}, blockers=blockers)
+            return result("UNRESOLVED_ATTEMPTS" if pending else "OK", data={"unresolved_transactions": pending}, blockers=blockers, warnings=warnings)
         finally:
             await close_client(web3)
 
@@ -205,12 +276,7 @@ async def resume(settings, session) -> dict:
         binding = activation_binding(info["database_identity"], settings.chain_id, settings.managed_signers)
         if set(binding["signers"]) != {"scan", "kick"}:
             raise LifecycleError("WRONG_SIGNER", "Declare the scan and kick signing identities before resuming.")
-        keystore = settings.resolved_txn_keystore_path
-        try:
-            key_address = json.loads(keystore.read_text())["address"]
-            key_address = normalize_address("0x" + str(key_address).removeprefix("0x"))
-        except (OSError, TypeError, KeyError, ValueError, AttributeError) as exc:
-            raise LifecycleError("WRONG_SIGNER", "Configured encrypted keystore identity cannot be inspected.") from exc
+        key_address = configured_signer(settings)
         if set(binding["signers"].values()) != {key_address}:
             raise LifecycleError("WRONG_SIGNER", "The configured keystore does not match the declared native signing identities.")
         web3 = build_web3_client(settings)
@@ -219,15 +285,9 @@ async def resume(settings, session) -> dict:
             pending = await ledger_reconciler(settings, session, web3).reconcile()
             if any(row["signer"] is None or row["status"] == "REVIEW_REQUIRED" for row in pending):
                 raise LifecycleError("UNRESOLVED_ATTEMPTS", "Resolve unknown or conflicting retained transaction evidence before resuming.")
-            # A new/empty DB is an explicit operator choice. Restored or
-            # populated state needs at least one complete current observation.
-            latest_scan = session.execute(select(models.scan_runs).order_by(models.scan_runs.c.started_at.desc()).limit(1)).mappings().first()
-            critical_errors = [] if latest_scan is None else session.execute(select(models.scan_item_errors.c.id).where(
-                models.scan_item_errors.c.run_id == latest_scan["run_id"],
-                models.scan_item_errors.c.stage.not_in(("PRICE_READ", "AUCTIONSCAN_ENRICHMENT", "OPERATION_RECONCILIATION")),
-            )).all()
-            if latest_scan and (latest_scan["status"] != "SUCCESS" or critical_errors):
-                raise LifecycleError("INCOMPLETE_REFRESH", "Run recovery refresh successfully before resuming this database.")
+            observations = observation_readiness(settings, session)
+            if not observations["ready"]:
+                raise LifecycleError("INCOMPLETE_REFRESH", observations["reason"])
             baselines, warnings = {}, []
             for address in set(binding["signers"].values()):
                 latest = rpc_int(await web3.get_transaction_count(address, "latest"))

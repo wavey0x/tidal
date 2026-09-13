@@ -26,15 +26,25 @@ execution_profiles:
     txn_usd_threshold: 250
     txn_base_fee_cap_gwei: 5
     txn_require_curve_quote: true
+    txn_max_gas_limit: 500000
   strategy:
-    txn_usd_threshold: 100
+    txn_usd_threshold: 250
     txn_base_fee_cap_gwei: 1
     txn_require_curve_quote: true
+    txn_max_gas_limit: 2500000
   fee_burner:
     txn_usd_threshold: 50
     txn_base_fee_cap_gwei: 1
     txn_require_curve_quote: false
+    txn_max_gas_limit: 2500000
 ```
+
+These limits preserve the effective legacy requests: strategy filtering and data
+freshness were server decisions ($250 and 1,200 seconds), while the local CLI
+forwarded its 2,500,000 gas limit for kicks and manual token enablement. The
+client's $100 threshold and 600-second freshness setting were not sent to the
+server. Manual settlement/sweep retain the shared 500,000 server gas cap. An
+omitted profile gas limit inherits the shared setting.
 
 Declare the original public addresses under `managed_signers.scan` and
 `managed_signers.kick` (or `MANAGED_SIGNERS` as JSON). Both profiles currently

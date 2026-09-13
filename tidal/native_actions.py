@@ -55,6 +55,11 @@ async def run_auction_action(*, settings, session, signer, action: str, auction:
                              token: str | None = None, extra_tokens: list[str] | None = None,
                              force: bool = False, confirm=None) -> dict:
     """Prepare under the host lock and preserve partial progress without replay."""
+    # Legacy local token enablement forwarded the operator CLI gas limit,
+    # shared with its kick commands. Settlement/sweep used the server cap.
+    if action == "enable_tokens" and (profile := settings.execution_profiles.get("strategy")) is not None:
+        if profile.txn_max_gas_limit is not None:
+            settings = settings.model_copy(update={"txn_max_gas_limit": profile.txn_max_gas_limit})
     with execution_lock(settings.resolved_home_path / "execution.lock"):
         async with AsyncExitStack() as clients:
             web3 = build_web3_client(settings)

@@ -13,14 +13,17 @@ execution_profiles:
     txn_usd_threshold: 250
     txn_base_fee_cap_gwei: 5
     txn_require_curve_quote: true
+    txn_max_gas_limit: 500000
   strategy:
-    txn_usd_threshold: 100
+    txn_usd_threshold: 250
     txn_base_fee_cap_gwei: 1
     txn_require_curve_quote: true
+    txn_max_gas_limit: 2500000
   fee_burner:
     txn_usd_threshold: 50
     txn_base_fee_cap_gwei: 1
     txn_require_curve_quote: false
+    txn_max_gas_limit: 2500000
 txn_max_priority_fee_gwei: 2
 txn_max_gas_limit: 500000
 txn_start_price_buffer_bps: 1000

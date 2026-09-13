@@ -58,13 +58,15 @@ def test_native_kick_preserves_distinct_scheduled_profiles_and_needs_no_api(nati
     assert payload["interface_version"] == 1
     assert len(payload["data"]["runs"]) == 2
     assert [(settings.txn_usd_threshold, settings.txn_base_fee_cap_gwei, settings.txn_require_curve_quote)
-            for settings, _, _ in native.captured] == [(100, 1, True), (50, 1, False)]
+            for settings, _, _ in native.captured] == [(250, 1, True), (50, 1, False)]
+    assert [settings.txn_max_gas_limit for settings, _, _ in native.captured] == [2500000, 2500000]
+    assert all(settings.txn_data_freshness_limit_seconds == 1200 for settings, _, _ in native.captured)
     assert [options["source_type"] for _, _, options in native.captured] == ["strategy", "fee_burner"]
     assert all(options["batch"] is False for _, _, options in native.captured)
     assert len(native.unlocks) == 1
 
 
-@pytest.mark.parametrize("source,threshold,curve", [("strategy", 100, True), ("fee-burner", 50, False)])
+@pytest.mark.parametrize("source,threshold,curve", [("strategy", 250, True), ("fee-burner", 50, False)])
 def test_selected_profile_preserves_policy(native, source, threshold, curve):
     response = invoke(native, "--headless", "--json", "--source-type", source)
     assert response.exit_code == 0, response.output
@@ -82,7 +84,7 @@ def test_manual_fee_quote_and_value_overrides_reach_native_service(native):
     settings, _, _ = native.captured[0]
     assert (settings.txn_usd_threshold, settings.txn_base_fee_cap_gwei, settings.txn_require_curve_quote) == (175, 0.5, False)
     # Applying an override must not mutate the shared base or other profile.
-    assert native.settings.execution_profiles["strategy"].txn_usd_threshold == 100
+    assert native.settings.execution_profiles["strategy"].txn_usd_threshold == 250
 
 
 def test_dry_run_never_unlocks_any_key(native):

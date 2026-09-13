@@ -35,6 +35,7 @@ class ExecutionProfile(BaseModel):
     txn_usd_threshold: float = Field(ge=0)
     txn_base_fee_cap_gwei: float = Field(ge=0)
     txn_require_curve_quote: bool
+    txn_max_gas_limit: int | None = Field(default=None, ge=21000)
 
 
 class Settings(BaseSettings):
@@ -257,7 +258,7 @@ class Settings(BaseSettings):
     def for_execution_profile(self, name: str) -> "Settings":
         if name not in self.execution_profiles:
             raise ValueError(f"Missing explicit execution profile: {name}")
-        return self.model_copy(update=self.execution_profiles[name].model_dump())
+        return self.model_copy(update=self.execution_profiles[name].model_dump(exclude_none=True))
 
     def _resolve_config_relative_path(self, value: str | Path) -> Path:
         path = Path(value).expanduser()

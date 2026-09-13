@@ -95,3 +95,24 @@ async def test_process_loss_retains_native_business_links(runtime, prepared):
     rows = runtime.session.execute(select(models.transactions)).mappings().all()
     assert len(rows) == 1 and rows[0]["status"] == "RECORDED"
     assert runtime.session.execute(select(models.kick_txs)).mappings().all()
+
+
+@pytest.mark.parametrize("action,expected_cap", [("enable_tokens", 2500000), ("settle", 500000), ("sweep", 500000)])
+@pytest.mark.asyncio
+async def test_manual_commands_preserve_the_effective_legacy_gas_policy(runtime, prepared, monkeypatch, action, expected_cap):
+    from tidal.config import ExecutionProfile
+    runtime.settings.txn_max_gas_limit = 500000
+    runtime.settings.execution_profiles = {"strategy": ExecutionProfile(
+        txn_usd_threshold=250, txn_base_fee_cap_gwei=1,
+        txn_require_curve_quote=True, txn_max_gas_limit=2500000)}
+    observed = []
+    async def prepare(**kwargs):
+        observed.append((kwargs["settings"].txn_max_gas_limit, kwargs["settings"].txn_base_fee_cap_gwei))
+        return "skipped", [], {"transactions": []}
+    for name in ("prepare_enable_tokens_action", "prepare_settle_action", "prepare_sweep_action"):
+        monkeypatch.setattr(actions, name, prepare)
+    result = await actions.run_auction_action(settings=runtime.settings, session=runtime.session,
+        signer=runtime.signer, action=action, auction=AUCTION)
+    assert observed == [(expected_cap, runtime.settings.txn_base_fee_cap_gwei)]
+    assert runtime.settings.txn_max_gas_limit == 500000
+    assert runtime.rpc.sends == runtime.signer.calls == 0

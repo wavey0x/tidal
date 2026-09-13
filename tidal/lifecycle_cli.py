@@ -10,6 +10,7 @@ import typer
 from tidal.cli_options import ConfigOption, JsonOption
 from tidal.cli_renderers import render_status_panel, render_warning_panel
 from tidal.config import load_server_settings
+from tidal.errors import ConfigurationError
 from tidal.lifecycle import (
     LifecycleError,
     clear_activation,
@@ -25,12 +26,16 @@ def emit_operation(operation: Callable[[], dict], *, json_output: bool) -> None:
         payload = operation()
     except LifecycleError as exc:
         payload = result(exc.code, blockers=[{"code": exc.code, "message": str(exc)}])
+    except ConfigurationError as exc:
+        payload = result("CONFIGURATION_ERROR", blockers=[{"code": "CONFIGURATION_ERROR", "message": str(exc)}])
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
     elif payload["blockers"]:
         render_warning_panel([item["message"] for item in payload["blockers"]])
     else:
         render_status_panel(payload["code"], [f"{key}: {value}" for key, value in payload["data"].items()], border_style="green")
+    if not json_output and payload["warnings"]:
+        render_warning_panel([item["message"] for item in payload["warnings"]])
     if payload["blockers"]:
         raise typer.Exit(code=75 if payload["code"] in {"BUSY", "WAITING", "UNRESOLVED_ATTEMPTS"} else 1)
 

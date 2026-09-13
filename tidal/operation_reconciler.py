@@ -230,7 +230,8 @@ class OperationReconciler:
         return str(row.get("error_message") or "transaction_review_required") if row["status"] == "REVIEW_REQUIRED" else None
 
     def _finalize_operations(
-        self, tx_hash: str, receipt: dict[str, object], rows: list[dict[str, object]], block: Mapping[str, object]
+        self, tx_hash: str, receipt: dict[str, object], rows: list[dict[str, object]], block: Mapping[str, object],
+        *, legacy_sweeps: tuple[DecodedSweep, ...] = (),
     ) -> str | None:
         if not rows:
             return None
@@ -355,7 +356,7 @@ class OperationReconciler:
                 event = next(
                     (
                         item
-                        for item in decoded.sweeps
+                        for item in (*decoded.sweeps, *legacy_sweeps)
                         if item.auction_address == auction
                         and item.token_address == token
                     ),

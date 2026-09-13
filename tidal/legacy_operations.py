@@ -122,6 +122,22 @@ def _prepared_preview_operations(
 ) -> list[dict[str, object]]:
     preview = _decode_json(action_row.get("preview_json"))
     prepared = preview.get("preparedOperations")
+    if "preparedOperations" not in preview and action_row.get("action_type") == "enable_tokens":
+        # The first API format retained one enable transaction and its exact
+        # selected tokens. Probes and today's enabled set are not its intent.
+        inspection, source = preview.get("inspection"), preview.get("source")
+        tokens = preview.get("selectedTokens")
+        if (tx_index != 0 or len(source_transactions) != 1 or operation_type != "enable_tokens"
+            or not isinstance(inspection, dict) or not isinstance(tokens, list) or not tokens
+            or any(_optional_normalize_address(token) is None for token in tokens)):
+            return []
+        source = source if isinstance(source, dict) else {}
+        prepared = [{
+            "operation": "enable_tokens", "txIndex": 0,
+            "auctionAddress": action_row.get("auction_address") or inspection.get("auction_address"),
+            "tokenAddress": token, "sourceAddress": action_row.get("source_address") or source.get("source_address"),
+            "sourceType": source.get("source_type"), "wantAddress": inspection.get("want"),
+        } for token in dict.fromkeys(tokens)]
     if "preparedOperations" not in preview and action_row.get("action_type") == "settle":
         # Pre-resolver settlement previews describe one transaction, not a batch.
         # Do not infer a tx-index association for multi-transaction actions.

@@ -12,6 +12,7 @@ from tidal.persistence import models
 from tidal.persistence.repositories import AuctionEnabledTokenRepository, KickTxRepository
 from tidal.time import utcnow_iso
 from tidal.transaction_evidence import EvidenceError, hydrate_legacy_identity, observe_transaction, rpc_int
+from tidal.legacy_evidence import legacy_sweep_evidence
 
 TERMINAL_STATUSES = frozenset({"CONFIRMED", "REVERTED", "SUPERSEDED"})
 UNRESOLVED_STATUSES = frozenset({"RECORDED", "PENDING", "INCLUDED", "REVIEW_REQUIRED"})
@@ -145,7 +146,8 @@ class LedgerReconciler:
         try:
             failure = None
             with self.session.begin_nested() as effects:
-                error = self.operations._finalize_operations(str(row["tx_hash"]), receipt, operation_rows, block)
+                error = self.operations._finalize_operations(str(row["tx_hash"]), receipt, operation_rows, block,
+                    legacy_sweeps=legacy_sweep_evidence(row, receipt))
                 errors = self.session.execute(select(models.kick_txs.c.error_message).where(
                     models.kick_txs.c.transaction_id == transaction_id,
                     models.kick_txs.c.error_message.is_not(None),

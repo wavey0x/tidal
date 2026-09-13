@@ -99,3 +99,24 @@ async def test_unrecorded_caller_receipt_cannot_create_or_finalize_anything(runt
     assert await runtime.operation_reconciler.finalize_receipt(HASH, {"status": 1}) == "transaction_identity_missing"
     assert runtime.session.execute(select(models.transactions)).first() is None
     assert runtime.session.execute(select(models.kick_txs)).first() is None
+
+
+@pytest.mark.parametrize('case', ['valid', 'multiple_transactions', 'modern_empty', 'invalid_token'])
+def test_original_enable_preview_preserves_selected_tokens_only(runtime, case):
+    selected = [TOKEN, '0x'+'5'*40]
+    preview = {'inspection': {'auction_address': AUCTION}, 'selectedTokens': selected,
+               'probes': [{'token_address': '0x'+'9'*40, 'status': 'eligible'}]}
+    if case == 'modern_empty': preview['preparedOperations'] = []
+    if case == 'invalid_token': preview['selectedTokens'] = [TOKEN, 'invalid']
+    transaction_id, action, tx = seed(runtime, 'enable-tokens', preview)
+    action['action_type'] = 'enable_tokens'
+    source = [tx, {**tx, 'tx_index': 1}] if case == 'multiple_transactions' else [tx]
+    ids = convert(runtime, transaction_id, action, tx, transactions=source)
+    if case != 'valid':
+        assert ids == set()
+        return
+    rows = runtime.session.execute(select(models.kick_txs)).mappings().all()
+    assert {row['token_address'] for row in rows} == set(selected)
+    assert {row['operation_type'] for row in rows} == {'enable_tokens'}
+    assert {row['created_at'] for row in rows} == {NOW}
+    assert convert(runtime, transaction_id, action, tx) == ids

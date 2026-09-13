@@ -32,8 +32,8 @@ def recording_execution():
     def build(session):
         from tidal.persistence.repositories import KickTxRepository
 
-        async def submit(*, transaction, operations, action):
-            del transaction, action
+        async def submit(*, transaction, operations, action, prepared_at_monotonic=None):
+            del transaction, action, prepared_at_monotonic
             ids = [KickTxRepository(session).insert(row) for row in operations]
             session.commit()
             return {"status": "INCLUDED", "tx_hash": "0x" + "ab" * 32,

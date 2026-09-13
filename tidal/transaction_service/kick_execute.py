@@ -356,7 +356,7 @@ class KickExecutor:
                 run_id,
                 prepared_kicks,
                 now_iso,
-                status=KickStatus.ERROR,
+                status=KickStatus.SKIP,
                 error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds cap {self.base_fee_cap_gwei}",
             )
 
@@ -488,7 +488,10 @@ class KickExecutor:
             run_id, prepared.candidate, now_iso, operation_type="kick",
             status=KickStatus.SUBMITTED, **self._pk_audit_kwargs(prepared),
         ) for prepared in prepared_kicks]
-        record = await self.managed_executor.submit(transaction=full_tx, operations=operations, action="kick")
+        record = await self.managed_executor.submit(
+            transaction=full_tx, operations=operations, action="kick",
+            prepared_at_monotonic=min(item.prepared_at_monotonic for item in prepared_kicks),
+        )
         return [self._managed_result(
             record, operation_id,
             starting_price=prepared.starting_price_raw_str,
@@ -556,7 +559,7 @@ class KickExecutor:
                 prepared_operation.candidate,
                 now_iso,
                 operation_type="resolve_auction",
-                status=KickStatus.ERROR,
+                status=KickStatus.SKIP,
                 error_message=f"base fee {base_fee_gwei:.2f} gwei exceeds cap {self.base_fee_cap_gwei}",
                 **op_kwargs,
             )
@@ -596,6 +599,15 @@ class KickExecutor:
 
         gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
         priority_fee_wei = await resolve_priority_fee_wei(self.web3_client, self.max_priority_fee_gwei)
+        if self.confirm_fn is not None and not self.confirm_fn({
+            "operation": "resolve_auction", "auction": prepared_operation.candidate.auction_address,
+            "token": prepared_operation.sell_token, "reason": prepared_operation.reason,
+            "force": prepared_operation.requires_force, "gas_limit": gas_limit,
+        }):
+            return self._fail(
+                run_id, prepared_operation.candidate, now_iso, operation_type="resolve_auction",
+                status=KickStatus.USER_SKIPPED, error_message="Skipped by operator", **op_kwargs,
+            )
         fee_base_gwei = base_fee_gwei if self.skip_base_fee_check else self.base_fee_cap_gwei
         max_fee_wei = int(fee_base_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
@@ -611,5 +623,6 @@ class KickExecutor:
         )
         record = await self.managed_executor.submit(
             transaction=full_tx, operations=[row], action="resolve_auction",
+            prepared_at_monotonic=prepared_operation.prepared_at_monotonic,
         )
         return self._managed_result(record, record["operation_ids"][0])

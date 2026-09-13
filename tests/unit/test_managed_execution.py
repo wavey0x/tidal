@@ -174,6 +174,20 @@ async def test_persistence_failure_never_broadcasts_or_leaves_a_partial_ledger(r
 
 
 @pytest.mark.asyncio
+async def test_expired_preparation_cannot_sign_after_operator_or_rpc_delay(runtime):
+    with pytest.raises(LifecycleError) as error:
+        await runtime.executor.submit(
+            transaction={"to": TARGET, "data": "0x123456", "value": 0, "chainId": 1,
+                         "gas": 100000, "type": 2, "maxFeePerGas": 2000000000, "maxPriorityFeePerGas": 1000000000},
+            operations=[operation()], action="kick",
+            prepared_at_monotonic=time.monotonic() - 301,
+        )
+    assert error.value.code == "STALE_PREPARATION"
+    assert runtime.signer.calls == runtime.rpc.sends == 0
+    assert runtime.session.execute(select(models.transactions)).first() is None
+
+
+@pytest.mark.asyncio
 async def test_lost_response_is_retained_and_cannot_become_a_second_attempt(runtime):
     runtime.rpc.lost_response = True
     first = await submit(runtime)

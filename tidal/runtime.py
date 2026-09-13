@@ -399,7 +399,7 @@ def build_txn_service(
         web3_client=web3_client,
     )
 
-    lock_path = default_txn_lock_path()
+    lock_path = settings.resolved_home_path / "execution.lock"
 
     return TxnService(
         executor=executor,

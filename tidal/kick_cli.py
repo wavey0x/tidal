@@ -1,890 +1,180 @@
-"""API-backed kick commands."""
-
+"""Local operator commands using the same services as scheduled execution."""
 from __future__ import annotations
 
 import asyncio
-import shlex
-import time
-from typing import Any
+from contextlib import AsyncExitStack
+from dataclasses import asdict
 
 import typer
-from eth_utils import to_checksum_address
+from sqlalchemy import select
 
-from tidal.auction_price_units import format_buffer_pct, scaled_price_to_rate
 from tidal.cli_context import CLIContext, normalize_cli_address
 from tidal.cli_options import (
-    ApiBaseUrlOption,
-    ApiKeyOption,
-    AuctionAddressOption,
-    ConfigOption,
-    HeadlessOption,
-    JsonOption,
-    KeystoreOption,
-    LimitOption,
-    MinUsdValueOption,
-    NoConfirmationOption,
-    PasswordFileOption,
-    SourceAddressOption,
-    SourceTypeOption,
-    TokenAddressOption,
-    VerboseOption,
+    AuctionAddressOption, ConfigOption, HeadlessOption, JsonOption, KeystoreOption,
+    LimitOption, MinUsdValueOption, NoConfirmationOption, PasswordFileOption,
+    SourceAddressOption, SourceTypeOption, TokenAddressOption, VerboseOption,
 )
-from tidal.cli_renderers import emit_json, render_execution_result, render_kick_inspect, render_kick_submission_summary, render_skip_panel
-from tidal.cli_exit_codes import SUCCESS
-from tidal.control_plane.client import ControlPlaneError
-from tidal.errors import ConfigurationError
-from tidal.execution_result import summarize_execution
-from tidal.operator_cli_support import (
-    BaseFeeCapSkip,
-    execute_prepared_action_sync,
-    progress_status,
-    render_action_preview,
-    render_broadcast_result,
-    render_warnings,
-    submission_progress,
-    validate_prepared_gas_limits,
+from tidal.cli_renderers import (
+    render_kick_inspect, render_kick_run_summary, render_kick_submission_summary,
+    render_status_panel, render_warning_panel,
 )
-from tidal.ops.kick_inspect import KickInspectEntry, KickInspectResult
-from tidal.transaction_service.types import TxIntent
+from tidal.cli_validation import require_no_confirmation_for_json
+from tidal.lifecycle import LifecycleError, result
+from tidal.lifecycle_cli import emit_operation
+from tidal.logging import OutputMode, configure_logging
+from tidal.ops.kick_inspect import inspect_kick_candidates
+from tidal.persistence import models
+from tidal.runtime import build_txn_service
+from tidal.transactions import TransactionRepository
 
-app = typer.Typer(help="Kick auction lots", no_args_is_help=True)
-
-
-def _current_monotonic() -> float:
-    return time.monotonic()
-
-
-def _format_prepared_action_age_limit(max_age_seconds: int) -> str:
-    if max_age_seconds % 60 == 0 and max_age_seconds >= 60:
-        minutes = max_age_seconds // 60
-        unit = "minute" if minutes == 1 else "minutes"
-        return f"{minutes} {unit}"
-    unit = "second" if max_age_seconds == 1 else "seconds"
-    return f"{max_age_seconds} {unit}"
-
-
-def _prepared_action_is_stale(*, prepared_at_monotonic: float, max_age_seconds: int) -> bool:
-    return _current_monotonic() - prepared_at_monotonic > max_age_seconds
-
-
-def _prepared_action_stale_warning(max_age_seconds: int) -> str:
-    return (
-        "Prepared transaction expired after "
-        f"{_format_prepared_action_age_limit(max_age_seconds)}; "
-        "re-run to refresh quotes before sending."
-    )
-
-
-def _headless_value(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return shlex.quote(str(value))
-
-
-def _emit_headless_event(event: str, **fields: object) -> None:
-    parts = [event]
-    parts.extend(f"{key}={_headless_value(value)}" for key, value in fields.items() if value is not None)
-    typer.echo(" ".join(parts))
-
-
-def _emit_headless_warnings(warnings: list[str]) -> None:
-    for warning in warnings:
-        _emit_headless_event("kick.warning", message=warning)
-
-
-def _emit_headless_skip(
-    *,
-    candidate: KickInspectEntry,
-    reason: str,
-    auction_address: str | None = None,
-    token_symbol: str | None = None,
-    blocked_token_address: str | None = None,
-    blocked_token_symbol: str | None = None,
-    next_step: str | None = None,
-) -> None:
-    _emit_headless_event(
-        "kick.candidate.skip",
-        auction=auction_address or candidate.auction_address,
-        token=token_symbol or candidate.token_symbol,
-        reason=reason,
-        blocked_token=blocked_token_symbol or blocked_token_address,
-        next_step=next_step,
-    )
-
-
-def _emit_headless_broadcast_records(
-    records: list[dict[str, object]],
-    *,
-    candidate: KickInspectEntry,
-) -> None:
-    for record in records:
-        if not record.get("txHash"):
-            continue
-        _emit_headless_event(
-            "kick.broadcast",
-            auction=candidate.auction_address,
-            token=candidate.token_symbol,
-            tx_hash=record.get("txHash"),
-            receipt_status=record.get("receiptStatus"),
-            block_number=record.get("blockNumber"),
-        )
+app = typer.Typer(help="Inspect and execute kicks locally on the application host", no_args_is_help=True)
 
 
 def _normalize_source_type_filter(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = value.strip().lower().replace("-", "_")
-    if normalized in {"strategy", "fee_burner"}:
-        return normalized
-    raise typer.BadParameter("expected 'strategy' or 'fee-burner'", param_hint="--source-type")
+    if normalized not in {"strategy", "fee_burner"}:
+        raise typer.BadParameter("expected 'strategy' or 'fee-burner'", param_hint="--source-type")
+    return normalized
 
 
-def _inspect_result_from_api(data: dict[str, object]) -> KickInspectResult:
-    return KickInspectResult(
-        source_type=data["source_type"],
-        source_address=data["source_address"],
-        auction_address=data["auction_address"],
-        limit=data["limit"],
-        eligible_count=data["eligible_count"],
-        selected_count=data["selected_count"],
-        ready_count=data["ready_count"],
-        resolve_first_count=data["resolve_first_count"],
-        blocked_live_count=data["blocked_live_count"],
-        preview_failed_count=data["preview_failed_count"],
-        ignored_count=data["ignored_count"],
-        cooldown_count=data["cooldown_count"],
-        deferred_same_auction_count=data["deferred_same_auction_count"],
-        limited_count=data["limited_count"],
-        ready=[KickInspectEntry(**entry) for entry in data["ready"]],
-        resolve_first=[KickInspectEntry(**entry) for entry in data["resolve_first"]],
-        blocked_live=[KickInspectEntry(**entry) for entry in data["blocked_live"]],
-        preview_failed=[KickInspectEntry(**entry) for entry in data["preview_failed"]],
-        ignored_skips=[KickInspectEntry(**entry) for entry in data["ignored_skips"]],
-        cooldown_skips=[KickInspectEntry(**entry) for entry in data["cooldown_skips"]],
-        deferred_same_auction=[KickInspectEntry(**entry) for entry in data["deferred_same_auction"]],
-        limited=[KickInspectEntry(**entry) for entry in data["limited"]],
-        no_fill_count=int(data.get("no_fill_count") or 0),
-        no_fill_skips=[KickInspectEntry(**entry) for entry in data.get("no_fill_skips", [])],
-    )
-
-
-def _candidate_prepare_payload(
-    candidate: KickInspectEntry,
-    *,
-    sender: str | None,
-    min_usd_value: float | None = None,
-) -> dict[str, object]:
-    payload = {
-        "sourceType": candidate.source_type,
-        "sourceAddress": candidate.source_address,
-        "auctionAddress": candidate.auction_address,
-        "tokenAddress": candidate.token_address,
-        "limit": 1,
-        "sender": sender,
-        "minUsdValue": min_usd_value,
-    }
-    return payload
-
-
-def _candidate_review_queue(
-    inspect_result: KickInspectResult,
-    *,
-    include_deferred_same_auction: bool,
-    include_exhausted_no_fill: bool = False,
-) -> list[KickInspectEntry]:
-    queue = list(inspect_result.ready)
-    if include_deferred_same_auction:
-        queue.extend(inspect_result.deferred_same_auction)
-    if include_exhausted_no_fill:
-        queue.extend(
-            candidate
-            for candidate in inspect_result.no_fill_skips
-            if candidate.state == "no_fill_block"
-            and str(candidate.detail or "").startswith("RETRY_EXHAUSTED")
-        )
-    return queue
-
-
-def _should_include_deferred_same_auction(
-    *,
-    no_confirmation: bool,
-    source_type: str | None,
-    source_address: str | None,
-    auction_address: str | None,
-) -> bool:
-    if no_confirmation:
-        return False
-    return source_type == "fee_burner" or source_address is not None or auction_address is not None
-
-
-def _is_active_above_minimum_price_skip(reason: str | None) -> bool:
-    if not reason:
-        return False
-    return "active above minimumprice" in reason.lower()
-
-
-def _terminal_same_auction_from_skip(
-    *,
-    candidate: KickInspectEntry,
-    skip_entries: list[dict[str, str | None]],
-    remaining_candidates: list[KickInspectEntry] | None = None,
-) -> str | None:
-    if not skip_entries:
-        return None
-
-    candidate_auction = candidate.auction_address.lower()
-    if not all(
-        (entry.get("auction_address") or "").lower() == candidate_auction
-        and _is_active_above_minimum_price_skip(entry.get("reason"))
-        for entry in skip_entries
-    ):
-        return None
-
-    if remaining_candidates is None:
-        return candidate_auction
-
-    has_remaining_same_auction = any(
-        next_candidate.auction_address.lower() == candidate_auction
-        for next_candidate in remaining_candidates
-    )
-    return candidate_auction if has_remaining_same_auction else None
-
-
-def _prepare_skips(data: dict[str, object], *, candidate: KickInspectEntry | None = None) -> list[dict[str, str | None]]:
-    preview = data.get("preview")
-    if not isinstance(preview, dict):
-        return []
-
-    skipped = preview.get("skippedDuringPrepare")
-    if not isinstance(skipped, list):
-        return []
-
-    skips: list[dict[str, str | None]] = []
-    for entry in skipped:
-        if not isinstance(entry, dict):
-            continue
-        reason = str(entry.get("reason") or "candidate was skipped during prepare")
-        if reason:
-            reason = reason[0].upper() + reason[1:]
-        source_address = entry.get("sourceAddress")
-        source_label = None
-        if source_address:
-            try:
-                source_label = to_checksum_address(str(source_address))
-            except Exception:
-                source_label = str(source_address)
-        auction_address = entry.get("auctionAddress")
-        auction_label = None
-        if auction_address:
-            try:
-                auction_label = to_checksum_address(str(auction_address))
-            except Exception:
-                auction_label = str(auction_address)
-        skips.append(
-            {
-                "reason": reason,
-                "token_symbol": (
-                    str(entry.get("tokenSymbol"))
-                    if entry.get("tokenSymbol") is not None
-                    else candidate.token_symbol if candidate is not None else None
-                ),
-                "want_symbol": (
-                    str(entry.get("wantSymbol"))
-                    if entry.get("wantSymbol") is not None
-                    else candidate.want_symbol if candidate is not None else None
-                ),
-                "source_name": (
-                    str(entry.get("sourceName"))
-                    if entry.get("sourceName") is not None
-                    else candidate.source_name if candidate is not None else None
-                ),
-                "source_address": source_label or (candidate.source_address if candidate is not None else None),
-                "auction_address": auction_label,
-                "blocked_token_address": str(entry.get("blockedTokenAddress")) if entry.get("blockedTokenAddress") else None,
-                "blocked_token_symbol": str(entry.get("blockedTokenSymbol")) if entry.get("blockedTokenSymbol") else None,
-                "blocked_reason": str(entry.get("blockedReason")) if entry.get("blockedReason") else None,
-                "next_step": str(entry.get("nextStep")) if entry.get("nextStep") else None,
-            }
-        )
-    return skips
-
-
-def _resolve_preview_fee_context(cli_ctx: CLIContext, *, base_fee_cap_gwei: float) -> dict[str, float]:
-    base_fee_gwei = 0.0
-    max_priority = float(cli_ctx.settings.txn_max_priority_fee_gwei)
-    priority_fee_gwei = max_priority
-
+def _profile_settings(settings, source_type: str, *, min_usd_value=None, max_base_fee_gwei=None, require_curve_quote=None):
     try:
-        web3_client = cli_ctx.web3_client()
-    except Exception:
-        web3_client = None
-
-    if web3_client is not None:
-        async def _fetch_fees() -> tuple[object, object]:
-            try:
-                return await asyncio.gather(
-                    web3_client.get_base_fee(),
-                    web3_client.get_max_priority_fee(),
-                    return_exceptions=True,
-                )
-            finally:
-                await web3_client.close()
-
-        try:
-            base_result, priority_result = asyncio.run(_fetch_fees())
-            if not isinstance(base_result, BaseException):
-                base_fee_gwei = base_result / 1e9
-            if not isinstance(priority_result, BaseException):
-                priority_fee_gwei = min(priority_result / 1e9, max_priority)
-        except Exception:
-            pass
-
-    return {
-        "base_fee_gwei": base_fee_gwei,
-        "priority_fee_gwei": priority_fee_gwei,
-        "max_fee_per_gas_gwei": base_fee_cap_gwei + priority_fee_gwei,
+        effective = settings.for_execution_profile(source_type)
+    except ValueError as exc:
+        raise LifecycleError("CONFIGURATION_ERROR", str(exc)) from exc
+    overrides = {
+        "txn_usd_threshold": min_usd_value, "txn_base_fee_cap_gwei": max_base_fee_gwei,
+        "txn_require_curve_quote": require_curve_quote,
     }
-
-
-def _kick_submission_summary(
-    data: dict[str, Any],
-    *,
-    candidate: KickInspectEntry,
-    single_title: str,
-    fee_context: dict[str, float],
-    default_buffer_bps: int,
-    default_min_buffer_bps: int,
-    quote_spot_warning_threshold_pct: float,
-) -> dict[str, object] | None:
-    preview = data.get("preview")
-    transactions = data.get("transactions")
-    if not isinstance(preview, dict) or not isinstance(transactions, list) or not transactions:
-        return None
-
-    prepared_operations = preview.get("preparedOperations")
-    if not isinstance(prepared_operations, list) or len(prepared_operations) != 1:
-        return None
-
-    prepared = prepared_operations[0]
-    if not isinstance(prepared, dict) or prepared.get("operation") != "kick":
-        return None
-
-    transaction = transactions[0]
-    if not isinstance(transaction, dict):
-        return None
-
-    gas_estimate = int(transaction["gasEstimate"]) if transaction.get("gasEstimate") is not None else None
-    gas_limit = int(transaction["gasLimit"]) if transaction.get("gasLimit") is not None else None
-    base_fee_gwei = fee_context["base_fee_gwei"]
-    source_address = prepared.get("sourceAddress") or candidate.source_address
-    source_name = prepared.get("sourceName") or candidate.source_name
-    token_address = prepared.get("tokenAddress") or candidate.token_address
-    token_symbol = prepared.get("tokenSymbol") or candidate.token_symbol
-    auction_address = prepared.get("auctionAddress") or candidate.auction_address
-    want_symbol = prepared.get("wantSymbol") or candidate.want_symbol
-    starting_price = prepared.get("startingPrice")
-    minimum_price_scaled_1e18 = prepared.get("minimumPriceScaled1e18") or prepared.get("minimumPrice")
-    minimum_price = minimum_price_scaled_1e18
-    minimum_quote = prepared.get("minimumQuote")
-    buffer_bps = int(prepared.get("bufferBps") or default_buffer_bps)
-    min_buffer_bps = int(prepared.get("minBufferBps") or default_min_buffer_bps)
-
-    starting_price_display = prepared.get("startingPriceDisplay")
-    if starting_price_display is None and starting_price is not None:
-        starting_price_display = (
-            f"{int(str(starting_price)):,} {want_symbol or '???'} (+{format_buffer_pct(buffer_bps)} buffer)"
-        )
-
-    minimum_quote_display = prepared.get("minimumQuoteDisplay")
-    if minimum_quote_display is None and minimum_quote is not None:
-        minimum_quote_display = (
-            f"{int(str(minimum_quote)):,} {want_symbol or '???'} (-{format_buffer_pct(min_buffer_bps)} buffer)"
-        )
-    minimum_price_display = prepared.get("minimumPriceDisplay")
-    if minimum_price_display is None and minimum_price_scaled_1e18 is not None:
-        minimum_price_display = f"{int(str(minimum_price_scaled_1e18)):,} (scaled 1e18 floor)"
-
-    floor_rate = prepared.get("floorRate")
-    if floor_rate is None and minimum_price_scaled_1e18 is not None:
-        scaled_floor_rate = scaled_price_to_rate(int(str(minimum_price_scaled_1e18)))
-        floor_rate = str(scaled_floor_rate) if scaled_floor_rate is not None else None
-
-    return {
-        "single_title": single_title,
-        "kicks": [
-            {
-                "source": source_address,
-                "source_name": source_name,
-                "source_type": prepared.get("sourceType"),
-                "sender": transaction.get("sender"),
-                "strategy": source_address,
-                "strategy_name": source_name,
-                "token": token_address,
-                "token_symbol": token_symbol,
-                "auction": auction_address,
-                "sell_amount": prepared.get("sellAmount"),
-                "usd_value": prepared.get("usdValue"),
-                "starting_price": starting_price,
-                "starting_price_display": starting_price_display,
-                "minimum_price": minimum_price,
-                "minimum_price_scaled_1e18": minimum_price_scaled_1e18,
-                "minimum_quote": minimum_quote,
-                "minimum_quote_display": minimum_quote_display,
-                "minimum_price_display": minimum_price_display,
-                "want_address": prepared.get("wantAddress"),
-                "want_symbol": want_symbol,
-                "want_price_usd": prepared.get("wantPriceUsd"),
-                "buffer_bps": buffer_bps,
-                "min_buffer_bps": min_buffer_bps,
-                "step_decay_rate_bps": prepared.get("stepDecayRateBps"),
-                "pricing_profile_name": prepared.get("pricingProfileName"),
-                "quote_amount": prepared.get("quoteAmount"),
-                "quote_rate": prepared.get("quoteRate"),
-                "start_rate": prepared.get("startRate"),
-                "floor_rate": floor_rate,
-            }
-        ],
-        "batch_size": 1,
-        "total_usd": prepared.get("usdValue") or "0",
-        "gas_estimate": gas_estimate,
-        "gas_limit": gas_limit,
-        "base_fee_gwei": base_fee_gwei,
-        "priority_fee_gwei": fee_context["priority_fee_gwei"],
-        "max_fee_per_gas_gwei": fee_context["max_fee_per_gas_gwei"],
-        "gas_cost_eth": (gas_estimate * base_fee_gwei / 1e9) if gas_estimate is not None else None,
-        "quote_spot_warning_threshold_pct": quote_spot_warning_threshold_pct,
-    }
+    return effective.model_copy(update={key: value for key, value in overrides.items() if value is not None})
 
 
 @app.command("inspect")
 def kick_inspect(
-    config: ConfigOption = None,
-    api_base_url: ApiBaseUrlOption = None,
-    api_key: ApiKeyOption = None,
-    json_output: JsonOption = False,
-    source_type: SourceTypeOption = None,
-    source_address: SourceAddressOption = None,
-    auction_address: AuctionAddressOption = None,
-    token_address: TokenAddressOption = None,
-    limit: LimitOption = None,
-    min_usd_value: MinUsdValueOption = None,
+    config: ConfigOption = None, json_output: JsonOption = False,
+    source_type: SourceTypeOption = None, source_address: SourceAddressOption = None,
+    auction_address: AuctionAddressOption = None, token_address: TokenAddressOption = None,
+    limit: LimitOption = None, min_usd_value: MinUsdValueOption = None,
     show_all: bool = typer.Option(False, "--show-all", help="Show deferred and limited candidates."),
 ) -> None:
-    cli_ctx = CLIContext(config, api_base_url=api_base_url, api_key=api_key)
-    payload = {
-        "sourceType": _normalize_source_type_filter(source_type),
-        "sourceAddress": normalize_cli_address(source_address, param_hint="--source"),
-        "auctionAddress": normalize_cli_address(auction_address, param_hint="--auction"),
-        "tokenAddress": normalize_cli_address(token_address, param_hint="--token"),
-        "limit": limit,
-        "minUsdValue": min_usd_value,
-    }
-    try:
-        with cli_ctx.control_plane_client(auth=False) as client:
-            if json_output:
-                response = client.inspect_kicks(payload)
-            else:
-                with progress_status("Loading kick candidates..."):
-                    response = client.inspect_kicks(payload)
-    except (ConfigurationError, ControlPlaneError) as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
-
-    data = response["data"]
-    if json_output:
-        emit_json("kick.inspect", status=response["status"], data=data, warnings=response.get("warnings"))
-    else:
-        render_kick_inspect(_inspect_result_from_api(data), show_all=show_all)
-    raise typer.Exit(code=0 if response["status"] == "ok" else 2)
+    """Read current candidates locally; no signer or API credentials required."""
+    ctx = CLIContext(config, mode="server")
+    selected = _normalize_source_type_filter(source_type)
+    def inspect() -> dict:
+        profiles = [selected] if selected else ["strategy", "fee_burner"]
+        data = {}
+        with ctx.session() as session:
+            for profile in profiles:
+                effective = _profile_settings(ctx.settings, profile, min_usd_value=min_usd_value)
+                found = inspect_kick_candidates(
+                    session, effective, source_type=profile,
+                    source_address=normalize_cli_address(source_address),
+                    auction_address=normalize_cli_address(auction_address),
+                    token_address=normalize_cli_address(token_address), limit=limit,
+                )
+                data[profile] = asdict(found)
+                if not json_output:
+                    render_kick_inspect(found, show_all=show_all)
+        return result("OK", data=data)
+    emit_operation(inspect, json_output=json_output)
 
 
 @app.command("run")
 def kick_run(
-    config: ConfigOption = None,
-    api_base_url: ApiBaseUrlOption = None,
-    api_key: ApiKeyOption = None,
-    no_confirmation: NoConfirmationOption = False,
-    headless: HeadlessOption = False,
-    source_type: SourceTypeOption = None,
-    source_address: SourceAddressOption = None,
-    auction_address: AuctionAddressOption = None,
-    token_address: TokenAddressOption = None,
-    limit: LimitOption = None,
-    min_usd_value: MinUsdValueOption = None,
-    keystore: KeystoreOption = None,
-    password_file: PasswordFileOption = None,
+    config: ConfigOption = None, json_output: JsonOption = False,
+    no_confirmation: NoConfirmationOption = False, headless: HeadlessOption = False,
+    source_type: SourceTypeOption = None, source_address: SourceAddressOption = None,
+    auction_address: AuctionAddressOption = None, token_address: TokenAddressOption = None,
+    limit: LimitOption = None, min_usd_value: MinUsdValueOption = None,
+    keystore: KeystoreOption = None, password_file: PasswordFileOption = None,
     verbose: VerboseOption = False,
-    max_base_fee_gwei: float | None = typer.Option(
-        None,
-        "--max-base-fee-gwei",
-        min=0,
-        help="Skip sending a prepared kick when current base fee is above this gwei cap.",
-    ),
-    require_curve_quote: bool | None = typer.Option(
-        None,
-        "--require-curve/--no-require-curve",
-        help="Override Curve quote strictness for prepare/send.",
-    ),
-    allow_killed_gauge: bool = typer.Option(
-        False,
-        "--allow-killed-gauge",
-        help="Bypass killed Curve gauge guard for this manual run.",
-    ),
-    allow_no_fill_retry: bool = typer.Option(
-        False,
-        "--allow-no-fill-retry",
-        help="Allow one retry after the no-fill budget for an exact auction/token pair.",
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Prepare and record diagnostics without unlocking or sending."),
+    batch: bool = typer.Option(False, "--batch/--no-batch", help="Combine compatible kicks into one transaction."),
+    max_base_fee_gwei: float | None = typer.Option(None, "--max-base-fee-gwei", min=0),
+    require_curve_quote: bool | None = typer.Option(None, "--require-curve/--no-require-curve"),
+    allow_killed_gauge: bool = typer.Option(False, "--allow-killed-gauge"),
+    allow_no_fill_retry: bool = typer.Option(False, "--allow-no-fill-retry"),
 ) -> None:
-    del verbose
-    effective_no_confirmation = no_confirmation or headless
-    cli_ctx = CLIContext(config, api_base_url=api_base_url, api_key=api_key)
-    effective_base_fee_cap_gwei = (
-        float(max_base_fee_gwei)
-        if max_base_fee_gwei is not None
-        else float(cli_ctx.settings.txn_base_fee_cap_gwei)
-    )
-    normalized_source_type = _normalize_source_type_filter(source_type)
-    normalized_source_address = normalize_cli_address(source_address, param_hint="--source")
-    normalized_auction_address = normalize_cli_address(auction_address, param_hint="--auction")
-    normalized_token_address = normalize_cli_address(token_address, param_hint="--token")
-    if allow_no_fill_retry and (normalized_auction_address is None or normalized_token_address is None):
-        raise typer.BadParameter(
-            "--allow-no-fill-retry requires both --auction and --token",
-            param_hint="--allow-no-fill-retry",
-        )
+    """Prepare and execute locally under the shared lock; retained attempts gate sends."""
+    unattended = no_confirmation or headless
+    require_no_confirmation_for_json(json_output=json_output and not dry_run, no_confirmation=unattended)
+    selected = _normalize_source_type_filter(source_type)
+    auction = normalize_cli_address(auction_address, param_hint="--auction")
+    token = normalize_cli_address(token_address, param_hint="--token")
+    source = normalize_cli_address(source_address, param_hint="--source")
+    if allow_no_fill_retry and (not auction or not token):
+        raise typer.BadParameter("--allow-no-fill-retry requires both --auction and --token")
     if allow_no_fill_retry and headless:
-        raise typer.BadParameter(
-            "--allow-no-fill-retry cannot be used with --headless",
-            param_hint="--allow-no-fill-retry",
-        )
-    if headless:
-        _emit_headless_event(
-            "kick.run.start",
-            source_type=normalized_source_type,
-            source=normalized_source_address,
-            auction=normalized_auction_address,
-            token=normalized_token_address,
-            limit=limit,
-            min_usd_value=min_usd_value,
-            max_base_fee_gwei=effective_base_fee_cap_gwei,
-            require_curve=("config" if require_curve_quote is None else require_curve_quote),
-            allow_killed_gauge=allow_killed_gauge,
-        )
-    try:
-        if headless:
-            exec_ctx = cli_ctx.resolve_execution(
-                required=True,
-                required_for="kick execution",
-                keystore_path=keystore,
-                password_file=password_file,
-            )
+        raise typer.BadParameter("--allow-no-fill-retry cannot be used with --headless")
+    configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
+    ctx = CLIContext(config, mode="server")
+
+    def confirm(summary):
+        if summary.get("kicks"):
+            render_kick_submission_summary(summary)
         else:
-            with progress_status("Resolving operator context..."):
-                exec_ctx = cli_ctx.resolve_execution(
-                    required=True,
-                    required_for="kick execution",
-                    keystore_path=keystore,
-                    password_file=password_file,
+            render_status_panel("Resolve auction", [str(summary)], border_style="cyan")
+        return typer.confirm("Submit this transaction?", default=False)
+
+    async def execute() -> dict:
+        ctx.require_rpc()
+        # Explicit native construction is the only place a CLI signer is
+        # unlocked. Preview composition never discovers or decrypts keys.
+        execution = ctx.resolve_execution(
+            required=not dry_run, required_for="local kick execution",
+            keystore_path=keystore, password_file=password_file,
+        ) if not dry_run else None
+        profiles = [selected] if selected else ["strategy", "fee_burner"]
+        runs = []
+        with ctx.session() as session:
+            for profile in profiles:
+                effective = _profile_settings(
+                    ctx.settings, profile, min_usd_value=min_usd_value,
+                    max_base_fee_gwei=max_base_fee_gwei, require_curve_quote=require_curve_quote,
                 )
-    except ConfigurationError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
-    payload = {
-        "sourceType": normalized_source_type,
-        "sourceAddress": normalized_source_address,
-        "auctionAddress": normalized_auction_address,
-        "tokenAddress": normalized_token_address,
-        "limit": limit,
-        "minUsdValue": min_usd_value,
-        "sender": exec_ctx.sender,
-        "includeLiveInspection": False,
-    }
-    preview_fee_context: dict[str, float] | None = None
-    local_warnings: list[str] = []
-    inspect_result: KickInspectResult | None = None
-    review_candidates: list[KickInspectEntry] = []
-    broadcast_records: list[dict[str, object]] = []
-    expected_transaction_count = 0
-    prepared_candidate_count = 0
-    prepare_skip_count = 0
-    skipped_confirmation_count = 0
-    noop_reason = "no_ready_candidates"
-    try:
-        with cli_ctx.control_plane_client(auth=True) as client:
-            if headless:
-                inspect_response = client.inspect_kicks(payload)
-            else:
-                with progress_status("Loading kick candidates..."):
-                    inspect_response = client.inspect_kicks(payload)
-            inspect_result = _inspect_result_from_api(inspect_response["data"])
-            review_candidates = _candidate_review_queue(
-                inspect_result,
-                include_deferred_same_auction=_should_include_deferred_same_auction(
-                    no_confirmation=effective_no_confirmation,
-                    source_type=normalized_source_type,
-                    source_address=normalized_source_address,
-                    auction_address=normalized_auction_address,
-                ),
-                include_exhausted_no_fill=allow_no_fill_retry,
-            )
-            prepare_feedback_emitted = False
-            broadcast_feedback_emitted = False
-            terminal_auction_addresses: set[str] = set()
-
-            if review_candidates:
-                total_candidates = len(review_candidates)
-                for index, candidate in enumerate(review_candidates, start=1):
-                    candidate_auction = candidate.auction_address.lower()
-                    if candidate_auction in terminal_auction_addresses:
-                        continue
-                    prepare_payload = _candidate_prepare_payload(
-                        candidate,
-                        sender=exec_ctx.sender,
-                        min_usd_value=min_usd_value,
+                async with AsyncExitStack() as clients:
+                    service = build_txn_service(
+                        effective, session, signer=execution.signer if execution else None,
+                        confirm_fn=None if unattended or dry_run else confirm, owned_clients=clients,
                     )
-                    prepare_payload["txnMaxGasLimit"] = cli_ctx.settings.txn_max_gas_limit
-                    if require_curve_quote is not None:
-                        prepare_payload["requireCurveQuote"] = require_curve_quote
-                    if allow_killed_gauge:
-                        prepare_payload["allowKilledGauge"] = True
-                    if allow_no_fill_retry:
-                        prepare_payload["allowNoFillRetry"] = True
-                    if headless:
-                        prepare_response = client.prepare_kicks(prepare_payload)
-                    else:
-                        with progress_status(f"Preparing kick {index} of {total_candidates}..."):
-                            prepare_response = client.prepare_kicks(prepare_payload)
-                    prepared_at_monotonic = _current_monotonic()
-                    prepared_data = prepare_response["data"]
-                    warnings = list(prepare_response.get("warnings") or [])
-                    transactions = list(prepared_data.get("transactions") or [])
-                    tx_intents = [TxIntent.from_payload(tx) for tx in transactions]
-
-                    if prepare_response["status"] == "noop" or not transactions:
-                        skip_entries = _prepare_skips(prepared_data, candidate=candidate)
-                        prepare_skip_count += max(len(skip_entries), 1)
-                        if skip_entries or warnings:
-                            prepare_feedback_emitted = True
-                        if headless:
-                            if skip_entries:
-                                for skip in skip_entries:
-                                    _emit_headless_skip(
-                                        candidate=candidate,
-                                        reason=str(skip["reason"]),
-                                        token_symbol=skip["token_symbol"],
-                                        auction_address=skip["auction_address"],
-                                        blocked_token_address=skip["blocked_token_address"],
-                                        blocked_token_symbol=skip["blocked_token_symbol"],
-                                        next_step=skip["next_step"],
-                                    )
-                            else:
-                                _emit_headless_skip(
-                                    candidate=candidate,
-                                    reason="prepare returned no transaction",
-                                )
-                            _emit_headless_warnings(warnings)
-                        else:
-                            for skip in skip_entries:
-                                render_skip_panel(
-                                    reason=str(skip["reason"]),
-                                    token_symbol=skip["token_symbol"],
-                                    want_symbol=skip["want_symbol"],
-                                    source_name=skip["source_name"],
-                                    source_address=skip["source_address"],
-                                    auction_address=skip["auction_address"],
-                                    blocked_token_address=skip["blocked_token_address"],
-                                    blocked_token_symbol=skip["blocked_token_symbol"],
-                                    blocked_reason=skip["blocked_reason"],
-                                    next_step=skip["next_step"],
-                                )
-                            render_warnings(warnings)
-                            remaining_candidates = review_candidates[index:]
-                            terminal_auction = _terminal_same_auction_from_skip(
-                                candidate=candidate,
-                                skip_entries=skip_entries,
-                                remaining_candidates=remaining_candidates,
-                            )
-                            if terminal_auction is not None:
-                                terminal_auction_addresses.add(terminal_auction)
-                                typer.echo("Ending review for the remaining same-auction candidates.")
-                        continue
-
-                    prepared_candidate_count += 1
-                    if headless:
-                        _emit_headless_warnings(warnings)
-                    else:
-                        if preview_fee_context is None:
-                            with progress_status("Loading network fee preview..."):
-                                preview_fee_context = _resolve_preview_fee_context(
-                                    cli_ctx,
-                                    base_fee_cap_gwei=effective_base_fee_cap_gwei,
-                                )
-                        summary = _kick_submission_summary(
-                            prepared_data,
-                            candidate=candidate,
-                            single_title=f"Kick ({index} of {total_candidates})",
-                            fee_context=preview_fee_context or {
-                                "base_fee_gwei": 0.0,
-                                "priority_fee_gwei": float(cli_ctx.settings.txn_max_priority_fee_gwei),
-                                "max_fee_per_gas_gwei": (
-                                    effective_base_fee_cap_gwei
-                                    + float(cli_ctx.settings.txn_max_priority_fee_gwei)
-                                ),
-                            },
-                            default_buffer_bps=cli_ctx.settings.txn_start_price_buffer_bps,
-                            default_min_buffer_bps=cli_ctx.settings.txn_min_price_buffer_bps,
-                            quote_spot_warning_threshold_pct=(
-                                cli_ctx.settings.txn_quote_spot_warning_threshold_pct
-                            ),
-                        )
-                        if summary is not None:
-                            render_kick_submission_summary(summary)
-                        else:
-                            render_action_preview(
-                                prepared_data,
-                                heading=f"Prepared kick action ({index}/{total_candidates})",
-                            )
-                        render_warnings(warnings)
-                    gas_limit_error = None
                     try:
-                        validate_prepared_gas_limits(tx_intents)
-                    except RuntimeError as exc:
-                        gas_limit_error = str(exc)
-                    if gas_limit_error is not None:
-                        skipped_confirmation_count += 1
-                        local_warnings.append(gas_limit_error)
-                        if headless:
-                            _emit_headless_warnings([gas_limit_error])
-                        else:
-                            render_warnings([gas_limit_error])
-                        continue
-                    if not effective_no_confirmation and not typer.confirm("Send this transaction?", default=False):
-                        skipped_confirmation_count += 1
-                        continue
-                    if _prepared_action_is_stale(
-                        prepared_at_monotonic=prepared_at_monotonic,
-                        max_age_seconds=cli_ctx.settings.prepared_action_max_age_seconds,
-                    ):
-                        skipped_confirmation_count += 1
-                        warning = _prepared_action_stale_warning(
-                            cli_ctx.settings.prepared_action_max_age_seconds
+                        outcome = await service.run_once(
+                            live=not dry_run, batch=batch, source_type=profile,
+                            source_address=source, auction_address=auction, token_address=token,
+                            limit=limit, allow_no_fill_retry=allow_no_fill_retry,
+                            allow_killed_gauge=allow_killed_gauge,
                         )
-                        local_warnings.append(warning)
-                        if headless:
-                            _emit_headless_warnings([warning])
-                        else:
-                            render_warnings([warning])
-                        continue
-                    if exec_ctx.signer is None or exec_ctx.sender is None:
-                        raise typer.Exit(code=1)
-                    try:
-                        if headless:
-                            action_records = execute_prepared_action_sync(
-                                settings=cli_ctx.settings,
-                                client=client,
-                                action_id=str(prepared_data["actionId"]),
-                                sender=exec_ctx.sender,
-                                signer=exec_ctx.signer,
-                                transactions=tx_intents,
-                                base_fee_cap_gwei=effective_base_fee_cap_gwei,
-                            )
-                            _emit_headless_broadcast_records(action_records, candidate=candidate)
-                        else:
-                            typer.echo()
-                            with submission_progress("Submitting transaction...") as update_progress:
-                                action_records = execute_prepared_action_sync(
-                                    settings=cli_ctx.settings,
-                                    client=client,
-                                    action_id=str(prepared_data["actionId"]),
-                                    sender=exec_ctx.sender,
-                                    signer=exec_ctx.signer,
-                                    transactions=tx_intents,
-                                    progress_callback=update_progress,
-                                    base_fee_cap_gwei=effective_base_fee_cap_gwei,
-                                )
-                    except BaseFeeCapSkip as exc:
-                        skipped_confirmation_count += 1
-                        reason = str(exc)
-                        if headless:
-                            _emit_headless_skip(candidate=candidate, reason=reason)
-                        else:
-                            render_skip_panel(
-                                reason=reason,
-                                token_symbol=candidate.token_symbol,
-                                want_symbol=candidate.want_symbol,
-                                source_name=candidate.source_name,
-                                source_address=candidate.source_address,
-                                auction_address=candidate.auction_address,
-                            )
-                        continue
-                    if not headless and action_records:
-                        render_broadcast_result(action_records)
-                        broadcast_feedback_emitted = True
-                    broadcast_records.extend(action_records)
-                    expected_transaction_count += len(tx_intents)
-                    if summarize_execution(action_records, expected_count=len(tx_intents)).pending:
-                        break
-                    if action_records:
-                        terminal_auction_addresses.add(candidate_auction)
-                        if effective_no_confirmation and not headless:
-                            break
-    except (ConfigurationError, ControlPlaneError, RuntimeError) as exc:
-        # Preserve earlier confirmed results if a later candidate cannot execute.
-        expected_transaction_count = max(expected_transaction_count, len(broadcast_records) + 1)
-        if headless:
-            _emit_headless_event("kick.error", message=str(exc))
-        else:
-            render_warnings([str(exc)])
+                    except LifecycleError as exc:
+                        if runs:
+                            return result(exc.code, data={"runs": runs}, blockers=[{"code": exc.code, "message": str(exc)}])
+                        raise
+                    session.commit()
+                    runs.append(asdict(outcome))
+                    if not json_output:
+                        rows = [dict(row) for row in session.execute(select(models.kick_txs).where(
+                            models.kick_txs.c.run_id == outcome.run_id,
+                        )).mappings()]
+                        render_kick_run_summary(
+                            result=outcome, live=not dry_run, source_type=profile, source_address=source,
+                            auction_address=auction, run_rows=rows, verbose=verbose,
+                            sender=execution.sender if execution else None,
+                        )
+            pending = TransactionRepository(session).unresolved()
+        waiting_runs = [run for run in runs if run["status"] in {"BUSY", "WAITING"}]
+        code = "WAITING" if pending or waiting_runs else "OK"
+        blockers = [{"code": "UNRESOLVED_ATTEMPTS", "message": f"{len(pending)} retained attempt(s) await reconciliation."}] if pending else []
+        blockers.extend({"code": run["status"], "message": "Another command owns execution; retry later." if run["status"] == "BUSY"
+                         else "; ".join((run.get("failure_summary") or {"Execution is held for review": 1}).keys())}
+                        for run in waiting_runs)
+        if any(run["kicks_failed"] for run in runs):
+            code = "EXECUTION_ERROR"
+            blockers.append({"code": code, "message": "One or more operations failed; inspect the retained run details."})
+        return result(code, data={"runs": runs, "pending_transactions": len(pending)}, blockers=blockers)
 
-    result = summarize_execution(broadcast_records, expected_count=expected_transaction_count)
-    status = result.status
+    emit_operation(lambda: asyncio.run(execute()), json_output=json_output)
 
-    if status == "noop":
-        if inspect_result is None or inspect_result.ready_count == 0:
-            noop_reason = "no_ready_candidates"
-        elif prepared_candidate_count == 0 and prepare_skip_count:
-            noop_reason = "prepare_skipped"
-        elif prepared_candidate_count > 0 and skipped_confirmation_count == prepared_candidate_count:
-            noop_reason = "prepared_skipped"
-        else:
-            noop_reason = "no_transaction_sent"
 
-    if headless:
-        _emit_headless_event(
-            "kick.run.complete",
-            status=status,
-            reason=(noop_reason if status == "noop" else None),
-            sent=len(broadcast_records),
-            confirmed=result.confirmed,
-            pending=result.pending,
-            failed=result.failed,
-            unsubmitted=result.unsubmitted,
-            prepared=prepared_candidate_count,
-            skipped=prepare_skip_count + skipped_confirmation_count,
-            ready=(inspect_result.ready_count if inspect_result is not None else None),
-            warnings=len(local_warnings),
-        )
-    else:
-        if broadcast_records:
-            if not broadcast_feedback_emitted:
-                render_broadcast_result(broadcast_records)
-            if effective_no_confirmation and len(review_candidates) > 1:
-                typer.echo("Kick transaction sent. Ending run after the first submitted candidate.")
-            render_execution_result(result)
-        elif inspect_result is None or inspect_result.ready_count == 0:
-            typer.echo("No ready kick candidates.")
-        elif prepared_candidate_count == 0 and prepare_feedback_emitted:
-            pass
-        elif prepared_candidate_count > 0 and skipped_confirmation_count == prepared_candidate_count:
-            typer.echo("All prepared kick transactions were skipped.")
-        else:
-            typer.echo("No kick transactions were sent.")
-        if not broadcast_records and status != "noop":
-            render_execution_result(result)
-
-    # Timer-driven no-op runs remain successful; mined/unknown outcomes use the
-    # same receipt-based exit code as auction commands.
-    raise typer.Exit(code=SUCCESS if status == "noop" and headless else result.exit_code)
+if __name__ == "__main__":
+    app()

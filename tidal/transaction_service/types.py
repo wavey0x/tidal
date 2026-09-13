@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
+from time import monotonic
 
 from tidal.auction_price_units import decode_starting_price_amount, format_buffer_pct
 from tidal.auction_versions import StartingPriceEncoding
@@ -96,6 +97,7 @@ class PreparedKick:
     pricing_profile_name: str
     quote_response_json: str | None = None
     want_price_usd_str: str | None = None
+    prepared_at_monotonic: float = field(default_factory=monotonic)
 
     @property
     def starting_price_amount(self) -> Decimal:
@@ -154,6 +156,7 @@ class PreparedResolveAuction:
     receiver: str | None = None
     token_symbol: str | None = None
     normalized_balance: str | None = None
+    prepared_at_monotonic: float = field(default_factory=monotonic)
 
 
 @dataclass(slots=True)

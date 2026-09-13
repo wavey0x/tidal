@@ -31,6 +31,14 @@ class MonitoredFeeBurner(BaseModel):
     label: str | None = None
 
 
+class ExecutionProfile(BaseModel):
+    """Explicit existing schedule policy, applied after shared base settings."""
+    model_config = {"extra": "forbid"}
+    txn_usd_threshold: float = Field(ge=0)
+    txn_base_fee_cap_gwei: float = Field(ge=0)
+    txn_require_curve_quote: bool
+
+
 class Settings(BaseSettings):
     """Application settings.
 
@@ -52,6 +60,7 @@ class Settings(BaseSettings):
     db_path: Path | None = Field(default=None, alias="DB_PATH")
     chain_id: int = Field(default=1, alias="CHAIN_ID")
     managed_signers: dict[str, str] = Field(default_factory=dict, alias="MANAGED_SIGNERS")
+    execution_profiles: dict[str, ExecutionProfile] = Field(default_factory=dict, alias="EXECUTION_PROFILES")
     chain_read_max_age_seconds: int = Field(default=180, gt=0, alias="CHAIN_READ_MAX_AGE_SECONDS")
     finality_max_age_seconds: int = Field(default=1800, gt=0, alias="FINALITY_MAX_AGE_SECONDS")
 
@@ -142,7 +151,7 @@ class Settings(BaseSettings):
             "TXN_MAX_DATA_AGE_SECONDS",
         ),
     )
-    prepared_action_max_age_seconds: int = Field(default=300, alias="PREPARED_ACTION_MAX_AGE_SECONDS")
+    prepared_action_max_age_seconds: int = Field(default=300, gt=0, alias="PREPARED_ACTION_MAX_AGE_SECONDS")
     txn_keystore_path: str | None = Field(default=None, alias="TXN_KEYSTORE_PATH")
     txn_keystore_passphrase: str | None = Field(default=None, alias="TXN_KEYSTORE_PASSPHRASE")
 
@@ -251,6 +260,11 @@ class Settings(BaseSettings):
 
     def bind_kick_config(self, kick_config: KickConfig | None) -> None:
         self._kick_config = kick_config
+
+    def for_execution_profile(self, name: str) -> "Settings":
+        if name not in self.execution_profiles:
+            raise ValueError(f"Missing explicit execution profile: {name}")
+        return self.model_copy(update=self.execution_profiles[name].model_dump())
 
     def _resolve_config_relative_path(self, value: str | Path) -> Path:
         path = Path(value).expanduser()

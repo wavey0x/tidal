@@ -76,8 +76,11 @@ class CLIContext:
     @contextmanager
     def session(self) -> "Iterator[object]":
         db = Database(self.settings.database_url)
-        with db.session() as session:
-            yield session
+        try:
+            with db.session() as session:
+                yield session
+        finally:
+            db.engine.dispose()
 
     def sync_web3(self) -> "Web3":
         self.require_rpc()

@@ -37,8 +37,9 @@ class ManagedExecutor:
             raise LifecycleError("WRONG_SIGNER", "Unlocked signer does not match the declared action profile.")
         return require_activation(self.settings.resolved_home_path / "activation.json", binding)
 
-    async def submit(self, *, transaction: dict, operations: list[dict], action: str) -> dict:
+    async def submit(self, *, transaction: dict, operations: list[dict], action: str, prepared_at_monotonic: float | None = None) -> dict:
         """Caller prepares under the same lock; every managed send returns promptly."""
+        prepared_at = time.monotonic() if prepared_at_monotonic is None else prepared_at_monotonic
         with execution_lock(self.settings.resolved_home_path / "execution.lock"):
             activation = self._activation()
             self.session.commit()
@@ -74,6 +75,8 @@ class ManagedExecutor:
             unsigned["to"] = to_checksum_address(unsigned["to"])
             if "from" in unsigned and normalize_address(unsigned.pop("from")) != normalize_address(self.signer.address):
                 raise LifecycleError("WRONG_SIGNER", "Prepared sender differs from the managed signer.")
+            if time.monotonic() - prepared_at > self.settings.prepared_action_max_age_seconds:
+                raise LifecycleError("STALE_PREPARATION", "Prepared conditions expired; prepare again from current state.")
             signed = self.signer.sign_transaction(unsigned)
             tx_hash = "0x" + keccak(signed).hex()
             transaction_id, operation_ids = self.repository.record(identity={

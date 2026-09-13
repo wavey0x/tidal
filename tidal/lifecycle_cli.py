@@ -32,7 +32,7 @@ def emit_operation(operation: Callable[[], dict], *, json_output: bool) -> None:
     else:
         render_status_panel(payload["code"], [f"{key}: {value}" for key, value in payload["data"].items()], border_style="green")
     if payload["blockers"]:
-        raise typer.Exit(code=75 if payload["code"] == "BUSY" else 1)
+        raise typer.Exit(code=75 if payload["code"] in {"BUSY", "WAITING", "UNRESOLVED_ATTEMPTS"} else 1)
 
 
 def db_check(

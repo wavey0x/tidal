@@ -83,6 +83,10 @@ def scan_run(
             auto_enable_tokens=auto_enable_tokens,
             no_confirmation=no_confirmation,
         )
+        try:
+            cli_ctx.settings = cli_ctx.settings.for_execution_profile("scan")
+        except ValueError as exc:
+            raise LifecycleError("CONFIGURATION_ERROR", str(exc)) from exc
         result = _run_scan_once(
             ctx=cli_ctx,
             auto_settle=auto_settle,

@@ -7,6 +7,19 @@
 chain_id: 1
 auction_kicker_address: "0x354eD194390C431250b639Ab5cbA178D587612Fd"
 txn_usd_threshold: 250
+execution_profiles:
+  scan:
+    txn_usd_threshold: 250
+    txn_base_fee_cap_gwei: 5
+    txn_require_curve_quote: true
+  strategy:
+    txn_usd_threshold: 100
+    txn_base_fee_cap_gwei: 1
+    txn_require_curve_quote: true
+  fee_burner:
+    txn_usd_threshold: 50
+    txn_base_fee_cap_gwei: 1
+    txn_require_curve_quote: false
 txn_max_priority_fee_gwei: 2
 txn_max_gas_limit: 500000
 txn_start_price_buffer_bps: 1000

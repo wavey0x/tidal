@@ -110,7 +110,7 @@ class TxnService:
             if exec_result.error_message:
                 failed_messages.append(exec_result.error_message)
             return 0, 1, 0
-        if exec_result.status == KickStatus.USER_SKIPPED:
+        if exec_result.status in {KickStatus.USER_SKIPPED, KickStatus.SKIP}:
             return 0, 0, -1
         return 0, 0, 0
 
@@ -189,6 +189,7 @@ class TxnService:
         limit: int | None = None,
         token_address: str | None = None,
         allow_no_fill_retry: bool = False,
+        allow_killed_gauge: bool = False,
     ) -> TxnRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
@@ -207,6 +208,7 @@ class TxnService:
                     source_type=source_type, source_address=source_address,
                     auction_address=auction_address, limit=limit,
                     token_address=token_address, allow_no_fill_retry=allow_no_fill_retry,
+                    allow_killed_gauge=allow_killed_gauge,
                 )
         except LifecycleError as exc:
             if exc.code != "BUSY":
@@ -230,6 +232,7 @@ class TxnService:
         limit: int | None = None,
         token_address: str | None = None,
         allow_no_fill_retry: bool = False,
+        allow_killed_gauge: bool = False,
     ) -> TxnRunResult:
         # 1. INSERT txn_runs with status=RUNNING.
         self.txn_run_repository.create({
@@ -255,6 +258,7 @@ class TxnService:
             batch=batch,
             estimate_transactions=live,
             allow_no_fill_retry=allow_no_fill_retry,
+            allow_killed_gauge=allow_killed_gauge,
         )
 
         logger.info(

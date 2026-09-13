@@ -189,8 +189,9 @@ def _build_stub_planner(session, kick_tx_repo, preparer):
         batch=True,
         estimate_transactions=True,
         allow_no_fill_retry=False,
+        allow_killed_gauge=False,
     ):
-        del allow_no_fill_retry
+        del allow_no_fill_retry, allow_killed_gauge
         shortlist = build_shortlist(
             session,
             usd_threshold=100.0,

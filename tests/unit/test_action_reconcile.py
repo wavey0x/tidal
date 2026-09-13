@@ -133,31 +133,6 @@ def test_pending_query_is_bounded_and_includes_old_terminal_reports(database):
         assert repo.pending_receipt_transactions(older_than="2027", limit=0) == []
 
 
-@pytest.mark.parametrize("status,expected", [(1, "CONFIRMED"), (0, "REVERTED")])
-def test_receipt_route_uses_chain_evidence_and_recovers_after_timeout(database, monkeypatch, status, expected):
-    settings = Settings(db_path=database.engine.url.database, rpc_url="http://rpc.invalid")
-    app = create_app(settings)
-    app.dependency_overrides[get_operator] = lambda: SimpleNamespace(label="operator")
-    with database.session() as session:
-        action_id = seed(session, operation="deploy")
-    web3, receipt, _ = rpc(status=status)
-    web3.get_transaction_receipt.side_effect = [TimeoutError(), receipt, receipt]
-    monkeypatch.setattr("tidal.api.routes.actions.build_web3_client", lambda _: web3)
-    client = TestClient(app)
-    url = f"/api/v1/tidal/actions/{action_id}/receipt"
-    hint = {"txIndex": 0, "receiptStatus": "FAILED", "blockNumber": 999, "errorMessage": "client report"}
-    pending = client.post(url, json=hint).json()
-    assert pending["data"]["status"] == "BROADCAST_REPORTED"
-    assert pending["warnings"]
-    for _ in range(2):
-        verified = client.post(url, json=hint).json()
-        assert verified["data"]["status"] == expected
-        assert verified["data"]["transactions"][0]["blockNumber"] == 12
-        assert verified["data"]["transactions"][0]["errorMessage"] is None
-    assert web3.close.await_count == 3
-    app.state.database.engine.dispose()
-
-
 @pytest.mark.asyncio
 async def test_finalization_failure_rolls_back_both_ledgers(database, monkeypatch):
     with database.session() as session:
@@ -177,24 +152,6 @@ async def test_finalization_failure_rolls_back_both_ledgers(database, monkeypatc
     with database.session() as session:
         assert get_action(session, action_id)["status"] == "BROADCAST_REPORTED"
         assert session.execute(select(models.kick_txs.c.status)).scalar_one() == "SUBMITTED"
-
-
-@pytest.mark.asyncio
-async def test_api_lifespan_runs_reconciler_and_closes_client_on_shutdown(database, monkeypatch):
-    settings = Settings(db_path=database.engine.url.database, rpc_url="http://rpc.invalid")
-    web3, _, _ = rpc()
-    started = asyncio.Event()
-
-    async def check(*args):
-        started.set()
-
-    monkeypatch.setattr("tidal.api.services.action_reconcile.build_web3_client", lambda _: web3)
-    monkeypatch.setattr("tidal.api.services.action_reconcile.reconcile_pending_actions", check)
-    app = create_app(settings)
-    async with app.router.lifespan_context(app):
-        await asyncio.wait_for(started.wait(), timeout=1)
-        web3.close.assert_not_awaited()
-    web3.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

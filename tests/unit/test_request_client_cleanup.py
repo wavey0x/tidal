@@ -50,7 +50,7 @@ async def check_outcome(coroutine, outcome):
     if outcome == "cancel":
         with pytest.raises(asyncio.CancelledError):
             await task
-    elif outcome in {"error", "write_error"}:
+    elif outcome == "error":
         with pytest.raises(RuntimeError, match="fixture failure"):
             await task
     else:
@@ -64,7 +64,7 @@ def settings():
     return result
 
 
-@pytest.mark.parametrize("outcome", ["success", "noop", "error", "cancel", "write_error"])
+@pytest.mark.parametrize("outcome", ["success", "noop", "error", "cancel"])
 async def test_kick_prepare_closes_factory_owned_rpc_and_pricing_clients(monkeypatch, outcome):
     clients = []
 
@@ -84,13 +84,7 @@ async def test_kick_prepare_closes_factory_owned_rpc_and_pricing_clients(monkeyp
     async def plan_kick(self, **kwargs):
         return await phase(outcome, plan)
 
-    def record(*args, **kwargs):
-        if outcome == "write_error":
-            raise RuntimeError("fixture failure")
-        return "action-1"
-
     monkeypatch.setattr(KickPlanner, "plan", plan_kick)
-    monkeypatch.setattr(action_prepare, "create_prepared_action", record)
     await check_outcome(action_prepare.prepare_kick_action(
         object(), settings(), operator_id="test", source_type=None, source_address=None,
         auction_address=None, token_address=None, limit=1, sender=None,
@@ -124,7 +118,7 @@ async def test_partial_factory_failure_closes_already_created_client(monkeypatch
 
 
 @pytest.mark.parametrize("operation", ["settle", "sweep"])
-@pytest.mark.parametrize("outcome", ["success", "noop", "error", "cancel", "write_error"])
+@pytest.mark.parametrize("outcome", ["success", "noop", "error", "cancel"])
 async def test_settle_and_sweep_close_owned_rpc_on_every_exit(monkeypatch, operation, outcome):
     rpc = TrackedClient()
     preview = SimpleNamespace(read_ok=True, balance_raw=0 if outcome == "noop" else 1, path=5, receiver=AUCTION)
@@ -135,11 +129,6 @@ async def test_settle_and_sweep_close_owned_rpc_on_every_exit(monkeypatch, opera
     async def inspect(*args, **kwargs):
         return await phase(outcome, inspection)
 
-    def record(*args, **kwargs):
-        if outcome == "write_error":
-            raise RuntimeError("fixture failure")
-        return "action-1"
-
     monkeypatch.setattr(action_prepare, "build_web3_client", lambda settings: rpc)
     monkeypatch.setattr(action_prepare, "inspect_auction_settlement", inspect)
     monkeypatch.setattr(action_prepare, "decide_auction_settlement", lambda *args, **kwargs: decision)
@@ -147,7 +136,6 @@ async def test_settle_and_sweep_close_owned_rpc_on_every_exit(monkeypatch, opera
     monkeypatch.setattr(action_prepare, "build_auction_sweep_call", lambda **kwargs: call)
     monkeypatch.setattr(action_prepare, "_estimate_transaction", AsyncMock(return_value=(1, 1, None)))
     monkeypatch.setattr(action_prepare, "TokenRepository", lambda session: SimpleNamespace(get=lambda token: None))
-    monkeypatch.setattr(action_prepare, "create_prepared_action", record)
     prepare = action_prepare.prepare_settle_action if operation == "settle" else action_prepare.prepare_sweep_action
     kwargs = {"force": False} if operation == "settle" else {}
     await check_outcome(prepare(settings(), object(), operator_id="test", auction_address=AUCTION,

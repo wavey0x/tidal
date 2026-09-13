@@ -13,7 +13,6 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from tidal.api.errors import APIError
-from tidal.api.services.action_audit import create_prepared_action
 from tidal.api.services.deployment_rpc import run_deployment_rpc
 from tidal.async_resources import close_client
 from tidal.auction_price_units import decode_starting_price_amount, encode_starting_price_raw
@@ -154,33 +153,7 @@ async def prepare_kick_action(
     if not transactions:
         return plan.status(), warnings, {"preview": preview, "transactions": []}
 
-    action_id = create_prepared_action(
-        session,
-        operator_id=operator_id,
-        action_type="kick",
-        sender=sender,
-        request_payload={
-            "sourceType": source_type,
-            "sourceAddress": source_address,
-            "auctionAddress": auction_address,
-            "tokenAddress": token_address,
-            "limit": limit,
-            "minUsdValue": min_usd_value,
-            "sender": sender,
-            "requireCurveQuote": require_curve_quote,
-            "txnMaxGasLimit": effective_settings.txn_max_gas_limit,
-            "allowKilledGauge": allow_killed_gauge,
-            "allowNoFillRetry": allow_no_fill_retry,
-        },
-        preview_payload=preview,
-        transactions=transactions,
-        resource_address=auction_address or source_address,
-        auction_address=auction_address,
-        source_address=source_address,
-        token_address=token_address,
-    )
     return "ok", warnings, {
-        "actionId": action_id,
         "actionType": "kick",
         "preview": preview,
         "transactions": transactions,
@@ -386,20 +359,7 @@ async def prepare_deploy_action(
         starting_price=starting_price,
         salt=salt,
     )
-    action_id = create_prepared_action(
-        session,
-        operator_id=operator_id,
-        action_type="deploy",
-        sender=sender,
-        request_payload=request_payload,
-        preview_payload=preview_payload,
-        transactions=[tx],
-        resource_address=str(request_payload["receiver"]),
-        auction_address=_optional_normalize_address(preview_payload["predictedAuctionAddress"]),
-        source_address=str(request_payload["receiver"]),
-    )
     return "ok", warnings, {
-        "actionId": action_id,
         "actionType": "deploy",
         "preview": preview_payload,
         "transactions": [tx],
@@ -879,25 +839,7 @@ async def prepare_enable_tokens_action(
         _enable_tokens_transaction(settings, execution_plan=batch.execution_plan, sender=sender, gas_cap=gas_cap)
         for batch in batches
     ]
-    action_id = create_prepared_action(
-        session,
-        operator_id=operator_id,
-        action_type="enable_tokens",
-        sender=sender,
-        request_payload={
-            "auctionAddress": normalized_auction,
-            "sender": sender,
-            "extraTokens": extra_tokens,
-            "txnMaxGasLimit": gas_cap,
-        },
-        preview_payload=preview_payload,
-        transactions=transactions,
-        resource_address=normalized_auction,
-        auction_address=normalized_auction,
-        source_address=source.source_address,
-    )
     return "ok", warnings, {
-        "actionId": action_id,
         "actionType": "enable_tokens",
         "preview": preview_payload,
         "transactions": transactions,
@@ -1040,25 +982,7 @@ async def prepare_settle_action(
         if not transactions:
             return "noop", warnings, {"preview": preview_payload, "transactions": []}
 
-        action_id = create_prepared_action(
-            session,
-            operator_id=operator_id,
-            action_type="settle",
-            sender=sender,
-            request_payload={
-                "auctionAddress": normalized_auction,
-                "sender": sender,
-                "tokenAddress": normalized_token,
-                "force": force,
-            },
-            preview_payload=preview_payload,
-            transactions=transactions,
-            resource_address=normalized_auction,
-            auction_address=normalized_auction,
-            token_address=decision.operations[0].token_address if decision.operations else normalized_token,
-        )
         return "ok", warnings, {
-            "actionId": action_id,
             "actionType": "settle",
             "preview": preview_payload,
             "transactions": transactions,
@@ -1153,24 +1077,7 @@ async def prepare_sweep_action(
             }
         ]
 
-        action_id = create_prepared_action(
-            session,
-            operator_id=operator_id,
-            action_type="sweep",
-            sender=sender,
-            request_payload={
-                "auctionAddress": normalized_auction,
-                "sender": sender,
-                "tokenAddress": normalized_token,
-            },
-            preview_payload=preview_payload,
-            transactions=transactions,
-            resource_address=normalized_auction,
-            auction_address=normalized_auction,
-            token_address=normalized_token,
-        )
         return "ok", warnings, {
-            "actionId": action_id,
             "actionType": "sweep",
             "preview": preview_payload,
             "transactions": transactions,

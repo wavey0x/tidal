@@ -83,7 +83,7 @@ async def test_worker_failure_releases_admission():
     assert await deployment_rpc.run_deployment_rpc(lambda: 1) == 1
 
 
-async def test_operator_action_is_recorded_in_request_context(monkeypatch):
+async def test_operator_deploy_preview_is_stateless_and_runs_rpc_off_request_thread(monkeypatch):
     owner_thread = get_ident()
     session = object()
 
@@ -91,20 +91,14 @@ async def test_operator_action_is_recorded_in_request_context(monkeypatch):
         assert get_ident() != owner_thread
         return [], {"receiver": "0x" + "22" * 20}, {"predictedAuctionAddress": None}, {}
 
-    def record(received_session, **kwargs):
-        assert get_ident() == owner_thread
-        assert received_session is session
-        return "action-1"
-
     monkeypatch.setattr(action_prepare, "_build_deploy_prepare_payload", preview)
-    monkeypatch.setattr(action_prepare, "create_prepared_action", record)
     status, _, data = await action_prepare.prepare_deploy_action(
         SimpleNamespace(), session, operator_id="operator", want="0x" + "11" * 20,
         receiver="0x" + "22" * 20, sender=None, factory=None, governance=None,
         starting_price=1, salt=None,
     )
     assert status == "ok"
-    assert data["actionId"] == "action-1"
+    assert "actionId" not in data
 
 
 async def test_missing_rpc_is_an_api_error_not_system_exit():

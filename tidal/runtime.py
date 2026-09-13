@@ -301,7 +301,6 @@ def build_txn_service(
     owned_clients: AsyncExitStack | None = None,
 ):
     from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
-    from tidal.transaction_service.signer import TransactionSigner
 
     from tidal.pricing.token_price_agg import TokenPriceAggProvider as _TPA
 
@@ -314,15 +313,6 @@ def build_txn_service(
     kick_guard_status_repository = KickGuardStatusRepository(session)
 
     resolved_signer = signer
-    if (
-        resolved_signer is None
-        and settings.resolved_txn_keystore_path
-        and settings.txn_keystore_passphrase
-    ):
-        resolved_signer = TransactionSigner(
-            str(settings.resolved_txn_keystore_path),
-            settings.txn_keystore_passphrase,
-        )
 
     multicall_client = MulticallClient(
         web3_client,

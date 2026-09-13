@@ -30,7 +30,7 @@ def emit_operation(operation: Callable[[], dict], *, json_output: bool) -> None:
     elif payload["blockers"]:
         render_warning_panel([item["message"] for item in payload["blockers"]])
     else:
-        render_status_panel(payload["code"], [f"{key}: {value}" for key, value in payload["data"].items()])
+        render_status_panel(payload["code"], [f"{key}: {value}" for key, value in payload["data"].items()], border_style="green")
     if payload["blockers"]:
         raise typer.Exit(code=75 if payload["code"] == "BUSY" else 1)
 

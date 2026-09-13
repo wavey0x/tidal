@@ -249,12 +249,6 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
 
     monkeypatch.setattr("tidal.api.services.action_prepare.build_txn_service", fake_build_txn_service)
 
-    def fake_create_prepared_action(*args, **kwargs):  # noqa: ANN002, ANN003
-        del args
-        captured["request_payload"] = kwargs["request_payload"]
-        return "action-1"
-
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", fake_create_prepared_action)
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
@@ -275,10 +269,9 @@ async def test_prepare_kick_action_threads_curve_quote_override(monkeypatch) -> 
     assert captured["require_curve_quote"] is False
     assert captured["txn_max_gas_limit"] == 2_500_000
     assert captured["txn_usd_threshold"] == 200.0
-    assert captured["request_payload"]["allowKilledGauge"] is True
     assert status == "ok"
     assert warnings == []
-    assert data["actionId"] == "action-1"
+    assert "actionId" not in data
     preview_item = data["preview"]["preparedOperations"][0]
     assert preview_item["txIndex"] == 0
     assert preview_item["startingPriceDisplay"] == "2,750 USDC (+10.00% buffer)"
@@ -402,8 +395,6 @@ async def test_prepare_kick_action_skips_unsendable_batch_kick_when_gas_estimate
             )
         ),
     )
-    create_prepared_action = AsyncMock()
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", create_prepared_action)
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
@@ -434,7 +425,7 @@ async def test_prepare_kick_action_skips_unsendable_batch_kick_when_gas_estimate
             "reason": "Gas estimate failed: call to 0x3333…3333 failed: active auction",
         }
     ]
-    create_prepared_action.assert_not_called()
+    assert "actionId" not in data
 
 
 @pytest.mark.asyncio
@@ -484,7 +475,6 @@ async def test_prepare_enable_tokens_action_targets_auction_kicker(monkeypatch) 
 
     monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
     monkeypatch.setattr("tidal.api.services.action_prepare.AuctionTokenEnabler", lambda w3, settings: enabler)
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-enable")
 
     status, warnings, data = await prepare_enable_tokens_action(
         settings=SimpleNamespace(
@@ -583,7 +573,6 @@ async def test_prepare_enable_tokens_action_splits_batches_over_gas_cap(monkeypa
 
     monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
     monkeypatch.setattr("tidal.api.services.action_prepare.AuctionTokenEnabler", lambda w3, settings: enabler)
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-enable")
 
     status, warnings, data = await prepare_enable_tokens_action(
         settings=SimpleNamespace(
@@ -676,7 +665,6 @@ async def test_prepare_enable_tokens_action_uses_client_gas_cap_override(monkeyp
 
     monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
     monkeypatch.setattr("tidal.api.services.action_prepare.AuctionTokenEnabler", lambda w3, settings: enabler)
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-enable")
 
     status, warnings, data = await prepare_enable_tokens_action(
         settings=SimpleNamespace(
@@ -755,16 +743,8 @@ async def test_prepare_enable_tokens_action_resolves_fee_burner_want_alias(monke
         probe_tokens=lambda **kwargs: [eligible_probe],
         build_execution_plan=lambda **kwargs: execution_plan,
     )
-    created_action: dict[str, object] = {}
-
-    def create_action(*args, **kwargs):  # noqa: ANN002, ANN003
-        del args
-        created_action.update(kwargs)
-        return "action-enable"
-
     monkeypatch.setattr("tidal.api.services.action_prepare.build_sync_web3", lambda settings: object())
     monkeypatch.setattr("tidal.api.services.action_prepare.AuctionTokenEnabler", lambda w3, settings: enabler)
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", create_action)
 
     status, warnings, data = await prepare_enable_tokens_action(
         settings=SimpleNamespace(
@@ -799,8 +779,7 @@ async def test_prepare_enable_tokens_action_resolves_fee_burner_want_alias(monke
     assert warnings == ["Resolved yCRV Fee Burner want token to auction 0x1111111111111111111111111111111111111111."]
     assert inspect_calls == [auction_address]
     assert data["transactions"][0]["to"] == execution_plan.to_address
-    assert created_action["resource_address"] == auction_address
-    assert created_action["auction_address"] == auction_address
+    assert data["preview"]["preparedOperations"][0]["auctionAddress"] == auction_address
 
 
 @pytest.mark.asyncio
@@ -982,7 +961,6 @@ async def test_prepare_kick_action_threads_resolve_operations_from_planner(monke
         "tidal.api.services.action_prepare.build_txn_service",
         lambda settings, session, **kwargs: SimpleNamespace(planner=SimpleNamespace(plan=AsyncMock(return_value=plan))),
     )
-    monkeypatch.setattr("tidal.api.services.action_prepare.create_prepared_action", lambda *args, **kwargs: "action-1")
 
     status, warnings, data = await prepare_kick_action(
         session=object(),
@@ -1063,10 +1041,6 @@ async def test_prepare_settle_action_returns_noop_when_manual_sweep_is_required(
     monkeypatch.setattr(
         "tidal.api.services.action_prepare.TokenRepository",
         lambda session: SimpleNamespace(get=lambda token: SimpleNamespace(symbol="CJPY")),
-    )
-    monkeypatch.setattr(
-        "tidal.api.services.action_prepare.create_prepared_action",
-        lambda *args, **kwargs: pytest.fail("manual sweep fallback should not create an action row"),
     )
 
     status, warnings, data = await prepare_settle_action(
@@ -1230,10 +1204,6 @@ async def test_prepare_deploy_browser_action_is_stateless(monkeypatch) -> None:
             predicted_address_exists=False,
             existing_matches=[],
         ),
-    )
-    monkeypatch.setattr(
-        "tidal.api.services.action_prepare.create_prepared_action",
-        lambda *args, **kwargs: pytest.fail("browser deploy prepare should not create action rows"),
     )
 
     status, warnings, data = await prepare_deploy_browser_action(

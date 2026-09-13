@@ -29,9 +29,10 @@ class AuctionScanEnrichmentResult:
 
 
 class AuctionScanService:
-    def __init__(self, session: Session, settings: Settings) -> None:
+    def __init__(self, session: Session, settings: Settings, *, persist: bool = True) -> None:
         self.session = session
         self.settings = settings
+        self.persist = persist
         self.kick_logs = KickLogReadService(
             session,
             chain_id=settings.chain_id,
@@ -56,18 +57,17 @@ class AuctionScanService:
         checked_at = utcnow_iso()
         if round_payload and round_payload.get("round_id") is not None:
             round_id = int(round_payload["round_id"])
-            self.kick_logs.persist_auctionscan_match(
-                kick_id,
-                round_id=round_id,
-                checked_at=checked_at,
-                matched_at=checked_at,
-            )
+            if self.persist:
+                self.kick_logs.persist_auctionscan_match(
+                    kick_id, round_id=round_id, checked_at=checked_at, matched_at=checked_at,
+                )
             kick["auctionscan_round_id"] = round_id
             kick["auctionscan_last_checked_at"] = checked_at
             kick["auctionscan_matched_at"] = checked_at
             return self.kick_logs.build_auctionscan_response(kick, resolved=True, cached=False)
 
-        self.kick_logs.persist_auctionscan_check(kick_id, checked_at=checked_at)
+        if self.persist:
+            self.kick_logs.persist_auctionscan_check(kick_id, checked_at=checked_at)
         kick["auctionscan_last_checked_at"] = checked_at
         return self.kick_logs.build_auctionscan_response(kick, resolved=False, cached=False)
 

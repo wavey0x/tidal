@@ -11,7 +11,7 @@ from tidal.config import Settings
 
 class AuctionScanService(BaseAuctionScanService):
     def __init__(self, session: Session, settings: Settings) -> None:
-        super().__init__(session, settings)
+        super().__init__(session, settings, persist=False)
 
     async def resolve_kick_auctionscan(self, kick_id: int) -> dict[str, object]:
         try:

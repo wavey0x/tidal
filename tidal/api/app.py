@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +17,6 @@ from tidal.api.routes.auctions import router as auctions_router
 from tidal.api.routes.dashboard import router as dashboard_router
 from tidal.api.routes.kick import router as kick_router
 from tidal.api.routes.logs import router as logs_router
-from tidal.api.services.action_reconcile import run_action_reconciler
 from tidal.config import Settings
 from tidal.persistence.db import Database
 from tidal.security import redact_sensitive_text
@@ -32,19 +30,16 @@ def _is_sqlite_locked_error(exc: OperationalError) -> bool:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    resolved_settings = settings or Settings()
-    database = Database(resolved_settings.database_url)
+    resolved_settings = (settings or Settings()).model_copy(update={
+        "txn_keystore_path": None, "txn_keystore_passphrase": None,
+    })
+    database = Database(resolved_settings.database_url, read_only=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ANN202
-        task = asyncio.create_task(run_action_reconciler(database, resolved_settings)) if resolved_settings.rpc_url else None
         try:
             yield
         finally:
-            if task is not None:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
             database.engine.dispose()
 
     app = FastAPI(title="Tidal Control Plane", version="1.0.0", lifespan=lifespan)

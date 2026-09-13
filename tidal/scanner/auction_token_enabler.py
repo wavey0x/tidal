@@ -12,6 +12,7 @@ from tidal.chain.contracts.abis import AUCTION_ABI, AUCTION_KICKER_ABI
 from tidal.constants import YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS
 from tidal.normalizers import normalize_address
 from tidal.persistence.repositories import AuctionEnabledTokenRepository, KickTxRepository
+from tidal.lifecycle import LifecycleError
 from tidal.time import utcnow_iso
 from tidal.transaction_service.kick_shared import (
     _GAS_ESTIMATE_BUFFER,
@@ -89,6 +90,7 @@ class AuctionTokenEnablementService:
         max_gas_limit: int,
         chain_id: int,
         settings,
+        managed_executor=None,
     ) -> None:
         self.web3_client = web3_client
         self.auction_state_reader = auction_state_reader
@@ -100,6 +102,7 @@ class AuctionTokenEnablementService:
         self.max_gas_limit = max_gas_limit
         self.chain_id = chain_id
         self.settings = settings
+        self.managed_executor = managed_executor
         self.required_trade_handler = normalize_address(YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS)
 
     async def enable_missing_tokens(
@@ -441,107 +444,35 @@ class AuctionTokenEnablementService:
         now_iso = utcnow_iso()
         tx_data = self._batch_tx_data(batch)
         gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
-        nonce = await self.web3_client.get_transaction_count(self.signer.address)
-        max_fee_wei = int(self.base_fee_cap_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
-            "to": to_checksum_address(normalize_address(self.settings.auction_kicker_address)),
-            "data": tx_data,
-            "chainId": self.chain_id,
-            "gas": gas_limit,
-            "maxFeePerGas": max_fee_wei,
-            "maxPriorityFeePerGas": priority_fee_wei,
-            "nonce": nonce,
-            "type": 2,
+            "to": to_checksum_address(self.settings.auction_kicker_address),
+            "data": tx_data, "chainId": self.chain_id, "gas": gas_limit,
+            "maxFeePerGas": int(self.base_fee_cap_gwei * 10**9) + int(priority_fee_wei),
+            "maxPriorityFeePerGas": priority_fee_wei, "type": 2,
         }
-
+        if self.managed_executor is None:
+            raise RuntimeError("Managed execution must be configured before sending")
+        rows = [self._enable_row(
+            run_id=run_id, candidate=candidate, now_iso=now_iso, status="SUBMITTED",
+        ) for candidate in batch]
         try:
-            signed_tx = self.signer.sign_transaction(full_tx)
-            tx_hash = await self.web3_client.send_raw_transaction(signed_tx)
-        except Exception as exc:  # noqa: BLE001
-            return self._insert_failed_batch_rows(
-                run_id=run_id,
-                batch=batch,
-                status="ERROR",
-                error_message=f"send failed: {exc}",
-                stats=stats,
+            record = await self.managed_executor.submit(
+                transaction=full_tx, operations=rows, action="enable_tokens",
             )
-
+        except LifecycleError as exc:
+            return [self._candidate_error(candidate, code=exc.code, message=str(exc)) for candidate in batch]
         stats.enable_transactions_attempted += 1
-        row_ids = [
-            self._insert_enable_row(
-                run_id=run_id,
-                candidate=candidate,
-                now_iso=now_iso,
-                status="SUBMITTED",
-                tx_hash=tx_hash,
-            )
-            for candidate in batch
-        ]
-        logger.info(
-            "auction_token_enablement_submitted",
-            auction=batch[0].source.auction_address,
-            tokens=[candidate.token_address for candidate in batch],
-            tx_hash=tx_hash,
-        )
-
-        try:
-            receipt = await self.web3_client.get_transaction_receipt(tx_hash, timeout_seconds=120)
-        except Exception as exc:  # noqa: BLE001
-            stats.enable_transactions_submitted += 1
-            logger.warning("auction_token_enablement_receipt_timeout", tx_hash=tx_hash, error=str(exc))
-            return []
-
-        receipt_status = receipt.get("status", 0)
-        receipt_gas_used = receipt.get("gasUsed")
-        effective_gas_price = receipt.get("effectiveGasPrice")
-        receipt_block = receipt.get("blockNumber")
-        effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
-        final_status = "CONFIRMED" if receipt_status == 1 else "REVERTED"
-        for row_id in row_ids:
-            self.kick_tx_repository.update_status(
-                row_id,
-                status=final_status,
-                gas_used=receipt_gas_used,
-                gas_price_gwei=effective_gwei,
-                block_number=receipt_block,
-                error_message="enable-tokens transaction reverted" if final_status == "REVERTED" else None,
-            )
-
-        if final_status == "CONFIRMED":
+        if record["status"] == "CONFIRMED":
             stats.enable_transactions_confirmed += 1
             stats.tokens_confirmed += len(batch)
-            self.auction_enabled_token_repository.mark_tokens_enabled(
-                batch[0].source.auction_address,
-                [candidate.token_address for candidate in batch],
-                utcnow_iso(),
-            )
-            self.kick_tx_repository.session.commit()
-            logger.info(
-                "auction_token_enablement_confirmed",
-                tx_hash=tx_hash,
-                block_number=receipt_block,
-                gas_used=receipt_gas_used,
-                auction=batch[0].source.auction_address,
-                tokens=[candidate.token_address for candidate in batch],
-            )
-            return []
-
-        stats.enable_transactions_failed += 1
-        logger.warning(
-            "auction_token_enablement_reverted",
-            tx_hash=tx_hash,
-            block_number=receipt_block,
-            auction=batch[0].source.auction_address,
-            tokens=[candidate.token_address for candidate in batch],
-        )
-        return [
-            self._candidate_error(
-                candidate,
-                code="auction_enable_reverted",
-                message="enable-tokens transaction reverted",
-            )
-            for candidate in batch
-        ]
+        elif record["status"] == "REVERTED":
+            stats.enable_transactions_failed += 1
+            return [self._candidate_error(
+                candidate, code="auction_enable_reverted", message="enable-tokens transaction reverted",
+            ) for candidate in batch]
+        else:
+            stats.enable_transactions_submitted += 1
+        return []
 
     def _batch_tx_data(self, batch: list[AuctionEnableCandidate]) -> str | bytes:
         auction_address = batch[0].source.auction_address
@@ -583,7 +514,7 @@ class AuctionTokenEnablementService:
             for candidate in batch
         ]
 
-    def _insert_enable_row(
+    def _enable_row(
         self,
         *,
         run_id: str,
@@ -592,7 +523,7 @@ class AuctionTokenEnablementService:
         status: str,
         error_message: str | None = None,
         tx_hash: str | None = None,
-    ) -> int:
+    ) -> dict[str, object]:
         row: dict[str, object] = {
             "run_id": run_id,
             "operation_type": "enable_tokens",
@@ -613,7 +544,10 @@ class AuctionTokenEnablementService:
             row["error_message"] = error_message
         if tx_hash is not None:
             row["tx_hash"] = tx_hash
-        return self.kick_tx_repository.insert(row)
+        return row
+
+    def _insert_enable_row(self, **kwargs) -> int:
+        return self.kick_tx_repository.insert(self._enable_row(**kwargs))
 
     def _candidate_error(
         self,

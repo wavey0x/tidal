@@ -23,7 +23,7 @@ from tidal.errors import AddressNormalizationError
 from tidal.time import utcnow_iso
 
 INTERFACE_VERSION = 1
-SCHEMA_REVISION = "0028_application_identity"
+SCHEMA_REVISION = "0029_transaction_ledger"
 _locks: ContextVar[dict[Path, tuple[object, ...]]] = ContextVar("tidal_execution_locks", default={})
 
 
@@ -166,13 +166,14 @@ def activation_binding(database_identity: str, chain_id: int, signers: Mapping[s
     }
 
 
-def require_activation(path: Path, binding: dict) -> None:
+def require_activation(path: Path, binding: dict) -> dict:
     try:
         current = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise LifecycleError("HELD", "Execution is held; check readiness and explicitly resume.") from exc
     if not isinstance(current, dict) or any(current.get(key) != value for key, value in binding.items()):
         raise LifecycleError("HELD", "Activation does not match this database, chain and signer mapping.")
+    return current
 
 
 def clear_activation(path: Path) -> None:

@@ -201,7 +201,7 @@ def _candidate(token: str, *, source: AuctionEnableSource | None = None) -> Auct
     )
 
 
-def _service(session, *, web3_client: _FakeWeb3Client | None = None, state_reader=None):  # noqa: ANN001
+def _service(session, *, web3_client: _FakeWeb3Client | None = None, state_reader=None, managed_executor=None):  # noqa: ANN001
     return AuctionTokenEnablementService(
         web3_client=web3_client or _FakeWeb3Client(),
         auction_state_reader=state_reader or _FakeAuctionStateReader(),
@@ -213,13 +213,15 @@ def _service(session, *, web3_client: _FakeWeb3Client | None = None, state_reade
         max_gas_limit=500_000,
         chain_id=1,
         settings=SimpleNamespace(auction_kicker_address=KICKER),
+        managed_executor=managed_executor,
     )
 
 
 @pytest.mark.asyncio
-async def test_auto_enable_confirms_token_and_updates_cache(session) -> None:
+async def test_auto_enable_delegates_and_keeps_inclusion_provisional(session, recording_execution) -> None:
     web3_client = _FakeWeb3Client()
-    service = _service(session, web3_client=web3_client)
+    managed = recording_execution(session)
+    service = _service(session, web3_client=web3_client, managed_executor=managed)
 
     result = await service.enable_missing_tokens(
         run_id="run-1",
@@ -229,21 +231,23 @@ async def test_auto_enable_confirms_token_and_updates_cache(session) -> None:
 
     assert result.errors == []
     assert result.stats.eligible_tokens == 1
-    assert result.stats.tokens_confirmed == 1
-    assert len(web3_client.sent_data) == 1
+    assert result.stats.tokens_confirmed == 0
+    assert result.stats.enable_transactions_submitted == 1
+    assert web3_client.sent_data == []
+    submitted = managed.submit.call_args.kwargs
+    assert submitted["action"] == "enable_tokens"
+    assert bytes(submitted["transaction"]["data"]).decode().endswith(TOKEN_A)
+    assert "nonce" not in submitted["transaction"]
 
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["operation_type"] == "enable_tokens"
-    assert rows[0]["status"] == "CONFIRMED"
+    assert rows[0]["status"] == "SUBMITTED"
     assert rows[0]["auction_address"] == AUCTION
     assert rows[0]["token_address"] == TOKEN_A
 
     enabled_rows = session.execute(select(models.auction_enabled_tokens_latest)).mappings().all()
-    assert len(enabled_rows) == 1
-    assert enabled_rows[0]["auction_address"] == AUCTION
-    assert enabled_rows[0]["token_address"] == TOKEN_A
-    assert enabled_rows[0]["active"] == 1
+    assert enabled_rows == []
 
 
 @pytest.mark.asyncio
@@ -269,9 +273,10 @@ async def test_auto_enable_skips_unverified_and_already_enabled_sources(session)
 
 
 @pytest.mark.asyncio
-async def test_auto_enable_splits_batches_over_gas_cap(session) -> None:
+async def test_auto_enable_splits_batches_over_gas_cap(session, recording_execution) -> None:
     web3_client = _FakeWeb3Client()
-    service = _service(session, web3_client=web3_client)
+    managed = recording_execution(session)
+    service = _service(session, web3_client=web3_client, managed_executor=managed)
 
     result = await service.enable_missing_tokens(
         run_id="run-1",
@@ -281,13 +286,15 @@ async def test_auto_enable_splits_batches_over_gas_cap(session) -> None:
 
     assert result.errors == []
     assert result.stats.eligible_tokens == 3
-    assert result.stats.enable_transactions_confirmed == 3
-    assert result.stats.tokens_confirmed == 3
-    assert len(web3_client.sent_data) == 3
+    assert result.stats.enable_transactions_submitted == 3
+    assert result.stats.tokens_confirmed == 0
+    assert managed.submit.await_count == 3
+    assert all(call.kwargs["transaction"]["gas"] <= 500_000 for call in managed.submit.await_args_list)
+    assert web3_client.sent_data == []
 
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 3
-    assert {row["status"] for row in rows} == {"CONFIRMED"}
+    assert {row["status"] for row in rows} == {"SUBMITTED"}
 
 
 @pytest.mark.asyncio

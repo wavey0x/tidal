@@ -444,7 +444,7 @@ def test_kick_tx_builder_encodes_resolve_auction_with_force_flag() -> None:
 
 
 @pytest.mark.asyncio
-async def test_kick_executor_execute_resolve_auction_persists_confirmed_row(session) -> None:
+async def test_resolve_delegates_intent_and_preserves_provisional_operation(session, recording_execution) -> None:
     candidate = _candidate()
     prepared = PreparedResolveAuction(
         candidate=candidate,
@@ -488,14 +488,21 @@ async def test_kick_executor_execute_resolve_auction_persists_confirmed_row(sess
         max_priority_fee_gwei=2,
         max_gas_limit=500000,
         chain_id=1,
+        managed_executor=recording_execution(session),
     )
 
     result = await executor.execute_resolve_auction(prepared, "run-1")
 
-    assert result.status == KickStatus.CONFIRMED
+    assert result.status == KickStatus.SUBMITTED
+    web3_client.send_raw_transaction.assert_not_awaited()
+    web3_client.get_transaction_receipt.assert_not_awaited()
+    submitted = executor.managed_executor.submit.call_args.kwargs
+    assert submitted["transaction"]["data"] == "0xfeedface"
+    assert submitted["transaction"]["maxFeePerGas"] == 2_000_000_000
+    assert "nonce" not in submitted["transaction"]
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["operation_type"] == "resolve_auction"
-    assert rows[0]["status"] == "CONFIRMED"
+    assert rows[0]["status"] == "SUBMITTED"
     assert rows[0]["token_address"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert rows[0]["stuck_abort_reason"] == "inactive kicked lot with stranded inventory"

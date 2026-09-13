@@ -46,6 +46,7 @@ class KickExecutor:
         quote_spot_warning_threshold_pct: float = 2.0,
         logger_instance=None,
         operation_reconciler=None,
+        managed_executor=None,
     ) -> None:
         self.web3_client = web3_client
         self.signer = signer
@@ -61,13 +62,14 @@ class KickExecutor:
         self.quote_spot_warning_threshold_pct = Decimal(str(quote_spot_warning_threshold_pct))
         self.logger = logger_instance or logger
         self.operation_reconciler = operation_reconciler
+        self.managed_executor = managed_executor
 
     def _require_signer(self):
         if self.signer is None:
             raise RuntimeError("Signer is required for live execution.")
         return self.signer
 
-    def _insert_operation_tx(
+    def _operation_row(
         self,
         run_id: str,
         candidate: KickCandidate,
@@ -92,7 +94,7 @@ class KickExecutor:
         step_decay_rate_bps: int | None = None,
         normalized_balance: str | None = None,
         stuck_abort_reason: str | None = None,
-    ) -> int:
+    ) -> dict[str, object]:
         row: dict[str, object] = {
             "run_id": run_id,
             "operation_type": operation_type,
@@ -147,7 +149,20 @@ class KickExecutor:
             )
             if round_kick is not None:
                 row["round_kick_id"] = int(round_kick["id"])
-        return self.kick_tx_repository.insert(row)
+        return row
+
+    def _insert_operation_tx(self, *args, **kwargs) -> int:
+        return self.kick_tx_repository.insert(self._operation_row(*args, **kwargs))
+
+    def _managed_result(self, record: dict, operation_id: int, **values) -> KickResult:
+        persisted = self.kick_tx_repository.get(operation_id) or {}
+        status = KickStatus(record["status"]) if record["status"] in {"CONFIRMED", "REVERTED"} else KickStatus.SUBMITTED
+        return KickResult(
+            kick_tx_id=operation_id, status=status, tx_hash=record["tx_hash"],
+            gas_used=record.get("gas_used"), gas_price_gwei=record.get("gas_price_gwei"),
+            block_number=record.get("block_number"), sell_amount=persisted.get("sell_amount"),
+            error_message=record.get("error_message"), **values,
+        )
 
     def _fail(
         self,
@@ -461,142 +476,27 @@ class KickExecutor:
                     )
                 return results
 
-        nonce = await self.web3_client.get_transaction_count(signer.address)
         max_fee_wei = int(fee_base_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
-            "to": kicker_address,
-            "data": tx_data,
-            "chainId": self.chain_id,
-            "gas": gas_limit,
-            "maxFeePerGas": max_fee_wei,
-            "maxPriorityFeePerGas": priority_fee_wei,
-            "nonce": nonce,
-            "type": 2,
+            "to": kicker_address, "data": tx_data, "chainId": self.chain_id,
+            "gas": gas_limit, "maxFeePerGas": max_fee_wei,
+            "maxPriorityFeePerGas": priority_fee_wei, "type": 2,
         }
-        try:
-            signed_tx = signer.sign_transaction(full_tx)
-            tx_hash = await self.web3_client.send_raw_transaction(signed_tx)
-        except Exception as exc:
-            self.logger.error("txn_batch_send_failed", error=str(exc), batch_size=batch_size)
-            return self._fail_batch(
-                run_id,
-                prepared_kicks,
-                now_iso,
-                status=KickStatus.ERROR,
-                error_message=f"send failed: {exc}",
-            )
-
-        kick_tx_ids = []
-        for prepared_kick in prepared_kicks:
-            kick_tx_id = self._insert_operation_tx(
-                run_id,
-                prepared_kick.candidate,
-                now_iso,
-                operation_type="kick",
-                status=KickStatus.SUBMITTED,
-                tx_hash=tx_hash,
-                **self._pk_audit_kwargs(prepared_kick),
-            )
-            kick_tx_ids.append(kick_tx_id)
-
-        self.logger.info("txn_batch_submitted", tx_hash=tx_hash, batch_size=batch_size)
-
-        try:
-            receipt = await self.web3_client.get_transaction_receipt(tx_hash, timeout_seconds=120)
-        except Exception as exc:
-            self.logger.warning("txn_batch_receipt_timeout", tx_hash=tx_hash, error=str(exc))
-            return [
-                KickResult(
-                    kick_tx_id=kick_tx_ids[index],
-                    status=KickStatus.SUBMITTED,
-                    tx_hash=tx_hash,
-                    sell_amount=prepared_kick.sell_amount_str,
-                    starting_price=prepared_kick.starting_price_raw_str,
-                    minimum_price=prepared_kick.minimum_price_str,
-                    minimum_quote=prepared_kick.minimum_quote_str,
-                    live_balance_raw=prepared_kick.live_balance_raw,
-                    usd_value=prepared_kick.usd_value_str,
-                    error_message=f"receipt timeout: {exc}",
-                    execution_report=TransactionExecutionReport(
-                        operation="kick",
-                        sender=signer.checksum_address,
-                        tx_hash=tx_hash,
-                        broadcast_at=now_iso,
-                        chain_id=self.chain_id,
-                        gas_estimate=gas_estimate,
-                    ),
-                )
-                for index, prepared_kick in enumerate(prepared_kicks)
-            ]
-
-        receipt_status = receipt.get("status", 0)
-        receipt_gas_used = receipt.get("gasUsed")
-        effective_gas_price = receipt.get("effectiveGasPrice")
-        receipt_block = receipt.get("blockNumber")
-        effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
-        final_status = KickStatus.CONFIRMED if receipt_status == 1 else KickStatus.REVERTED
-
-        if final_status == KickStatus.CONFIRMED:
-            self.logger.info(
-                "txn_batch_confirmed",
-                tx_hash=tx_hash,
-                block_number=receipt_block,
-                gas_used=receipt_gas_used,
-                batch_size=batch_size,
-            )
-        else:
-            self.logger.warning(
-                "txn_batch_reverted",
-                tx_hash=tx_hash,
-                block_number=receipt_block,
-                batch_size=batch_size,
-            )
-
-        results = []
-        if self.operation_reconciler is not None:
-            await self.operation_reconciler.finalize_receipt(tx_hash, receipt)
-        for index, prepared_kick in enumerate(prepared_kicks):
-            if self.operation_reconciler is None:
-                self.kick_tx_repository.update_status(
-                    kick_tx_ids[index],
-                    status=final_status.value,
-                    gas_used=receipt_gas_used,
-                    gas_price_gwei=effective_gwei,
-                    block_number=receipt_block,
-                )
-            persisted = self.kick_tx_repository.get(kick_tx_ids[index]) or {}
-            results.append(
-                KickResult(
-                    kick_tx_id=kick_tx_ids[index],
-                    status=final_status,
-                    tx_hash=tx_hash,
-                    gas_used=receipt_gas_used,
-                    gas_price_gwei=effective_gwei,
-                    block_number=receipt_block,
-                    sell_amount=(
-                        str(persisted["sell_amount"])
-                        if persisted.get("sell_amount") is not None
-                        else None
-                    ),
-                    starting_price=prepared_kick.starting_price_raw_str,
-                    minimum_price=prepared_kick.minimum_price_str,
-                    minimum_quote=prepared_kick.minimum_quote_str,
-                    live_balance_raw=prepared_kick.live_balance_raw,
-                    usd_value=prepared_kick.usd_value_str,
-                    execution_report=TransactionExecutionReport(
-                        operation="kick",
-                        sender=signer.checksum_address,
-                        tx_hash=tx_hash,
-                        broadcast_at=now_iso,
-                        chain_id=self.chain_id,
-                        gas_estimate=gas_estimate,
-                        receipt_status=final_status.value,
-                        block_number=receipt_block,
-                        gas_used=receipt_gas_used,
-                    ),
-                )
-            )
-        return results
+        if self.managed_executor is None:
+            raise RuntimeError("Managed execution must be configured before sending")
+        operations = [self._operation_row(
+            run_id, prepared.candidate, now_iso, operation_type="kick",
+            status=KickStatus.SUBMITTED, **self._pk_audit_kwargs(prepared),
+        ) for prepared in prepared_kicks]
+        record = await self.managed_executor.submit(transaction=full_tx, operations=operations, action="kick")
+        return [self._managed_result(
+            record, operation_id,
+            starting_price=prepared.starting_price_raw_str,
+            minimum_price=prepared.minimum_price_str,
+            minimum_quote=prepared.minimum_quote_str,
+            live_balance_raw=prepared.live_balance_raw,
+            usd_value=prepared.usd_value_str,
+        ) for prepared, operation_id in zip(prepared_kicks, record["operation_ids"], strict=True)]
 
     async def execute_batch(
         self,
@@ -697,97 +597,19 @@ class KickExecutor:
         gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
         priority_fee_wei = await resolve_priority_fee_wei(self.web3_client, self.max_priority_fee_gwei)
         fee_base_gwei = base_fee_gwei if self.skip_base_fee_check else self.base_fee_cap_gwei
-        nonce = await self.web3_client.get_transaction_count(signer.address)
         max_fee_wei = int(fee_base_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
-            "to": intent.to,
-            "data": intent.data,
-            "chainId": self.chain_id,
-            "gas": gas_limit,
-            "maxFeePerGas": max_fee_wei,
-            "maxPriorityFeePerGas": priority_fee_wei,
-            "nonce": nonce,
-            "type": 2,
+            "to": intent.to, "data": intent.data, "chainId": self.chain_id,
+            "gas": gas_limit, "maxFeePerGas": max_fee_wei,
+            "maxPriorityFeePerGas": priority_fee_wei, "type": 2,
         }
-
-        try:
-            signed_tx = signer.sign_transaction(full_tx)
-            tx_hash = await self.web3_client.send_raw_transaction(signed_tx)
-        except Exception as exc:
-            return self._fail(
-                run_id,
-                prepared_operation.candidate,
-                now_iso,
-                operation_type="resolve_auction",
-                status=KickStatus.ERROR,
-                error_message=f"send failed: {exc}",
-                **op_kwargs,
-            )
-
-        kick_tx_id = self._insert_operation_tx(
-            run_id,
-            prepared_operation.candidate,
-            now_iso,
-            operation_type="resolve_auction",
-            status=KickStatus.SUBMITTED,
-            tx_hash=tx_hash,
-            **op_kwargs,
+        if self.managed_executor is None:
+            raise RuntimeError("Managed execution must be configured before sending")
+        row = self._operation_row(
+            run_id, prepared_operation.candidate, now_iso,
+            operation_type="resolve_auction", status=KickStatus.SUBMITTED, **op_kwargs,
         )
-
-        try:
-            receipt = await self.web3_client.get_transaction_receipt(tx_hash, timeout_seconds=120)
-        except Exception as exc:
-            return KickResult(
-                kick_tx_id=kick_tx_id,
-                status=KickStatus.SUBMITTED,
-                tx_hash=tx_hash,
-                sell_amount=str(prepared_operation.balance_raw),
-                error_message=f"receipt timeout: {exc}",
-                execution_report=TransactionExecutionReport(
-                    operation="resolve-auction",
-                    sender=signer.checksum_address,
-                    tx_hash=tx_hash,
-                    broadcast_at=now_iso,
-                    chain_id=self.chain_id,
-                    gas_estimate=gas_estimate,
-                ),
-            )
-
-        receipt_status = receipt.get("status", 0)
-        receipt_gas_used = receipt.get("gasUsed")
-        effective_gas_price = receipt.get("effectiveGasPrice")
-        receipt_block = receipt.get("blockNumber")
-        effective_gwei = str(round(effective_gas_price / 1e9, 4)) if effective_gas_price else None
-        final_status = KickStatus.CONFIRMED if receipt_status == 1 else KickStatus.REVERTED
-
-        if self.operation_reconciler is not None:
-            await self.operation_reconciler.finalize_receipt(tx_hash, receipt)
-        else:
-            self.kick_tx_repository.update_status(
-                kick_tx_id,
-                status=final_status.value,
-                gas_used=receipt_gas_used,
-                gas_price_gwei=effective_gwei,
-                block_number=receipt_block,
-            )
-
-        return KickResult(
-            kick_tx_id=kick_tx_id,
-            status=final_status,
-            tx_hash=tx_hash,
-            gas_used=receipt_gas_used,
-            gas_price_gwei=effective_gwei,
-            block_number=receipt_block,
-            sell_amount=str(prepared_operation.balance_raw),
-            execution_report=TransactionExecutionReport(
-                operation="resolve-auction",
-                sender=signer.checksum_address,
-                tx_hash=tx_hash,
-                broadcast_at=now_iso,
-                chain_id=self.chain_id,
-                gas_estimate=gas_estimate,
-                receipt_status=final_status.value,
-                block_number=receipt_block,
-                gas_used=receipt_gas_used,
-            ),
+        record = await self.managed_executor.submit(
+            transaction=full_tx, operations=[row], action="resolve_auction",
         )
+        return self._managed_result(record, record["operation_ids"][0])

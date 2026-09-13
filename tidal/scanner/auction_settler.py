@@ -17,6 +17,7 @@ from tidal.chain.contracts.abis import AUCTION_KICKER_ABI
 from tidal.chain.web3_client import Web3Client
 from tidal.constants import CORE_REWARD_TOKENS
 from tidal.persistence.repositories import KickTxRepository
+from tidal.lifecycle import LifecycleError
 from tidal.time import utcnow_iso
 from tidal.transaction_service.kick_shared import (
     _GAS_ESTIMATE_BUFFER,
@@ -83,6 +84,7 @@ class AuctionSettlementService:
         chain_id: int,
         settings,
         operation_reconciler=None,
+        managed_executor=None,
     ) -> None:
         self.web3_client = web3_client
         self.signer = signer
@@ -94,6 +96,7 @@ class AuctionSettlementService:
         self.chain_id = chain_id
         self.settings = settings
         self.operation_reconciler = operation_reconciler
+        self.managed_executor = managed_executor
 
     async def settle_stale_auctions(
         self,
@@ -283,120 +286,42 @@ class AuctionSettlementService:
             )
 
         gas_limit = min(int(gas_estimate * _GAS_ESTIMATE_BUFFER), self.max_gas_limit)
-        nonce = await self.web3_client.get_transaction_count(self.signer.address)
-        max_fee_wei = int(self.base_fee_cap_gwei * 10**9) + int(priority_fee_wei)
         full_tx = {
             "to": to_checksum_address(self.settings.auction_kicker_address),
-            "data": tx_data,
-            "chainId": self.chain_id,
-            "gas": gas_limit,
-            "maxFeePerGas": max_fee_wei,
-            "maxPriorityFeePerGas": priority_fee_wei,
-            "nonce": nonce,
-            "type": 2,
+            "data": tx_data, "chainId": self.chain_id, "gas": gas_limit,
+            "maxFeePerGas": int(self.base_fee_cap_gwei * 10**9) + int(priority_fee_wei),
+            "maxPriorityFeePerGas": priority_fee_wei, "type": 2,
         }
-
+        if self.managed_executor is None:
+            raise RuntimeError("Managed execution must be configured before sending")
+        row = self._settlement_row(
+            run_id=run_id, candidate=candidate, now_iso=now_iso, status="SUBMITTED",
+        )
         try:
-            signed_tx = self.signer.sign_transaction(full_tx)
-            tx_hash = await self.web3_client.send_raw_transaction(signed_tx)
-        except Exception as exc:  # noqa: BLE001
-            error_message = f"send failed: {exc}"
-            self._insert_settlement_row(
-                run_id=run_id,
-                candidate=candidate,
-                now_iso=now_iso,
-                status="ERROR",
-                error_message=error_message,
+            record = await self.managed_executor.submit(
+                transaction=full_tx, operations=[row], action="resolve_auction",
             )
-            stats.settlements_failed += 1
+        except LifecycleError as exc:
             return ScanItemError(
-                stage="AUCTION_SETTLEMENT",
-                error_code="auction_settlement_send_failed",
-                error_message=error_message,
-                source_type=candidate.source.source_type,
-                source_address=candidate.source.source_address,
+                stage="AUCTION_SETTLEMENT", error_code=exc.code, error_message=str(exc),
+                source_type=candidate.source.source_type, source_address=candidate.source.source_address,
                 token_address=candidate.token_address,
             )
-
         stats.settlements_attempted += 1
-        kick_tx_id = self._insert_settlement_row(
-            run_id=run_id,
-            candidate=candidate,
-            now_iso=now_iso,
-            status="SUBMITTED",
-            tx_hash=tx_hash,
-        )
-        logger.info(
-            "auction_settlement_submitted",
-            source_type=candidate.source.source_type,
-            source_address=candidate.source.source_address,
-            auction=candidate.source.auction_address,
-            token=candidate.token_address,
-            tx_hash=tx_hash,
-        )
-
-        try:
-            receipt = await self.web3_client.get_transaction_receipt(tx_hash, timeout_seconds=120)
-        except Exception as exc:  # noqa: BLE001
-            stats.settlements_submitted += 1
-            logger.warning("auction_settlement_receipt_timeout", tx_hash=tx_hash, error=str(exc))
-            return None
-
-        receipt_status = receipt.get("status", 0)
-        receipt_gas_used = receipt.get("gasUsed")
-        receipt_block = receipt.get("blockNumber")
-        final_status = "CONFIRMED" if receipt_status == 1 else "REVERTED"
-        if self.operation_reconciler is not None:
-            reconciliation_error = await self.operation_reconciler.finalize_receipt(tx_hash, receipt)
-            if reconciliation_error is not None:
-                stats.settlements_failed += 1
-                return ScanItemError(
-                    stage="OPERATION_RECONCILIATION",
-                    error_code=reconciliation_error,
-                    error_message="confirmed settlement evidence could not be reconciled",
-                    source_type=candidate.source.source_type,
-                    source_address=candidate.source.source_address,
-                    token_address=candidate.token_address,
-                )
-        else:
-            self.kick_tx_repository.update_status(
-                kick_tx_id,
-                status=final_status,
-                gas_used=receipt_gas_used,
-                block_number=receipt_block,
-                error_message="resolve transaction reverted" if final_status == "REVERTED" else None,
-            )
-
-        if final_status == "CONFIRMED":
+        if record["status"] == "CONFIRMED":
             stats.settlements_confirmed += 1
-            logger.info(
-                "auction_settlement_confirmed",
-                tx_hash=tx_hash,
-                block_number=receipt_block,
-                gas_used=receipt_gas_used,
-                auction=candidate.source.auction_address,
-                token=candidate.token_address,
+        elif record["status"] == "REVERTED":
+            stats.settlements_failed += 1
+            return ScanItemError(
+                stage="AUCTION_SETTLEMENT", error_code="auction_settlement_reverted",
+                error_message="resolve transaction reverted", source_type=candidate.source.source_type,
+                source_address=candidate.source.source_address, token_address=candidate.token_address,
             )
-            return None
+        else:
+            stats.settlements_submitted += 1
+        return None
 
-        stats.settlements_failed += 1
-        logger.warning(
-            "auction_settlement_reverted",
-            tx_hash=tx_hash,
-            block_number=receipt_block,
-            auction=candidate.source.auction_address,
-            token=candidate.token_address,
-        )
-        return ScanItemError(
-            stage="AUCTION_SETTLEMENT",
-            error_code="auction_settlement_reverted",
-            error_message="resolve transaction reverted",
-            source_type=candidate.source.source_type,
-            source_address=candidate.source.source_address,
-            token_address=candidate.token_address,
-        )
-
-    def _insert_settlement_row(
+    def _settlement_row(
         self,
         *,
         run_id: str,
@@ -405,7 +330,7 @@ class AuctionSettlementService:
         status: str,
         error_message: str | None = None,
         tx_hash: str | None = None,
-    ) -> int:
+    ) -> dict[str, object]:
         row: dict[str, object] = {
             "run_id": run_id,
             "operation_type": "resolve_auction",
@@ -432,4 +357,7 @@ class AuctionSettlementService:
             row["error_message"] = error_message
         if tx_hash is not None:
             row["tx_hash"] = tx_hash
-        return self.kick_tx_repository.insert(row)
+        return row
+
+    def _insert_settlement_row(self, **kwargs) -> int:
+        return self.kick_tx_repository.insert(self._settlement_row(**kwargs))

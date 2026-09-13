@@ -47,9 +47,10 @@ class _AlertService:
         return SimpleNamespace(transitions=())
 
 
-def _scanner(run_side_effect):  # noqa: ANN001, ANN202
+def _scanner(run_side_effect, tmp_path):  # noqa: ANN001, ANN202
     scanner = object.__new__(ScannerService)
     scanner.session = _Session()
+    scanner.execution_lock_path = tmp_path / "execution.lock"
     scanner.scan_run_repository = _RunRepository()
     scanner.alert_service = _AlertService()
     scanner.alert_dispatcher = SimpleNamespace(dispatch=AsyncMock())
@@ -63,9 +64,9 @@ def _scanner(run_side_effect):  # noqa: ANN001, ANN202
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["SUCCESS", "PARTIAL_SUCCESS"])
-async def test_completed_scans_use_one_post_commit_alert_hook(status: str) -> None:
+async def test_completed_scans_use_one_post_commit_alert_hook(status: str, tmp_path) -> None:
     result = ScanRunResult("run", status, 1, 1, 1, 1, 0)
-    scanner = _scanner(result)
+    scanner = _scanner(result, tmp_path)
 
     assert (await scanner.scan_once()).status == status
     assert scanner.alert_service.calls == 1
@@ -73,8 +74,34 @@ async def test_completed_scans_use_one_post_commit_alert_hook(status: str) -> No
 
 
 @pytest.mark.asyncio
-async def test_raised_scan_exception_finalizes_and_uses_same_alert_hook() -> None:
-    scanner = _scanner(RuntimeError("discovery unavailable"))
+async def test_scan_holds_shared_lock_through_observation_and_alert_evaluation(tmp_path):
+    import asyncio
+    from tidal.lifecycle import LifecycleError, execution_lock
+
+    scanner = _scanner(ScanRunResult("run", "SUCCESS", 1, 1, 1, 1, 0), tmp_path)
+
+    async def competing_command():
+        with pytest.raises(LifecycleError) as error:
+            with execution_lock(scanner.execution_lock_path):
+                pytest.fail("Other task must not mutate scan decisions")
+        assert error.value.code == "BUSY"
+
+    async def observe(**kwargs):
+        await asyncio.create_task(competing_command())
+        # The owning task can enter the same lock for a managed action.
+        with execution_lock(scanner.execution_lock_path):
+            return ScanRunResult("run", "SUCCESS", 1, 1, 1, 1, 0)
+
+    scanner._run_scan = observe
+    scanner.alert_dispatcher.dispatch = AsyncMock(side_effect=lambda _: None)
+    await scanner.scan_once()
+    with execution_lock(scanner.execution_lock_path):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_raised_scan_exception_finalizes_and_uses_same_alert_hook(tmp_path) -> None:
+    scanner = _scanner(RuntimeError("discovery unavailable"), tmp_path)
 
     with pytest.raises(RuntimeError, match="discovery unavailable"):
         await scanner.scan_once()

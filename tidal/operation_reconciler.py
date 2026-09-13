@@ -112,6 +112,7 @@ class DecodedReceipt:
     resolves: tuple[DecodedResolve, ...] = ()
     sweeps: tuple[DecodedSweep, ...] = ()
     settlements: tuple[DecodedSettlement, ...] = ()
+    enabled: tuple[DecodedSettlement, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,10 +132,12 @@ class OperationReconciler:
         web3_client,
         auction_kicker_address: str,
         chain_id: int = 1,
+        settings=None,
         decode_receipt_fn: Callable[[dict[str, object], Sequence[str]], DecodedReceipt]
         | None = None,
     ) -> None:
         self.session = session
+        self.lifecycle_settings = settings
         self.web3_client = web3_client
         self.auction_kicker_address = normalize_address(auction_kicker_address)
         self.trusted_kicker_addresses = {self.auction_kicker_address}
@@ -263,6 +266,25 @@ class OperationReconciler:
         self, tx_hash: str, receipt: dict[str, object]
     ) -> str | None:
         """Verify API intent and commit all receipt-derived state together."""
+        from sqlalchemy import select
+        from tidal.persistence import models
+        from tidal.transactions import LedgerReconciler
+
+        retained = self.session.execute(select(models.transactions).where(
+            models.transactions.c.tx_hash == tx_hash.lower(), models.transactions.c.legacy == 0,
+        )).mappings().first()
+        if retained is not None:
+            if self.lifecycle_settings is None:
+                return "native_reconciliation_settings_missing"
+            # New managed attempts can only be resolved from fresh, finalized
+            # evidence. Never let an old scanner callback bypass that contract.
+            native = LedgerReconciler(
+                session=self.session, settings=self.lifecycle_settings,
+                web3_client=self.web3_client, operation_reconciler=self,
+            )
+            await native.reconcile(transaction_ids=[int(retained["id"])])
+            row = native.repository.get(int(retained["id"]))
+            return str(row.get("error_message") or "transaction_review_required") if row["status"] == "REVIEW_REQUIRED" else None
         action_rows = self.action_repo.list_by_tx_hash(tx_hash)
         valid_actions: list[dict[str, object]] = []
         if action_rows:
@@ -389,6 +411,9 @@ class OperationReconciler:
                         values["error_message"] = (
                             "underlying AuctionKicked event missing"
                         )
+            elif operation_type == "enable_tokens":
+                if not any(item.auction_address == auction and item.token_address == token for item in decoded.enabled):
+                    values["error_message"] = "confirmed AuctionEnabled event missing"
             elif operation_type == "resolve_auction":
                 event = next(
                     (
@@ -773,11 +798,17 @@ class OperationReconciler:
 
         placed_by_pair: dict[tuple[str, str], list[int]] = {}
         settlements: list[DecodedSettlement] = []
+        enabled: list[DecodedSettlement] = []
         for auction_address in auctions:
             auction_receipt = _receipt_from_emitters(receipt, {normalize_address(auction_address)})
             auction = self.web3_client.contract(
                 to_checksum_address(auction_address), AUCTION_ABI
             )
+            for log in auction.events.AuctionEnabled().process_receipt(auction_receipt, errors=DISCARD):
+                enabled.append(DecodedSettlement(
+                    auction_address=normalize_address(auction_address),
+                    token_address=normalize_address(str(log["args"]["from"])),
+                ))
             for log in auction.events.AuctionKicked().process_receipt(
                 auction_receipt, errors=DISCARD
             ):
@@ -836,4 +867,5 @@ class OperationReconciler:
             resolves=resolves,
             sweeps=sweeps,
             settlements=tuple(settlements),
+            enabled=tuple(enabled),
         )

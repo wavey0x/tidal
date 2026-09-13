@@ -22,6 +22,7 @@ from tidal.chain.contracts.yearn import (
 )
 from tidal.chain.web3_client import Web3Client
 from tidal.config import Settings
+from tidal.execution import ManagedExecutor
 from tidal.constants import (
     YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS,
     YEARN_CURVE_FACTORY_ADDRESS,
@@ -154,6 +155,7 @@ def build_scanner_service(
         web3_client=web3_client,
         auction_kicker_address=settings.auction_kicker_address,
         chain_id=settings.chain_id,
+        settings=settings,
     )
 
     signer = None
@@ -167,6 +169,10 @@ def build_scanner_service(
         )
 
     auction_settler = None
+    managed_executor = ManagedExecutor(
+        settings=settings, session=session, web3_client=web3_client, signer=signer,
+        profile="scan", operation_reconciler=operation_reconciler,
+    ) if signer is not None else None
     if auto_settle:
         auction_settler = AuctionSettlementService(
             web3_client=web3_client,
@@ -179,6 +185,7 @@ def build_scanner_service(
             chain_id=settings.chain_id,
             settings=settings,
             operation_reconciler=operation_reconciler,
+            managed_executor=managed_executor,
         )
 
     auction_token_enabler = None
@@ -194,9 +201,11 @@ def build_scanner_service(
             max_gas_limit=settings.txn_max_gas_limit,
             chain_id=settings.chain_id,
             settings=settings,
+            managed_executor=managed_executor,
         )
 
     return ScannerService(
+        execution_lock_path=settings.resolved_home_path / "execution.lock",
         session=session,
         chain_id=settings.chain_id,
         concurrency=settings.scan_concurrency,
@@ -366,6 +375,14 @@ def build_txn_service(
         start_price_buffer_bps=settings.txn_start_price_buffer_bps,
         min_price_buffer_bps=settings.txn_min_price_buffer_bps,
     )
+    operation_reconciler = OperationReconciler(
+        session=session, web3_client=web3_client, auction_kicker_address=settings.auction_kicker_address,
+        chain_id=settings.chain_id, settings=settings,
+    )
+    managed_executor = ManagedExecutor(
+        settings=settings, session=session, web3_client=web3_client, signer=resolved_signer,
+        profile="kick", operation_reconciler=operation_reconciler,
+    ) if resolved_signer is not None else None
     executor = KickExecutor(
         web3_client=web3_client,
         signer=resolved_signer,
@@ -379,12 +396,8 @@ def build_txn_service(
         chain_id=settings.chain_id,
         confirm_fn=confirm_fn,
         quote_spot_warning_threshold_pct=settings.txn_quote_spot_warning_threshold_pct,
-        operation_reconciler=OperationReconciler(
-            session=session,
-            web3_client=web3_client,
-            auction_kicker_address=settings.auction_kicker_address,
-            chain_id=settings.chain_id,
-        ),
+        operation_reconciler=operation_reconciler,
+        managed_executor=managed_executor,
     )
     planner = KickPlanner(
         session=session,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import uuid
 from collections import Counter
 from collections.abc import Callable
@@ -10,6 +9,7 @@ from pathlib import Path
 
 import structlog
 
+from tidal.lifecycle import LifecycleError, execution_lock
 from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.time import utcnow_iso
 from tidal.transaction_service.types import (
@@ -193,36 +193,29 @@ class TxnService:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
 
-        lock_file = None
-        if live:
-            lock_file = self._acquire_lock()
-            if lock_file is None:
-                logger.warning("txn_lock_held", run_id=run_id)
-                return TxnRunResult(
-                    run_id=run_id,
-                    status="FAILED",
-                    candidates_found=0,
-                    kicks_attempted=0,
-                    kicks_succeeded=0,
-                    kicks_failed=0,
-                )
-
         try:
-            return await self._run(
-                run_id=run_id,
-                started_at=started_at,
-                live=live,
-                batch=batch,
-                source_type=source_type,
-                source_address=source_address,
-                auction_address=auction_address,
-                limit=limit,
-                token_address=token_address,
-                allow_no_fill_retry=allow_no_fill_retry,
+            with execution_lock(self.lock_path):
+                managed = getattr(self.executor, "managed_executor", None)
+                if live:
+                    if managed is None:
+                        raise LifecycleError("MISSING_SIGNER", "Live execution requires the configured managed sender.")
+                    managed._activation()
+                    self.kick_tx_repository.session.commit()
+                    await managed.reconciler.reconcile()
+                return await self._run(
+                    run_id=run_id, started_at=started_at, live=live, batch=batch,
+                    source_type=source_type, source_address=source_address,
+                    auction_address=auction_address, limit=limit,
+                    token_address=token_address, allow_no_fill_retry=allow_no_fill_retry,
+                )
+        except LifecycleError as exc:
+            if exc.code != "BUSY":
+                raise
+            logger.info("txn_lock_held", run_id=run_id)
+            return TxnRunResult(
+                run_id=run_id, status="BUSY", candidates_found=0,
+                kicks_attempted=0, kicks_succeeded=0, kicks_failed=0,
             )
-        finally:
-            if lock_file is not None:
-                self._release_lock(lock_file)
 
     async def _run(
         self,
@@ -290,7 +283,8 @@ class TxnService:
                 candidates=_candidate_order_log(plan.ranked_candidates),
             )
 
-        kicks_attempted = len(plan.resolve_operations) + len(plan.kick_operations)
+        kicks_attempted = 0 if live else len(plan.resolve_operations) + len(plan.kick_operations)
+        blocked_reason = None
         kicks_succeeded = 0
         kicks_failed = 0
         failed_messages: list[str] = []
@@ -309,29 +303,36 @@ class TxnService:
             kicks_failed += failure_delta
 
         if live:
-            for prepared_operation in plan.resolve_operations:
-                exec_result = await executor.execute_resolve_auction(prepared_operation, run_id)
-                s, f, a = self._tally_exec_result(exec_result, failed_messages)
-                kicks_succeeded += s
-                kicks_failed += f
-                kicks_attempted += a
+            try:
+                for prepared_operation in plan.resolve_operations:
+                    exec_result = await executor.execute_resolve_auction(prepared_operation, run_id)
+                    kicks_attempted += 1
+                    s, f, a = self._tally_exec_result(exec_result, failed_messages)
+                    kicks_succeeded += s
+                    kicks_failed += f
+                    kicks_attempted += a
 
-            kick_intent_count = sum(1 for intent in plan.tx_intents if intent.operation == "kick")
-            if plan.kick_operations:
-                if not batch or len(plan.kick_operations) == 1 or kick_intent_count != 1:
-                    for prepared_kick in plan.kick_operations:
-                        exec_result = await executor.execute_single(prepared_kick, run_id)
-                        s, f, a = self._tally_exec_result(exec_result, failed_messages)
-                        kicks_succeeded += s
-                        kicks_failed += f
-                        kicks_attempted += a
-                else:
-                    exec_results = await executor.execute_batch(plan.kick_operations, run_id)
-                    for exec_result in exec_results:
-                        s, f, a = self._tally_exec_result(exec_result, failed_messages)
-                        kicks_succeeded += s
-                        kicks_failed += f
-                        kicks_attempted += a
+                kick_intent_count = sum(1 for intent in plan.tx_intents if intent.operation == "kick")
+                if plan.kick_operations:
+                    if not batch or len(plan.kick_operations) == 1 or kick_intent_count != 1:
+                        for prepared_kick in plan.kick_operations:
+                            exec_result = await executor.execute_single(prepared_kick, run_id)
+                            kicks_attempted += 1
+                            s, f, a = self._tally_exec_result(exec_result, failed_messages)
+                            kicks_succeeded += s
+                            kicks_failed += f
+                            kicks_attempted += a
+                    else:
+                        exec_results = await executor.execute_batch(plan.kick_operations, run_id)
+                        kicks_attempted += len(exec_results)
+                        for exec_result in exec_results:
+                            s, f, a = self._tally_exec_result(exec_result, failed_messages)
+                            kicks_succeeded += s
+                            kicks_failed += f
+                            kicks_attempted += a
+            except LifecycleError as exc:
+                blocked_reason = f"{exc.code}: {exc}"
+                logger.info("txn_execution_waiting", run_id=run_id, reason=blocked_reason)
         else:
             now_iso = utcnow_iso()
             for prepared_operation in plan.resolve_operations:
@@ -342,6 +343,8 @@ class TxnService:
         candidates_found = len(plan.ranked_candidates)
         if not live:
             status = "DRY_RUN"
+        elif blocked_reason:
+            status = "WAITING"
         elif kicks_failed > 0 and kicks_succeeded == 0:
             status = "FAILED"
         elif kicks_failed > 0:
@@ -358,7 +361,7 @@ class TxnService:
             kicks_attempted=kicks_attempted,
             kicks_succeeded=kicks_succeeded,
             kicks_failed=kicks_failed,
-            error_summary=f"{kicks_failed} failures" if kicks_failed else None,
+            error_summary=blocked_reason or (f"{kicks_failed} failures" if kicks_failed else None),
         )
 
         logger.info(
@@ -371,6 +374,8 @@ class TxnService:
             failed=kicks_failed,
         )
 
+        if blocked_reason:
+            failed_messages.append(blocked_reason)
         failure_summary = None
         if failed_messages:
             failure_summary = dict(Counter(failed_messages))
@@ -387,19 +392,3 @@ class TxnService:
             limited_candidate_count=plan.limited_count,
             failure_summary=failure_summary,
         )
-
-    def _acquire_lock(self):
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = open(self.lock_path, "w")  # noqa: SIM115
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return lock_file
-        except OSError:
-            lock_file.close()
-            return None
-
-    def _release_lock(self, lock_file):
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        finally:
-            lock_file.close()

@@ -18,6 +18,8 @@ def scan_exit_code(status: str) -> int:
 
 
 def kick_exit_code(*, live: bool, status: str, candidates_found: int, kicks_failed: int) -> int:
+    if status in {"BUSY", "WAITING"}:
+        return 75
     if candidates_found == 0:
         return NOOP
     if not live:

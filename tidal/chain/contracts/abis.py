@@ -174,6 +174,15 @@ AUCTION_ABI = [
     {
         "anonymous": False,
         "inputs": [
+            {"indexed": True, "name": "from", "type": "address"},
+            {"indexed": True, "name": "to", "type": "address"},
+        ],
+        "name": "AuctionEnabled",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
             {"indexed": True, "internalType": "address", "name": "from", "type": "address"},
             {"indexed": False, "internalType": "uint256", "name": "available", "type": "uint256"},
         ],

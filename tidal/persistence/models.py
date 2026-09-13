@@ -262,6 +262,7 @@ kick_txs = Table(
     Column("usd_value", Text, nullable=True),
     Column("status", String, nullable=False),
     Column("tx_hash", String, nullable=True),
+    Column("transaction_id", Integer, ForeignKey("transactions.id"), nullable=True),
     Column("gas_used", Integer, nullable=True),
     Column("gas_price_gwei", Text, nullable=True),
     Column("block_number", Integer, nullable=True),
@@ -327,17 +328,26 @@ api_actions = Table(
     Column("updated_at", String, nullable=False),
 )
 
-api_action_transactions = Table(
-    "api_action_transactions",
+transactions = Table(
+    "transactions",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("action_id", String, nullable=False),
-    Column("tx_index", Integer, nullable=False),
+    Column("action_id", String, nullable=True),
+    Column("tx_index", Integer, nullable=True),
     Column("operation", String, nullable=False),
-    Column("to_address", String, nullable=False),
-    Column("data", Text, nullable=False),
-    Column("value", String, nullable=False),
-    Column("chain_id", Integer, nullable=False),
+    Column("to_address", String, nullable=True),
+    Column("data", Text, nullable=True),
+    Column("value", String, nullable=True),
+    Column("chain_id", Integer, nullable=True),
+    Column("signer", String, nullable=True),
+    Column("nonce", Integer, nullable=True),
+    Column("profile", String, nullable=True),
+    Column("status", String, nullable=False, server_default="RECORDED"),
+    Column("legacy", Integer, nullable=False, server_default="1"),
+    Column("block_hash", String, nullable=True),
+    Column("transaction_index", Integer, nullable=True),
+    Column("resolved_by_hash", String, nullable=True),
+    Column("operator_note", Text, nullable=True),
     Column("gas_estimate", Integer, nullable=True),
     Column("gas_limit", Integer, nullable=True),
     Column("tx_hash", String, nullable=True),
@@ -350,7 +360,19 @@ api_action_transactions = Table(
     Column("error_message", Text, nullable=True),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
+    CheckConstraint(
+        "legacy = 1 OR (chain_id IS NOT NULL AND signer IS NOT NULL AND nonce IS NOT NULL "
+        "AND tx_hash IS NOT NULL AND to_address IS NOT NULL AND data IS NOT NULL AND value IS NOT NULL)",
+        name="ck_transactions_recorded_identity",
+    ),
 )
+
+# Removed with the old prepare/report interfaces; both names address one table
+# while execution and the transition importer are switched over.
+api_action_transactions = transactions
+Index("ix_transactions_chain_hash", transactions.c.chain_id, transactions.c.tx_hash, unique=True)
+Index("ix_transactions_signer_nonce", transactions.c.chain_id, transactions.c.signer, transactions.c.nonce)
+Index("ix_transactions_unresolved", transactions.c.status, transactions.c.updated_at)
 
 Index("ix_strategy_token_balances_strategy_scanned", strategy_token_balances_latest.c.strategy_address, strategy_token_balances_latest.c.scanned_at)
 Index("ix_fee_burner_token_balances_scanned", fee_burner_token_balances_latest.c.fee_burner_address, fee_burner_token_balances_latest.c.scanned_at)

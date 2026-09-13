@@ -16,7 +16,9 @@ class Web3Client:
     """Wrapper around AsyncWeb3 with retry and timeout controls."""
 
     def __init__(self, rpc_url: str, *, timeout_seconds: int, retry_attempts: int):
-        self.w3 = AsyncWeb3(AsyncHTTPProvider(rpc_url))
+        # Reads use the bounded retries below. Provider-level retries also
+        # include sendRawTransaction, so disable that hidden second retry loop.
+        self.w3 = AsyncWeb3(AsyncHTTPProvider(rpc_url, exception_retry_configuration=None))
         self.timeout_seconds = timeout_seconds
         self.retry_attempts = retry_attempts
 
@@ -96,10 +98,10 @@ class Web3Client:
 
         return await call_with_retries(_call, attempts=self.retry_attempts)
 
-    async def get_transaction_count(self, address: str) -> int:
+    async def get_transaction_count(self, address: str, block_identifier: str = "pending") -> int:
         async def _call() -> int:
             count = await asyncio.wait_for(
-                self.w3.eth.get_transaction_count(to_checksum_address(address), "pending"),
+                self.w3.eth.get_transaction_count(to_checksum_address(address), block_identifier),
                 timeout=self.timeout_seconds,
             )
             return int(count)
@@ -124,7 +126,8 @@ class Web3Client:
             )
             return "0x" + tx_hash.hex()
 
-        return await call_with_retries(_call, attempts=self.retry_attempts)
+        # A lost response is an unresolved attempt, never an automatic resend.
+        return await _call()
 
     async def get_transaction_receipt(self, tx_hash: str, *, timeout_seconds: int = 120) -> dict[str, Any]:
         deadline = asyncio.get_event_loop().time() + timeout_seconds

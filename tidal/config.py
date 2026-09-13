@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     rpc_url: str | None = Field(default=None, alias="RPC_URL")
     db_path: Path | None = Field(default=None, alias="DB_PATH")
     chain_id: int = Field(default=1, alias="CHAIN_ID")
+    managed_signers: dict[str, str] = Field(default_factory=dict, alias="MANAGED_SIGNERS")
+    chain_read_max_age_seconds: int = Field(default=180, gt=0, alias="CHAIN_READ_MAX_AGE_SECONDS")
+    finality_max_age_seconds: int = Field(default=1800, gt=0, alias="FINALITY_MAX_AGE_SECONDS")
 
     scan_concurrency: int = Field(default=20, alias="SCAN_CONCURRENCY")
     rpc_timeout_seconds: int = Field(default=10, alias="RPC_TIMEOUT_SECONDS")

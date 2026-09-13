@@ -14,6 +14,7 @@ from tidal.cli_options import AutoEnableTokensOption, AutoSettleOption, ConfigOp
 from tidal.cli_validation import require_no_confirmation_for_unattended
 from tidal.cli_renderers import emit_json, render_scan_summary
 from tidal.errors import ConfigurationError
+from tidal.lifecycle import LifecycleError, result as lifecycle_result
 from tidal.logging import OutputMode, configure_logging
 from tidal.runtime import build_scanner_service
 
@@ -90,6 +91,14 @@ def scan_run(
     except ConfigurationError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    except LifecycleError as exc:
+        if json_output:
+            import json
+            typer.echo(json.dumps(lifecycle_result(exc.code, blockers=[{"code": exc.code, "message": str(exc)}])))
+        else:
+            from tidal.cli_renderers import render_warning_panel
+            render_warning_panel([str(exc)])
+        raise typer.Exit(code=75 if exc.code == "BUSY" else 1) from exc
     except typer.BadParameter as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc

@@ -281,6 +281,10 @@ def _build_txn_service(session, *, preparer=None, executor=None, planner=None, l
         preparer = MagicMock()
     if executor is None:
         executor = MagicMock()
+    # These tests isolate orchestration; real lifecycle enforcement is exercised
+    # by test_managed_execution and the native caller integration fixtures.
+    executor.managed_executor = MagicMock()
+    executor.managed_executor.reconciler.reconcile = AsyncMock(return_value=[])
     if not isinstance(getattr(preparer, "prepare_kick", None), AsyncMock):
         preparer.prepare_kick = AsyncMock(side_effect=lambda c, run_id, inspection=None: _make_prepared_kick(c))
     if not isinstance(getattr(executor, "execute_resolve_auction", None), AsyncMock):
@@ -529,6 +533,7 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
         )
 
     executor.record_prepare_failure = MagicMock(side_effect=_record_prepare_failure)
+    executor.managed_executor.reconciler.reconcile = AsyncMock(return_value=[])
 
     service = TxnService(
         executor=executor,

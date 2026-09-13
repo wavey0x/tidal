@@ -5,10 +5,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import structlog
 
 from tidal.config import MonitoredFeeBurner
+from tidal.lifecycle import execution_lock
+from tidal.paths import default_txn_lock_path
 from tidal.alerts.base import AlertSink
 from tidal.constants import ADDITIONAL_DISCOVERY_VAULTS, CORE_REWARD_TOKENS
 from tidal.normalizers import normalize_address, to_decimal_string
@@ -96,6 +99,7 @@ class ScannerService:
         operation_reconciliation_pairs_fn=None,
         alert_service=None,
         alert_dispatcher=None,
+        execution_lock_path: Path | None = None,
     ):
         del concurrency
         if (
@@ -141,8 +145,13 @@ class ScannerService:
         self.operation_reconciliation_pairs_fn = operation_reconciliation_pairs_fn
         self.alert_service = alert_service
         self.alert_dispatcher = alert_dispatcher
+        self.execution_lock_path = execution_lock_path or default_txn_lock_path()
 
     async def scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
+        with execution_lock(self.execution_lock_path):
+            return await self._scan_once(on_progress)
+
+    async def _scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
         self.scan_run_repository.create(

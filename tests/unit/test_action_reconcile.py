@@ -236,11 +236,12 @@ def test_broadcast_materialization_failure_leaves_neither_hash_nor_operations(da
 @pytest.mark.asyncio
 async def test_only_operations_for_verified_tx_index_are_finalized(database):
     second_auction = "0x" + "6" * 40
+    second_hash = "0x" + "6" * 64
     with database.session() as session:
         action_id = seed(session)
         first = APIActionRepository(session).get_action_transactions(action_id)[0]
         session.execute(models.api_action_transactions.insert().values(
-            **{key: value for key, value in first.items() if key != "id"} | {"tx_index": 1, "data": "0x5678"},
+            **{key: value for key, value in first.items() if key != "id"} | {"tx_index": 1, "data": "0x5678", "tx_hash": second_hash},
         ))
         action = APIActionRepository(session).get_action(action_id)
         preview = json.loads(action["preview_json"])
@@ -249,10 +250,10 @@ async def test_only_operations_for_verified_tx_index_are_finalized(database):
         })
         session.execute(models.api_actions.update().values(preview_json=json.dumps(preview)))
         session.commit()
-        record_broadcast(session, action_id, tx_index=1, tx_hash=TX_HASH, broadcast_at=NOW)
+        record_broadcast(session, action_id, tx_index=1, tx_hash=second_hash, broadcast_at=NOW)
         web3, receipt, _ = rpc(status=0)
         reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER)
-        assert await reconciler.finalize_receipt(TX_HASH, receipt) == "transaction_intent_mismatch"
+        assert await reconciler.finalize_receipt(TX_HASH, receipt) is None
         txs = get_action(session, action_id)["transactions"]
         assert [tx["receiptStatus"] for tx in txs] == ["REVERTED", None]
         operations = session.execute(select(models.kick_txs).order_by(models.kick_txs.c.id)).mappings().all()

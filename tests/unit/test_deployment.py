@@ -265,3 +265,10 @@ def test_daily_route_update_is_idempotent_and_preserves_existing_jobs():
     assert updated.index('/usr/local/sbin/tidal-backup') < updated.index('rsync -avz')
     with pytest.raises(ValueError):
         daily.integrate('different backup engine\n')
+
+
+def test_api_unit_removes_signing_environment_without_changing_worker_credentials():
+    units = deploy.unit_files('/release', '/config', '/state', 'wavey')
+    assert 'UnsetEnvironment=TXN_KEYSTORE_PATH TXN_KEYSTORE_PASSPHRASE' in units['tidal-api.service']
+    assert 'UnsetEnvironment' not in units['tidal.service']
+    assert 'UnsetEnvironment' not in units['tidal-kick.service']

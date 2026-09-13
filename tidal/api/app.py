@@ -19,7 +19,7 @@ from tidal.api.routes.auctions import router as auctions_router
 from tidal.api.routes.dashboard import router as dashboard_router
 from tidal.api.routes.kick import router as kick_router
 from tidal.api.routes.logs import router as logs_router
-from tidal.config import Settings
+from tidal.config import APISettings, Settings
 from tidal.persistence.db import Database
 from tidal.persistence import models
 from tidal.lifecycle import SCHEMA_REVISION
@@ -34,7 +34,7 @@ def _is_sqlite_locked_error(exc: OperationalError) -> bool:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    resolved_settings = (settings or Settings()).model_copy(update={
+    resolved_settings = (settings or APISettings()).model_copy(update={
         "txn_keystore_path": None, "txn_keystore_passphrase": None,
     })
     database = Database(resolved_settings.database_url, read_only=True)
@@ -106,4 +106,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-app = create_app(Settings())
+app = create_app(APISettings())

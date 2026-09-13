@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -13,6 +14,7 @@ from tidal.auth_cli import app as auth_app
 from tidal.auction_round_repair import AuctionRoundRepair
 from tidal.cli_renderers import render_status_panel, render_warning_panel
 from tidal.cli_context import CLIContext, normalize_cli_address
+from tidal.config import SIGNING_ENV_FIELDS, load_api_settings
 from tidal.cli_options import ConfigOption, JsonOption
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
@@ -207,8 +209,9 @@ def db_clear_no_fill_suspension(
 @api_app.command("serve")
 def api_serve(config: ConfigOption = None) -> None:
     configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config)
-    settings = cli_ctx.settings
+    if SIGNING_ENV_FIELDS.intersection(os.environ):
+        raise typer.BadParameter("Remove signing credentials from the API process environment before serving.")
+    settings = load_api_settings(config)
     uvicorn.run(
         create_app(settings),
         host=settings.tidal_api_host,

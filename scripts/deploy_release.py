@@ -75,7 +75,7 @@ def unit_files(release, config, state, user):
     workers = held + f'ConditionPathExists=!{state}/workers-held\n'
     return {
         'tidal-api.service': '[Unit]\nDescription=Tidal read-only API\nAfter=network.target\n' + held +
-            '\n[Service]\nType=simple\n' + common + f'ExecStart={cli} api serve --config {config}/server.yml\n'
+            '\n[Service]\nType=simple\n' + common + 'UnsetEnvironment=TXN_KEYSTORE_PATH TXN_KEYSTORE_PASSPHRASE\n' + f'ExecStart={cli} api serve --config {config}/server.yml\n'
             'Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n',
         'tidal.service': '[Unit]\nDescription=Tidal scanner and settlement cycle\nAfter=network-online.target\n' + workers +
             '\n[Service]\nType=oneshot\n' + common + f'ExecStart={cli} scan run --config {config}/server.yml --no-confirmation --auto-settle --auto-enable-tokens\n'

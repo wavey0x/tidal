@@ -85,3 +85,15 @@ def test_health_refuses_unusable_database_without_contacting_dependencies(tmp_pa
         assert response.status_code == 503 and response.json()["data"]["ready"] is False
     if state == "missing":
         assert not settings.resolved_db_path.exists()
+
+
+@pytest.mark.parametrize("field", ["TXN_KEYSTORE_PATH", "TXN_KEYSTORE_PASSPHRASE"])
+def test_api_serve_refuses_inherited_signing_credentials(monkeypatch, field):
+    from typer.testing import CliRunner
+    from tidal.cli import app
+    monkeypatch.setenv(field, "fixture-sensitive-value")
+    monkeypatch.setattr("tidal.server_cli.uvicorn.run", lambda *a, **k: pytest.fail("API must not start with signing credentials"))
+    response = CliRunner().invoke(app, ["api", "serve"])
+    assert response.exit_code == 2
+    assert "Remove signing credentials" in response.output
+    assert "fixture-sensitive-value" not in response.output

@@ -267,6 +267,21 @@ class Settings(BaseSettings):
         return (self.resolved_config_dir / path).resolve()
 
 
+SIGNING_ENV_FIELDS = frozenset({"TXN_KEYSTORE_PATH", "TXN_KEYSTORE_PASSPHRASE"})
+
+
+class APISettings(Settings):
+    """The same application configuration, without execution credentials."""
+
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
+        def read_only(source):
+            return lambda: {key: value for key, value in source().items()
+                            if key.upper() not in SIGNING_ENV_FIELDS}
+        return tuple(read_only(source) for source in
+                     (env_settings, init_settings, dotenv_settings, file_secret_settings))
+
+
 def _load_yaml_config(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -306,7 +321,7 @@ def _resolve_server_config_path(config_path: Path | None = None) -> Path:
     raise FileNotFoundError(f"Server config file not found. Pass --config or create {hint}.")
 
 
-def load_settings(config_path: Path | None = None) -> Settings:
+def _load_settings(config_path: Path | None, settings_type: type[Settings]) -> Settings:
     """Load the single configuration and its explicitly selected secret file."""
     resolved_config_path = _resolve_server_config_path(config_path)
     override = os.getenv("TIDAL_ENV_FILE")
@@ -318,10 +333,18 @@ def load_settings(config_path: Path | None = None) -> Settings:
     env_data = {
         key: value for key, value in dotenv_values(resolved_env_path).items() if value is not None
     } if resolved_env_path.is_file() else {}
-    settings = Settings(**{**config_data, **env_data})
+    settings = settings_type(**{**config_data, **env_data})
     settings.bind_runtime_paths(home_path=tidal_home(), config_path=resolved_config_path, env_path=resolved_env_path)
     settings.bind_kick_config(build_kick_config(kick_raw))
     return settings
+
+
+def load_settings(config_path: Path | None = None) -> Settings:
+    return _load_settings(config_path, Settings)
+
+
+def load_api_settings(config_path: Path | None = None) -> APISettings:
+    return _load_settings(config_path, APISettings)
 
 
 # Retain the server spelling for existing native callers of the same loader.

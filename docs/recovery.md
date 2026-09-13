@@ -139,3 +139,13 @@ they are evidence, not a second live database.
 After any new attempt, rollback must preserve that attempt's identity and nonce.
 Prefer forward repair. Restoring an earlier database after broadcasting can lose
 the only record of a transaction that still exists on chain.
+
+
+## API process configuration
+
+The API uses the same configuration through an API settings loader that excludes
+signing fields from every settings source. Its systemd unit removes inherited
+keystore path/passphrase variables, and direct `api serve` refuses an environment
+containing them. Worker configuration is unchanged. The API still runs under the
+same operating-system account as the workers: this separates process configuration,
+not filesystem authority. It is not a claim of isolation from a compromised API.

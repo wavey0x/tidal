@@ -241,3 +241,27 @@ def test_removed_fee_cap_aliases_cannot_override_native_policy(unified, monkeypa
 def test_shared_lock_lives_outside_replaceable_database_directory(unified):
     home, _, _ = unified
     assert default_txn_lock_path() == home / "execution.lock"
+
+
+@pytest.mark.parametrize("source", ["yaml", "secret_file", "environment"])
+def test_api_configuration_excludes_signing_credentials_without_changing_workers(unified, monkeypatch, source):
+    from tidal.config import load_api_settings
+    home, config, values = unified
+    credentials = {"TXN_KEYSTORE_PATH": "/fixture/key.json", "TXN_KEYSTORE_PASSPHRASE": "fixture-secret"}
+    if source == "yaml":
+        values.update({key.lower(): value for key, value in credentials.items()})
+        config.write_text(yaml.safe_dump(values))
+    elif source == "secret_file":
+        env = home / "server" / ".env"
+        env.parent.mkdir(parents=True)
+        env.write_text("\n".join(key + "=" + value for key, value in credentials.items()))
+    else:
+        for key, value in credentials.items():
+            monkeypatch.setenv(key, value)
+    api = load_api_settings()
+    workers = load_settings()
+    assert api.txn_keystore_path is None and api.txn_keystore_passphrase is None
+    assert workers.txn_keystore_path == "/fixture/key.json"
+    assert workers.txn_keystore_passphrase == "fixture-secret"
+    assert api.kick_config == workers.kick_config
+    assert api.resolved_config_path == workers.resolved_config_path

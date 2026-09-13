@@ -306,8 +306,13 @@ async def test_conflicting_receipt_block_remains_held(runtime):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finalized", [100, 102])
-async def test_explicit_replacement_requires_finality_and_never_confirms_original_business(runtime, finalized):
+@pytest.mark.parametrize("reported_status", ["SUBMITTED", "CONFIRMED"])
+async def test_explicit_replacement_requires_finality_and_never_confirms_original_business(runtime, finalized, reported_status):
     original = await submit(runtime)
+    if reported_status == "CONFIRMED":
+        runtime.session.execute(models.transactions.update().values(legacy=1))
+        runtime.session.execute(models.kick_txs.update().values(status="CONFIRMED"))
+        runtime.session.commit()
     replacement_hash = "0x" + "ef" * 32
     original_get_tx = runtime.rpc.get_transaction
 

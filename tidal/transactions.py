@@ -211,7 +211,6 @@ class LedgerReconciler:
             )
             self.session.execute(update(models.kick_txs).where(
                 models.kick_txs.c.transaction_id == transaction_id,
-                models.kick_txs.c.status == "SUBMITTED",
             ).values(status="SUPERSEDED", error_message="Original attempt superseded by verified finalized nonce consumption"))
             self.session.commit()
             return self.repository.get(transaction_id)

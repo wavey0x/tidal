@@ -1,11 +1,29 @@
 """Retained legacy preview-to-operation mapping, independent of retired HTTP reports."""
 from pathlib import Path
+import json
+import uuid
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from tidal.api.app import create_app
-from tidal.api.services.action_audit import create_prepared_action, record_broadcast
+from tidal.legacy_operations import ensure_legacy_operations
+from tidal.persistence import models
 from test_api_control_plane import _make_settings, _init_db, _seed_dashboard_data
+
+
+_original_previews = {}
+
+
+def create_prepared_action(session, *, action_type, preview_payload, transactions, **metadata):
+    """Fixture data from a retained original preview, not an active API job."""
+    action_id = str(uuid.uuid4())
+    action = {**metadata, "action_id": action_id, "action_type": action_type, "preview_json": json.dumps(preview_payload)}
+    source = [{"action_id": action_id, "tx_index": index, "operation": row["operation"],
+               "to_address": row["to"], "data": row["data"], "value": row["value"],
+               "chain_id": row["chainId"], "created_at": "2026-03-28", "updated_at": "2026-03-28"}
+              for index, row in enumerate(transactions)]
+    _original_previews[action_id] = action, source
+    return action_id
 
 
 def _record_action_transaction(client, headers, *, action_id, tx_index, tx_hash, block_number=123):
@@ -13,8 +31,14 @@ def _record_action_transaction(client, headers, *, action_id, tx_index, tx_hash,
     # been retired; native migration/evidence tests separately verify adoption.
     del headers, block_number
     with Session(create_engine(client.app.state.settings.database_url)) as session:
-        record_broadcast(session, action_id, tx_index=tx_index, tx_hash=tx_hash,
-                         broadcast_at=f"2026-03-28T00:0{tx_index + 1}:00+00:00")
+        action, source = _original_previews[action_id]
+        retained = {**source[tx_index], "tx_hash": tx_hash, "broadcast_at": f"2026-03-28T00:0{tx_index + 1}:00+00:00"}
+        transaction_id = session.execute(select(models.transactions.c.id).where(models.transactions.c.tx_hash == tx_hash)).scalar()
+        if transaction_id is None:
+            transaction_id = session.execute(models.transactions.insert().values(**retained, legacy=1, status="PENDING")).lastrowid
+        ensure_legacy_operations(session, action_row=action, tx_row=retained, source_transactions=source)
+        session.execute(models.kick_txs.update().where(models.kick_txs.c.tx_hash == tx_hash).values(transaction_id=transaction_id))
+        session.commit()
 
 
 def test_legacy_kick_action_without_tx_index_materializes_through_logs_kicks(tmp_path: Path) -> None:
@@ -343,7 +367,7 @@ def test_sweep_action_materializes_with_tx_index_zero(tmp_path: Path) -> None:
 
 
 
-def test_settle_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Path) -> None:
+def test_legacy_settle_preview_preserves_only_retained_identity_in_logs(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     _init_db(settings)
     _seed_dashboard_data(settings)
@@ -427,6 +451,8 @@ def test_settle_action_broadcast_and_receipt_materialize_kick_logs(tmp_path: Pat
     assert payload["data"]["kicks"][0]["txHash"] == tx_hash
     assert payload["data"]["kicks"][0]["operationType"] == "resolve_auction"
     assert payload["data"]["kicks"][0]["tokenSymbol"] == "CRV"
-    assert payload["data"]["kicks"][0]["wantSymbol"] == "USDC"
-    assert payload["data"]["kicks"][0]["sourceName"] == "Test Strategy"
+    # This old preview did not retain the want identity. Current strategy
+    # mapping is not substituted for missing historical intent.
+    assert payload["data"]["kicks"][0]["wantSymbol"] is None
+    assert payload["data"]["kicks"][0]["sourceName"] is None
     assert payload["data"]["kicks"][0]["stuckAbortReason"] == "live funded lot"

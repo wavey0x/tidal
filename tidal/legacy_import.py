@@ -15,7 +15,7 @@ from urllib.parse import quote
 from hexbytes import HexBytes
 from sqlalchemy import insert, select, update
 
-from tidal.api.services.action_audit import ensure_action_operations
+from tidal.legacy_operations import ensure_legacy_operations
 from tidal.lifecycle import LifecycleError, clear_activation, execution_lock
 from tidal.normalizers import normalize_address
 from tidal.persistence import models
@@ -78,9 +78,21 @@ def import_legacy(*, settings, session, source_database: Path, outbox: Path) -> 
         actions = {row["action_id"]: row for row in read_source(source_database, "api_actions")}
         prepared = {(row["action_id"], row["tx_index"]): row for row in read_source(source_database, "api_action_transactions")}
         reports = read_source(outbox, "action_report_outbox")
+        source_transactions = {}
+        for row in prepared.values():
+            source_transactions.setdefault(row["action_id"], []).append(row)
+        # Import useful intent for every retained API submission, including
+        # actions whose reports were already removed from the old outbox.
+        submissions = [
+            {"report_type": "broadcast", "action_id": row["action_id"], "tx_index": row["tx_index"],
+             "created_at": row.get("broadcast_at") or row["created_at"], "updated_at": row["updated_at"],
+             "payload_json": json.dumps({"txHash": row["tx_hash"], "txIndex": row["tx_index"],
+                                         "broadcastAt": row.get("broadcast_at")})}
+            for row in prepared.values() if row.get("tx_hash")
+        ]
         imported_ids: set[int] = set()
         try:
-            for report in reports:
+            for report in [*submissions, *reports]:
                 if report["report_type"] not in {"submission", "broadcast", "receipt"}:
                     raise LifecycleError("INVALID_LEGACY_SOURCE", "Unrecognized legacy report type.")
                 payload = json.loads(report["payload_json"])
@@ -135,7 +147,7 @@ def import_legacy(*, settings, session, source_database: Path, outbox: Path) -> 
                 if source and action:
                     # Only add missing operation evidence. Never rewrite the
                     # original rows' times, amounts or baseline/round links.
-                    ensure_action_operations(session, action_row=action, tx_row={
+                    ensure_legacy_operations(session, action_row=action, source_transactions=source_transactions[action["action_id"]], tx_row={
                         **source, "tx_hash": identity["tx_hash"],
                         "broadcast_at": payload.get("broadcastAt") or source.get("broadcast_at") or report["created_at"],
                     })

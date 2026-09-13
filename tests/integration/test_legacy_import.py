@@ -55,6 +55,47 @@ def retained(tmp_path, monkeypatch):
     database.engine.dispose()
 
 
+def test_retained_api_transaction_is_imported_even_without_an_outbox_report(retained):
+    settings, session, original, outbox = retained
+    preview = {"preparedOperations": [
+        {"operation": "kick", "txIndex": 0, "auctionAddress": TARGET,
+         "tokenAddress": "0x" + "3" * 40, "sellAmount": "99999999999999999999999999"},
+        {"operation": "kick", "txIndex": 0, "auctionAddress": TARGET,
+         "tokenAddress": "0x" + "4" * 40, "sellAmount": "7"},
+    ]}
+    with closing(sqlite3.connect(original)) as connection:
+        connection.execute("UPDATE api_actions SET preview_json=?", (json.dumps(preview),))
+        connection.execute("UPDATE api_action_transactions SET tx_hash=?, broadcast_at='original-submit-time'", (HASH,))
+        connection.commit()
+    outcome = run(retained)
+    assert outcome["reports_read"] == 0 and outcome["transactions_imported"] == 1
+    transaction = session.execute(select(models.transactions)).mappings().one()
+    rows = session.execute(select(models.kick_txs)).mappings().all()
+    assert transaction["status"] == "PENDING"
+    assert len(rows) == 2 and {row["transaction_id"] for row in rows} == {transaction["id"]}
+    assert {row["created_at"] for row in rows} == {"original-submit-time"}
+    assert rows[0]["requested_sell_amount"] == "99999999999999999999999999"
+    # Missing historical source identity stays missing; today's mapping is not evidence.
+    assert all(row["source_address"] is None for row in rows)
+    run(retained)
+    assert len(session.execute(select(models.kick_txs)).all()) == 2
+
+
+def test_index_free_multi_transaction_preview_is_not_guessed(retained):
+    settings, session, original, outbox = retained
+    with closing(sqlite3.connect(original)) as connection:
+        connection.execute("UPDATE api_actions SET preview_json=?", (json.dumps({
+            "preparedOperations": [{"operation": "kick", "auctionAddress": TARGET, "tokenAddress": "0x" + "3" * 40}],
+        }),))
+        connection.execute("UPDATE api_action_transactions SET tx_hash=?", (HASH,))
+        connection.execute("""INSERT INTO api_action_transactions
+            (action_id, tx_index, operation, to_address, data, value, chain_id, created_at, updated_at)
+            VALUES ('retained', 1, 'kick', ?, '0x5678', '0x0', 1, '2026-09-01', '2026-09-01')""", (TARGET,))
+        connection.commit()
+    run(retained)
+    assert session.execute(select(models.kick_txs)).first() is None
+    assert session.execute(select(models.transactions.c.status)).scalar_one() == "PENDING"
+
 def report(outbox, kind="submission", **overrides):
     payload = {"txIndex": 0, "txHash": HASH, "sender": SIGNER, "chainId": 1, "nonce": 7,
                "broadcastAt": "2026-09-01T02:03:04+00:00", **overrides}

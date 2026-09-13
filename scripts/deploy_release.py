@@ -218,7 +218,7 @@ class Deployment:
             raise ValueError('Candidate selects a different database or application home')
         return candidate, data, report['signers']
 
-    def protect(self, operation, repository):
+    def protect(self, operation, repository, configuration=None):
         protected = operation / 'originals'
         if (protected / 'manifest.json').exists():
             manifest = json.loads((protected / 'manifest.json').read_text())
@@ -226,6 +226,19 @@ class Deployment:
                 raise ValueError('Protected original state changed')
             return protected
         protected.mkdir(mode=0o700, exist_ok=True)
+        extra_sources = []
+        if configuration is not None:
+            configuration = Path(configuration)
+            extra_sources.extend(configuration / name for name in (*PRIVATE_FILES, 'preflight.json')
+                                 if (configuration / name).is_file())
+            if (configuration / 'preflight.json').is_file():
+                preflight = json.loads((configuration / 'preflight.json').read_text())
+                original_key = Path(preflight['original_keystore'])
+                if not original_key.is_absolute() or digest(original_key) != preflight['original_keystore_sha256']:
+                    raise ValueError('Original encrypted key changed after native configuration inspection')
+                extra_sources.append(original_key)
+                extra_sources.extend(Path(path) for key in ('legacy_configurations', 'legacy_secret_files')
+                                     for path in preflight[key].values())
         legacy = not (self.state / 'active.json').exists()
         if not legacy:
             record, old_release = self.check_active()
@@ -254,7 +267,8 @@ class Deployment:
         with tarfile.open(protected / 'legacy-configuration.tar.gz', 'w:gz') as archive:
             for path in (self.home, Path(repository), Path(self.user.pw_dir) / '.local/share/uv/tools/tidal',
                          Path(self.user.pw_dir) / 'server-backup/backup.sh',
-                         Path(self.user.pw_dir) / '.local/bin/tidal', Path(self.user.pw_dir) / '.local/bin/tidal-server'):
+                         Path(self.user.pw_dir) / '.local/bin/tidal', Path(self.user.pw_dir) / '.local/bin/tidal-server',
+                         *extra_sources):
                 if path.exists():
                     archive.add(path, arcname=str(path).lstrip('/'))
             for name in (*SERVICES, *TIMERS, *RETIRED):
@@ -313,7 +327,7 @@ class Deployment:
         write_json(journal_path, journal)
         self.hold(release)
         self.verify_no_old_process(repository)
-        protected = self.protect(operation, repository)
+        protected = self.protect(operation, repository, configuration)
         self.publish_originals(protected)
         journal['phase'] = 'protected'
         write_json(journal_path, journal)

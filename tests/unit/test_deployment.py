@@ -130,6 +130,26 @@ def test_original_tampering_refuses_retry_while_workers_remain_held(host):
     assert (host.app.state / 'workers-held').exists()
 
 
+def test_original_external_foundry_key_is_retained_and_checked(host, tmp_path):
+    config = tmp_path / 'input'
+    config.mkdir()
+    key = tmp_path / 'external-foundry/tidal-prod'
+    key.parent.mkdir()
+    key.write_text('original encrypted key without public address')
+    deploy.write_json(config / 'preflight.json', {'original_keystore': str(key),
+        'original_keystore_sha256': deploy.digest(key), 'legacy_configurations': {}, 'legacy_secret_files': {}})
+    operation = tmp_path / 'operation'
+    operation.mkdir()
+    protected = host.app.protect(operation, host.repository, config)
+    with deploy.tarfile.open(protected / 'legacy-configuration.tar.gz') as archive:
+        assert archive.extractfile(str(key).lstrip('/')).read() == key.read_bytes()
+    key.write_text('different key')
+    another = tmp_path / 'another-operation'
+    another.mkdir()
+    with pytest.raises(ValueError, match='key changed'):
+        host.app.protect(another, host.repository, config)
+
+
 def test_daily_capture_is_complete_verified_and_never_contains_activation(host, tmp_path):
     install(host)
     archive = tmp_path / 'release.tar.gz'

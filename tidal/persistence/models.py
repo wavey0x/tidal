@@ -310,25 +310,6 @@ alert_deliveries = Table(
     PrimaryKeyConstraint("delivery_key", "destination"),
 )
 
-api_actions = Table(
-    "api_actions",
-    metadata,
-    Column("action_id", String, primary_key=True),
-    Column("action_type", String, nullable=False),
-    Column("status", String, nullable=False),
-    Column("operator_id", String, nullable=False),
-    Column("sender", String, nullable=True),
-    Column("resource_address", String, nullable=True),
-    Column("auction_address", String, nullable=True),
-    Column("source_address", String, nullable=True),
-    Column("token_address", String, nullable=True),
-    Column("request_json", Text, nullable=False),
-    Column("preview_json", Text, nullable=False),
-    Column("error_message", Text, nullable=True),
-    Column("created_at", String, nullable=False),
-    Column("updated_at", String, nullable=False),
-)
-
 transactions = Table(
     "transactions",
     metadata,
@@ -368,9 +349,6 @@ transactions = Table(
     ),
 )
 
-# Removed with the old prepare/report interfaces; both names address one table
-# while execution and the transition importer are switched over.
-api_action_transactions = transactions
 Index("ix_transactions_chain_hash", transactions.c.chain_id, transactions.c.tx_hash, unique=True)
 Index("ix_transactions_signer_nonce", transactions.c.chain_id, transactions.c.signer, transactions.c.nonce)
 Index("ix_transactions_unresolved", transactions.c.status, transactions.c.updated_at)
@@ -399,11 +377,6 @@ Index(
     kick_txs.c.transaction_index,
 )
 Index("ix_alert_deliveries_occurrence_id", alert_deliveries.c.occurrence_id)
-Index("ix_api_actions_status_created", api_actions.c.status, api_actions.c.created_at.desc())
-Index("ix_api_actions_operator_created", api_actions.c.operator_id, api_actions.c.created_at.desc())
-Index("ix_api_action_transactions_action_tx_index", api_action_transactions.c.action_id, api_action_transactions.c.tx_index, unique=True)
-Index("ix_api_action_transactions_receipt_pending", api_action_transactions.c.tx_hash, api_action_transactions.c.receipt_status, api_action_transactions.c.broadcast_at)
-Index("ix_api_action_transactions_verification_pending", api_action_transactions.c.verified_at, api_action_transactions.c.updated_at)
 
 api_keys = Table(
     "api_keys",

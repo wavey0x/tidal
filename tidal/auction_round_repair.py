@@ -13,6 +13,8 @@ from tidal.auction_rounds import (
 )
 from tidal.chain.contracts.abis import AUCTION_ABI
 from tidal.normalizers import normalize_address
+from tidal.lifecycle import LifecycleError, execution_lock
+from tidal.transactions import TransactionRepository
 from tidal.operation_reconciler import OperationReconciler, ReconciliationError
 from tidal.persistence.repositories import KickTxRepository
 from tidal.time import utcnow_iso
@@ -26,6 +28,7 @@ class RepairPairAudit:
     reason_code: str | None
     live_on_chain: bool | None
     baseline_kick_ids: tuple[int, ...]
+    proposed_baseline_kick_ids: tuple[int, ...]
     passed: bool
 
 
@@ -53,17 +56,29 @@ class AuctionRoundRepair:
             web3_client=web3_client,
             auction_kicker_address=settings.auction_kicker_address,
             chain_id=settings.chain_id,
+            settings=settings,
         )
 
-    async def run(self, *, apply: bool) -> RepairReport:
+    async def run(self, *, auction: str, token: str, apply: bool) -> RepairReport:
+        """Inspect or repair exactly one selected pair, never the entire DB."""
+        pairs = {(normalize_address(auction), normalize_address(token))}
+        with execution_lock(self.settings.resolved_home_path / "execution.lock"):
+            if apply:
+                assert_history_repair_unblocked(self.session)
+                from tidal.recovery import chain_readiness
+                await chain_readiness(self.settings, self.web3_client)
+            return await self._run(pairs=pairs, apply=apply)
+
+    async def _run(self, *, pairs: set[tuple[str, str]], apply: bool) -> RepairReport:
         before = self._snapshot()
         errors: list[ReconciliationError] = []
-        pairs = self._pair_keys()
         if apply:
             tx_hashes = {
                 str(row["tx_hash"])
-                for row in self.repo.list_round_operations()
+                for auction, token in pairs
+                for row in self.repo.list_pair_operations(auction, token)
                 if row.get("tx_hash")
+                and not row.get("historical_baseline")
                 and row.get("operation_type")
                 in {"kick", "resolve_auction", "sweep_auction"}
             }
@@ -81,27 +96,20 @@ class AuctionRoundRepair:
                 )
             )
             self.reconciler.rebuild_round_links(pairs)
-            await self._baseline_unprovable_rounds(pairs)
-        pairs = await self._audit_pairs()
+            assert_history_repair_unblocked(self.session)
+            if not errors:
+                await self._baseline_unprovable_rounds(pairs)
+        audits = await self._audit_pairs(pairs)
         after = self._snapshot()
         mutations = sum(
             before.get(row_id) != after.get(row_id)
             for row_id in before.keys() | after.keys()
         )
         return RepairReport(
-            pairs=tuple(pairs),
+            pairs=tuple(audits),
             reconciliation_errors=tuple(errors),
             mutations=mutations,
         )
-
-    def _pair_keys(self) -> set[tuple[str, str]]:
-        return {
-            (
-                normalize_address(str(row["auction_address"])),
-                normalize_address(str(row["token_address"])),
-            )
-            for row in self.repo.list_round_operations()
-        }
 
     async def _baseline_unprovable_rounds(
         self,
@@ -165,8 +173,7 @@ class AuctionRoundRepair:
     def _snapshot(self) -> dict[int, dict[str, object]]:
         return {int(row["id"]): row for row in self.repo.list_round_operations()}
 
-    async def _audit_pairs(self) -> list[RepairPairAudit]:
-        pairs = sorted(self._pair_keys())
+    async def _audit_pairs(self, pairs) -> list[RepairPairAudit]:
         output: list[RepairPairAudit] = []
         for auction_address, token_address in pairs:
             rows = self.repo.list_pair_operations(auction_address, token_address)
@@ -213,7 +220,17 @@ class AuctionRoundRepair:
                     reason_code=reason,
                     live_on_chain=live,
                     baseline_kick_ids=baseline_kick_ids,
+                    proposed_baseline_kick_ids=tuple(round_.kick_id for round_ in unreviewed
+                        if round_.kick_id != all_rounds[0].kick_id or live is False),
                     passed=passed,
                 )
             )
         return output
+
+
+def assert_history_repair_unblocked(session) -> None:
+    """A baseline cannot make an unresolved send disappear from policy history."""
+    if TransactionRepository(session).unresolved() or any(
+        row.get("status") == "SUBMITTED" for row in KickTxRepository(session).list_round_operations()
+    ):
+        raise LifecycleError("UNRESOLVED_ATTEMPTS", "Reconcile retained attempts before applying any history baseline.")

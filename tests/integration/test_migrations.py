@@ -90,7 +90,7 @@ def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
 
     assert _LOGO_COLUMNS <= _token_columns(db_path)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0024_drop_token_logo_state")
 
     assert _LOGO_COLUMNS.isdisjoint(_token_columns(db_path))
     with sqlite3.connect(db_path) as connection:
@@ -107,8 +107,7 @@ def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
         "SUCCESS",
         "run-1",
     )
-    from tidal.lifecycle import SCHEMA_REVISION
-    assert revision == (SCHEMA_REVISION,)
+    assert revision == ("0024_drop_token_logo_state",)
 
     command.downgrade(config, "0023_bounded_retry_alerts")
 
@@ -201,7 +200,7 @@ def test_auction_history_baseline_migration_defaults_existing_rows(
             ),
         )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0025_add_auction_history_baselines")
 
     assert {
         "historical_baseline",

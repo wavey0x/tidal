@@ -147,10 +147,16 @@ def import_legacy(*, settings, session, source_database: Path, outbox: Path) -> 
                 if source and action:
                     # Only add missing operation evidence. Never rewrite the
                     # original rows' times, amounts or baseline/round links.
-                    ensure_legacy_operations(session, action_row=action, source_transactions=source_transactions[action["action_id"]], tx_row={
+                    operation_ids = ensure_legacy_operations(session, action_row=action, source_transactions=source_transactions[action["action_id"]], tx_row={
                         **source, "tx_hash": identity["tx_hash"],
                         "broadcast_at": payload.get("broadcastAt") or source.get("broadcast_at") or report["created_at"],
                     })
+                    associated = session.execute(select(models.kick_txs.c.id).where(
+                        models.kick_txs.c.tx_hash == identity["tx_hash"],
+                        models.kick_txs.c.run_id == f"api-action:{action['action_id']}",
+                    )).scalars().all()
+                    if any(row_id not in operation_ids for row_id in associated):
+                        raise LifecycleError("LEGACY_CONFLICT", "Retained API operation rows exceed the original preview's provable scope; preserve originals and review.")
                 session.execute(update(models.kick_txs).where(
                     models.kick_txs.c.tx_hash == identity["tx_hash"],
                     models.kick_txs.c.transaction_id.is_(None),

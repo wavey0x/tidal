@@ -7,7 +7,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from tidal.api.app import create_app
-from tidal.api.services.action_audit import create_prepared_action
 from tidal.auction_versions import AUCTION_V105_FACTORY_ADDRESS
 from tidal.config import Settings
 from tidal.persistence import models
@@ -650,8 +649,7 @@ def test_public_browser_deploy_prepare_route_does_not_create_action_rows(tmp_pat
 
     engine = create_engine(settings.database_url, future=True)
     with Session(engine, future=True) as session:
-        assert session.execute(select(models.api_actions)).mappings().all() == []
-        assert session.execute(select(models.api_action_transactions)).mappings().all() == []
+        assert session.execute(select(models.transactions)).mappings().all() == []
 
 
 def test_audited_deploy_prepare_route_still_requires_bearer_token(tmp_path: Path) -> None:

@@ -49,15 +49,16 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
 
     captured_urls: list[str] = []
 
-    def fake_run_migrations(database_url: str) -> None:
+    def fake_run_migrations(database_url: str, *args, **kwargs) -> None:
         captured_urls.append(database_url)
-        run_migrations(database_url)
+        run_migrations(database_url, *args, **kwargs)
 
     monkeypatch.delenv("DB_PATH", raising=False)
     monkeypatch.delenv("TIDAL_HOME", raising=False)
     monkeypatch.delenv("TIDAL_CONFIG", raising=False)
     monkeypatch.delenv("TIDAL_ENV_FILE", raising=False)
     monkeypatch.setattr("tidal.server_cli.run_migrations", fake_run_migrations)
+    monkeypatch.setattr("tidal.migrate_state.run_migrations", fake_run_migrations)
 
     cwd_a = project_root / "repo-a"
     cwd_b = project_root / "repo-b"

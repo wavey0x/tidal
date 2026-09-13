@@ -13,11 +13,11 @@ from tidal.auth_cli import app as auth_app
 from tidal.auction_round_repair import AuctionRoundRepair
 from tidal.cli_renderers import render_status_panel, render_warning_panel
 from tidal.cli_context import CLIContext, normalize_cli_address
-from tidal.cli_options import ConfigOption
+from tidal.cli_options import ConfigOption, JsonOption
 from tidal.logging import OutputMode, configure_logging
 from tidal.migrations import run_migrations
 from tidal.lifecycle import clear_activation, execution_lock
-from tidal.lifecycle_cli import db_check, db_import_legacy, hold
+from tidal.lifecycle_cli import db_check, db_import_legacy, hold, emit_operation
 from tidal.paths import default_activation_path, default_txn_lock_path
 from tidal.persistence.db import Database
 from tidal.persistence.repositories import KickTxRepository
@@ -79,15 +79,16 @@ def init_config(
 
 
 @db_app.command("migrate")
-def db_migrate(config: ConfigOption = None) -> None:
-    configure_logging(output_mode=OutputMode.TEXT)
-    cli_ctx = CLIContext(config)
-    if not cli_ctx.settings.resolved_db_path.is_file():
-        raise typer.BadParameter("Database is missing; use db init or restore explicitly.")
-    with execution_lock(default_txn_lock_path()):
-        clear_activation(default_activation_path())
-        run_migrations(cli_ctx.settings.database_url)
-    typer.echo("migrations applied")
+def db_migrate(
+    config: ConfigOption = None,
+    source_database: Path | None = typer.Option(None, "--source-database", help="Protected original pre-consolidation DB."),
+    outbox: Path | None = typer.Option(None, "--outbox", help="Protected matching original operator outbox."),
+    json_output: JsonOption = False,
+) -> None:
+    from tidal.migrate_state import migrate_state
+    configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
+    emit_operation(lambda: migrate_state(CLIContext(config).settings,
+        source_database=source_database, outbox=outbox), json_output=json_output)
 
 
 @db_app.command("init")
@@ -106,16 +107,19 @@ def db_init(config: ConfigOption = None) -> None:
 
 @db_app.command("repair-auction-rounds")
 def db_repair_auction_rounds(
+    auction: str = typer.Option(..., "--auction", help="Exact auction to review."),
+    token: str = typer.Option(..., "--token", help="Exact sell token to review."),
     config: ConfigOption = None,
+    json_output: JsonOption = False,
     apply: bool = typer.Option(
         False,
         "--apply",
-        help="Repair all retained receipts, round links, and inactive historical gaps.",
+        help="Repair this pair's evidence and baseline its reviewed inactive history gaps.",
     ),
 ) -> None:
     import asyncio
 
-    configure_logging(output_mode=OutputMode.TEXT)
+    configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
     cli_ctx = CLIContext(config)
     settings = cli_ctx.settings
     database = Database(settings.database_url)
@@ -128,40 +132,18 @@ def db_repair_auction_rounds(
                     session=session,
                     settings=settings,
                     web3_client=web3_client,
-                ).run(apply=apply)
+                ).run(auction=auction, token=token, apply=apply)
         finally:
             await web3_client.close()
+            database.engine.dispose()
 
-    report = asyncio.run(_run())
-    lines: list[str] = []
-    for pair in report.pairs:
-        live_suffix = " live" if pair.live_on_chain is True else ""
-        baseline_suffix = (
-            f" baseline={','.join(str(value) for value in pair.baseline_kick_ids)}"
-            if pair.baseline_kick_ids
-            else ""
-        )
-        audit_status = "OK" if pair.passed else "UNRESOLVED"
-        lines.append(
-            f"{pair.auction_address} {pair.token_address} "
-            f"{pair.outcome} {pair.reason_code or '-'}{live_suffix}{baseline_suffix} "
-            f"{audit_status}"
-        )
-    lines.append(f"Mutations: {report.mutations}")
-    render_status_panel(
-        "Auction round repair",
-        lines,
-        border_style="green" if report.passed else "yellow",
-    )
-    if report.reconciliation_errors:
-        render_warning_panel(
-            [
-                f"{len(report.reconciliation_errors)} receipt or settlement lookup(s) remain unresolved."
-            ]
-        )
-    if not report.passed:
-        raise typer.Exit(code=1)
-    typer.echo("auction round audit passed")
+    def run():
+        from dataclasses import asdict
+        from tidal.lifecycle import result
+        report = asyncio.run(_run())
+        return result("REPAIRED" if apply and report.passed else "REVIEW", data=asdict(report),
+            blockers=[] if report.passed else [{"code": "HISTORY_REVIEW_REQUIRED", "message": "Inspect this pair's evidence and proposed baseline IDs before applying a repair."}])
+    emit_operation(run, json_output=json_output)
 
 
 @db_app.command("clear-no-fill-suspension")
@@ -182,7 +164,7 @@ def db_clear_no_fill_suspension(
 
     cli_ctx = CLIContext(config)
     database = Database(cli_ctx.settings.database_url)
-    with database.session() as session:
+    with execution_lock(cli_ctx.settings.resolved_home_path / "execution.lock"), database.session() as session:
         repo = KickTxRepository(session)
         try:
             plan = plan_no_fill_suspension_clear(
@@ -191,6 +173,8 @@ def db_clear_no_fill_suspension(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         if apply:
+            from tidal.auction_round_repair import assert_history_repair_unblocked
+            assert_history_repair_unblocked(session)
             repo.update_fields(
                 plan.baseline_kick_id,
                 historical_baseline=1,

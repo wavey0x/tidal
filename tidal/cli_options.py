@@ -137,21 +137,3 @@ MinUsdValueOption = Annotated[
         help="Override the minimum cached USD value for kick candidate selection.",
     ),
 ]
-
-ApiBaseUrlOption = Annotated[
-    str | None,
-    typer.Option(
-        "--api-base-url",
-        envvar="TIDAL_API_BASE_URL",
-        help="Base URL for the Tidal control-plane API.",
-    ),
-]
-
-ApiKeyOption = Annotated[
-    str | None,
-    typer.Option(
-        "--api-key",
-        envvar="TIDAL_API_KEY",
-        help="API key for the Tidal control-plane API.",
-    ),
-]

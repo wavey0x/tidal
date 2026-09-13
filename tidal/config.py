@@ -167,20 +167,9 @@ class Settings(BaseSettings):
         default_factory=list,
         alias="MONITORED_FEE_BURNERS",
     )
-    tidal_api_base_url: str | None = Field(default="https://api.tidal.wavey.info", alias="TIDAL_API_BASE_URL")
     tidal_ui_base_url: str = Field(default="https://tidal.wavey.info", alias="TIDAL_UI_BASE_URL")
-    tidal_api_key: str | None = Field(default=None, alias="TIDAL_API_KEY")
     tidal_api_host: str = Field(default="0.0.0.0", alias="TIDAL_API_HOST")
     tidal_api_port: int = Field(default=8787, alias="TIDAL_API_PORT")
-    tidal_api_request_timeout_seconds: int = Field(default=30, alias="TIDAL_API_REQUEST_TIMEOUT_SECONDS")
-    tidal_api_receipt_reconcile_interval_seconds: int = Field(
-        default=30,
-        alias="TIDAL_API_RECEIPT_RECONCILE_INTERVAL_SECONDS",
-    )
-    tidal_api_receipt_reconcile_threshold_seconds: int = Field(
-        default=60,
-        alias="TIDAL_API_RECEIPT_RECONCILE_THRESHOLD_SECONDS",
-    )
     tidal_api_cors_allowed_origins: list[str] = Field(
         default_factory=list,
         alias="TIDAL_API_CORS_ALLOWED_ORIGINS",

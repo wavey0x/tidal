@@ -135,9 +135,9 @@ class LedgerReconciler:
         operation_rows = [dict(item) for item in self.session.execute(
             select(models.kick_txs).where(models.kick_txs.c.transaction_id == transaction_id)
         ).mappings()]
-        business_action = str(row["operation"]).replace("-", "_") in {
-            "kick", "resolve_auction", "settle", "sweep", "sweep_auction", "enable_tokens", "legacy_unknown",
-        }
+        # Legacy deployment is the sole retained transaction type without
+        # auction-operation rows. Unknown/aliased intent never grants success.
+        business_action = str(row["operation"]).replace("-", "_") != "deploy"
         if not operation_rows and (not row["legacy"] or business_action):
             self.repository.update(transaction_id, status="REVIEW_REQUIRED", error_message="Managed transaction has no linked business operations", **common)
             self.session.commit()
@@ -162,7 +162,7 @@ class LedgerReconciler:
                     models.kick_txs.c.tx_hash == row["tx_hash"], models.kick_txs.c.transaction_id.is_(None),
                 ).values(transaction_id=transaction_id))
                 outcome = "CONFIRMED" if rpc_int(receipt["status"]) == 1 else "REVERTED"
-                if outcome == "CONFIRMED" and row["operation"] == "enable_tokens":
+                if outcome == "CONFIRMED" and str(row["operation"]).replace("-", "_") == "enable_tokens":
                     for auction in {item["auction_address"] for item in operation_rows}:
                         AuctionEnabledTokenRepository(self.session).mark_tokens_enabled(
                             str(auction), [str(item["token_address"]) for item in operation_rows if item["auction_address"] == auction],

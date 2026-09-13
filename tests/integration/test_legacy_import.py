@@ -40,7 +40,7 @@ def retained(tmp_path, monkeypatch):
         with closing(sqlite3.connect(target)) as destination:
             connection.backup(destination)
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{target}")
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0030_recovery_notifications")
     with closing(sqlite3.connect(outbox)) as connection:
         connection.execute("""CREATE TABLE action_report_outbox (
             id INTEGER PRIMARY KEY, base_url TEXT, action_id TEXT, tx_index INTEGER,
@@ -48,7 +48,9 @@ def retained(tmp_path, monkeypatch):
         connection.commit()
     settings = Settings(DB_PATH=target, MANAGED_SIGNERS={"scan": SIGNER, "kick": SIGNER})
     database = Database(settings.database_url)
-    binding = activation_binding(inspect_database(target)["database_identity"], 1, settings.managed_signers)
+    with closing(sqlite3.connect(target)) as connection:
+        identity = connection.execute("SELECT database_identity FROM app_metadata WHERE id=1").fetchone()[0]
+    binding = activation_binding(identity, 1, settings.managed_signers)
     write_activation(tmp_path / "activation.json", binding)
     with database.session() as session:
         yield settings, session, original, outbox

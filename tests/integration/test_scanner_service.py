@@ -1,4 +1,6 @@
 from pathlib import Path
+import sqlite3
+from contextlib import closing
 
 import pytest
 from sqlalchemy import create_engine, event, select
@@ -12,7 +14,6 @@ from tidal.persistence import models
 from tidal.persistence.repositories import (
     AuctionEnabledTokenRepository,
     AuctionEnabledTokenScanRepository,
-    APIActionRepository,
     BalanceRepository,
     FeeBurnerRepository,
     FeeBurnerTokenBalanceRepository,
@@ -175,33 +176,21 @@ class FakeTokenPriceRefreshService:
         )
 
 
-class ActionAuditProbePriceService:
+class SQLiteSnapshotProbePriceService:
     def __init__(self, engine) -> None:  # noqa: ANN001
         self.engine = engine
 
     async def refresh_many(self, *, run_id: str, tokens):  # noqa: ANN001, ANN201
         del run_id
         tokens = list(tokens)
-        now = "2026-08-09T00:00:00+00:00"
-        with Session(self.engine) as action_session:
-            APIActionRepository(action_session).create(
-                action_row={
-                    "action_id": "concurrent-action",
-                    "action_type": "kick",
-                    "status": "PREPARED",
-                    "operator_id": "contention-test",
-                    "sender": None,
-                    "resource_address": None,
-                    "auction_address": None,
-                    "source_address": None,
-                    "token_address": None,
-                    "request_json": "{}",
-                    "preview_json": "{}",
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                transaction_rows=[],
-            )
+        with closing(sqlite3.connect(self.engine.url.database, timeout=0.1)) as source:
+            # A write-lock probe preserves the original short-transaction
+            # contract without reintroducing a second application writer.
+            source.execute("BEGIN IMMEDIATE")
+            source.rollback()
+            with closing(sqlite3.connect(self.engine.url.database + ".snapshot")) as snapshot:
+                source.backup(snapshot)
+                assert snapshot.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         return (
             {
                 "tokens_seen": len(tokens),
@@ -503,7 +492,7 @@ async def test_scanner_releases_sqlite_writer_before_price_refresh(tmp_path: Pat
                 token_repository=TokenRepository(session),
                 erc20_reader=FakeERC20Reader(),
             ),
-            token_price_refresh_service=ActionAuditProbePriceService(engine),
+            token_price_refresh_service=SQLiteSnapshotProbePriceService(engine),
             balance_reader=FakeBalanceReader(),
             auction_settler=None,
             auction_token_enabler=None,
@@ -536,12 +525,9 @@ async def test_scanner_releases_sqlite_writer_before_price_refresh(tmp_path: Pat
         result = await scanner.scan_once()
         assert result.status == "SUCCESS"
 
-    with Session(engine) as verification_session:
-        assert verification_session.execute(
-            select(models.api_actions.c.action_id).where(
-                models.api_actions.c.action_id == "concurrent-action"
-            )
-        ).scalar_one() == "concurrent-action"
+    with closing(sqlite3.connect(str(tmp_path / "contention.db") + ".snapshot")) as snapshot:
+        assert snapshot.execute("SELECT status FROM scan_runs").fetchone() == ("RUNNING",)
+        assert snapshot.execute("SELECT count(*) FROM strategy_token_balances_latest").fetchone()[0] > 0
 
 
 @pytest.mark.asyncio

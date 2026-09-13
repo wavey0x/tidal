@@ -56,7 +56,7 @@ def test_one_transaction_row_keeps_all_business_rows_round_links_and_policy_fact
         add_operation(connection, operation="resolve_auction", round_id=kick_id)
         connection.commit()
         before = [dict(row) for row in connection.execute("SELECT * FROM kick_txs ORDER BY id")]
-    command.upgrade(config, "head")
+    command.upgrade(config, "0029_transaction_ledger")
     with closing(sqlite3.connect(path)) as connection:
         connection.row_factory = sqlite3.Row
         transactions = [dict(row) for row in connection.execute("SELECT * FROM transactions")]
@@ -81,7 +81,7 @@ def test_conflicting_duplicate_identity_stops_before_replacing_source_tables(tmp
                    sender=TARGET if changed == "signer" else SENDER)
         connection.commit()
     with pytest.raises(RuntimeError, match="Conflicting retained transaction intents"):
-        command.upgrade(config, "head")
+        command.upgrade(config, "0029_transaction_ledger")
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT count(*) FROM api_action_transactions").fetchone() == (2,)
         assert connection.execute("SELECT 1 FROM sqlite_master WHERE name='transactions'").fetchone() is None
@@ -92,7 +92,7 @@ def test_unknown_legacy_submission_is_explicit_and_never_gets_an_invented_identi
     with closing(sqlite3.connect(path)) as connection:
         add_operation(connection, tx_hash=None)
         connection.commit()
-    command.upgrade(config, "head")
+    command.upgrade(config, "0029_transaction_ledger")
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute(
             "SELECT status, legacy, tx_hash, signer, nonce, chain_id, to_address, data, value FROM transactions"
@@ -106,7 +106,7 @@ def test_retained_scanner_transactions_are_linked_without_rewriting_history(tmp_
         first = add_operation(connection, status="CONFIRMED")
         second = add_operation(connection, status="CONFIRMED")
         connection.commit()
-    command.upgrade(config, "head")
+    command.upgrade(config, "0029_transaction_ledger")
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT count(*) FROM transactions").fetchone() == (1,)
         assert connection.execute("SELECT status, legacy, signer, nonce FROM transactions").fetchone() == ("CONFIRMED", 1, None, None)

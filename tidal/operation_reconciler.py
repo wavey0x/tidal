@@ -23,43 +23,14 @@ from tidal.chain.contracts.abis import (
 )
 from tidal.normalizers import normalize_address, to_decimal_string
 from tidal.constants import TRUSTED_HISTORICAL_AUCTION_KICKERS
-from tidal.persistence.repositories import APIActionRepository, KickTxRepository, TokenRepository
-from tidal.api.services.action_audit import ensure_action_operations, record_verified_receipt
+from tidal.persistence.repositories import KickTxRepository, TokenRepository
+from tidal.persistence import models
+from sqlalchemy import select
+from tidal.transaction_evidence import EvidenceError, hydrate_legacy_identity, verify_evidence, rpc_int
 from tidal.time import utcnow_iso
 
 logger = structlog.get_logger(__name__)
 SETTLEMENT_LOG_BLOCK_SPAN = 50_000
-
-
-def _rpc_int(value: object) -> int:
-    return int(str(value), 16 if str(value).lower().startswith("0x") else 10)
-
-
-def _matches_prepared_transaction(
-    prepared: Mapping[str, object],
-    transaction: Mapping[str, object],
-    receipt: Mapping[str, object],
-    tx_hash: str,
-    chain_id: int,
-) -> bool:
-    """No reported outcome is evidence unless the mined transaction matches."""
-    try:
-        return (
-            int(prepared["chain_id"]) == chain_id
-            and _rpc_int(transaction.get("chainId", chain_id)) == chain_id
-            and HexBytes(transaction["hash"]) == HexBytes(tx_hash)
-            and HexBytes(receipt["transactionHash"]) == HexBytes(tx_hash)
-            and str(transaction["to"]).lower() == str(prepared["to_address"]).lower()
-            and HexBytes(transaction["input"]) == HexBytes(prepared["data"])
-            and _rpc_int(transaction["value"]) == _rpc_int(prepared["value"])
-            and (
-                prepared.get("sender") is None
-                or str(transaction["from"]).lower() == str(prepared["sender"]).lower()
-            )
-            and _rpc_int(receipt["status"]) in {0, 1}
-        )
-    except (KeyError, TypeError, ValueError):
-        return False
 
 
 def _event_signature(event_abi: Mapping[str, object]) -> str:
@@ -138,13 +109,13 @@ class OperationReconciler:
     ) -> None:
         self.session = session
         self.lifecycle_settings = settings
+        self.chain_id = chain_id
         self.web3_client = web3_client
         self.auction_kicker_address = normalize_address(auction_kicker_address)
         self.trusted_kicker_addresses = {self.auction_kicker_address}
         if chain_id == 1:
             self.trusted_kicker_addresses.update(TRUSTED_HISTORICAL_AUCTION_KICKERS)
         self.kick_repo = KickTxRepository(session)
-        self.action_repo = APIActionRepository(session)
         self.token_repo = TokenRepository(session)
         self.decode_receipt_fn = decode_receipt_fn or self._decode_receipt
 
@@ -154,59 +125,38 @@ class OperationReconciler:
         timeout_seconds: int = 2,
         tx_hashes: Collection[str] | None = None,
     ) -> list[ReconciliationError]:
-        submitted_hashes = {
-            str(row["tx_hash"])
-            for row in self.kick_repo.list_submitted()
-            if tx_hashes is None or str(row["tx_hash"]) in tx_hashes
-        }
-        return await self.reconcile_receipts(
-            submitted_hashes,
-            timeout_seconds=timeout_seconds,
-        )
+        from tidal.transactions import LedgerReconciler
+        del timeout_seconds
+        if self.lifecycle_settings is None:
+            return [ReconciliationError("", "native_reconciliation_settings_missing", "Native reconciliation requires application settings.")]
+        native = LedgerReconciler(session=self.session, settings=self.lifecycle_settings,
+            web3_client=self.web3_client, operation_reconciler=self)
+        ids = None if tx_hashes is None else list(self.session.execute(select(models.transactions.c.id).where(
+            models.transactions.c.tx_hash.in_(tx_hashes),
+        )).scalars())
+        pending = await native.reconcile(transaction_ids=ids)
+        return [ReconciliationError(str(row.get("tx_hash") or ""), "transaction_review_required",
+                    str(row.get("error_message") or "Retained evidence needs review."))
+                for row in pending if row["status"] == "REVIEW_REQUIRED"]
 
     async def reconcile_receipts(
-        self,
-        tx_hashes: Collection[str],
-        *,
-        timeout_seconds: int = 2,
+        self, tx_hashes: Collection[str], *, timeout_seconds: int = 2,
     ) -> list[ReconciliationError]:
-        """Fetch and finalize each retained transaction receipt exactly once."""
-
-        errors: list[ReconciliationError] = []
-        for tx_hash in sorted(set(tx_hashes)):
-            if not self.kick_repo.list_by_tx_hash(tx_hash) and not self.action_repo.list_by_tx_hash(tx_hash):
-                continue
+        """The ledger owner fetches fresh evidence once for each retained hash."""
+        del timeout_seconds  # Native evidence uses the bounded two-second lookup.
+        errors = []
+        if len(set(tx_hashes)) > 100:
+            errors.append(ReconciliationError("", "known_history_limit", "Receipt selection exceeds the bounded lookup; select a smaller set of known rounds."))
+        for tx_hash in sorted(set(tx_hashes))[:100]:
             try:
-                receipt = await self.web3_client.get_transaction_receipt(
-                    tx_hash,
-                    timeout_seconds=timeout_seconds,
-                )
-                error_code = await self.finalize_receipt(tx_hash, receipt)
-            except Exception as exc:  # noqa: BLE001
+                code = await self.finalize_receipt(tx_hash, {})
+            except Exception as exc:
                 self.session.rollback()
-                if exc.__class__.__name__ in {"TransactionNotFound", "TimeExhausted"}:
-                    continue
-                errors.append(
-                    ReconciliationError(
-                        tx_hash=tx_hash,
-                        error_code="receipt_lookup_failed",
-                        error_message="receipt lookup failed",
-                    )
-                )
-                logger.warning(
-                    "operation_receipt_lookup_failed",
-                    tx_hash=tx_hash,
-                    error_type=exc.__class__.__name__,
-                )
-                continue
-            if error_code is not None:
-                errors.append(
-                    ReconciliationError(
-                        tx_hash=tx_hash,
-                        error_code=error_code,
-                        error_message="receipt reconciliation incomplete",
-                    )
-                )
+                code = "receipt_lookup_failed"
+                logger.warning("operation_receipt_lookup_failed", tx_hash=tx_hash, error_type=type(exc).__name__)
+            if code:
+                errors.append(ReconciliationError(tx_hash=tx_hash, error_code=code,
+                    error_message="Retained receipt evidence remains incomplete; inspect the transaction ledger."))
         return errors
 
     async def repair_pairs(
@@ -262,65 +212,22 @@ class OperationReconciler:
         self.rebuild_round_links(normalized_pairs)
         return errors
 
-    async def finalize_receipt(
-        self, tx_hash: str, receipt: dict[str, object]
-    ) -> str | None:
-        """Verify API intent and commit all receipt-derived state together."""
-        from sqlalchemy import select
-        from tidal.persistence import models
+    async def finalize_receipt(self, tx_hash: str, receipt: dict[str, object]) -> str | None:
+        """Only the native ledger can authorize receipt-derived business changes."""
         from tidal.transactions import LedgerReconciler
-
+        del receipt  # Never trust caller-supplied or previously fetched evidence.
+        if self.lifecycle_settings is None:
+            return "native_reconciliation_settings_missing"
         retained = self.session.execute(select(models.transactions).where(
             models.transactions.c.tx_hash == tx_hash.lower(),
         )).mappings().first()
-        if retained is not None and (self.lifecycle_settings is not None or not retained["legacy"]):
-            if self.lifecycle_settings is None:
-                return "native_reconciliation_settings_missing"
-            # Native runtime callbacks, including retained legacy work, require
-            # fresh canonical and finalized evidence before business updates.
-            native = LedgerReconciler(
-                session=self.session, settings=self.lifecycle_settings,
-                web3_client=self.web3_client, operation_reconciler=self,
-            )
-            await native.reconcile(transaction_ids=[int(retained["id"])])
-            row = native.repository.get(int(retained["id"]))
-            return str(row.get("error_message") or "transaction_review_required") if row["status"] == "REVIEW_REQUIRED" else None
-        action_rows = self.action_repo.list_by_tx_hash(tx_hash)
-        valid_actions: list[dict[str, object]] = []
-        if action_rows:
-            transaction = await self.web3_client.get_transaction(tx_hash)
-            chain_id = await self.web3_client.get_chain_id()
-            valid_actions = [
-                row for row in action_rows
-                if _matches_prepared_transaction(row, transaction, receipt, tx_hash, chain_id)
-            ]
-        if not valid_actions and not self.kick_repo.list_by_tx_hash(tx_hash):
-            return "transaction_intent_mismatch" if action_rows else None
-        # Complete RPC reads before staging any writes in the shared transaction.
-        block = await self.web3_client.get_block(int(receipt["blockNumber"]))
-        try:
-            valid_operation_ids: set[int] = set()
-            for row in valid_actions:
-                action = self.action_repo.get_action(str(row["action_id"]))
-                assert action is not None
-                valid_operation_ids.update(ensure_action_operations(self.session, action_row=action, tx_row=row))
-            rows = [
-                row for row in self.kick_repo.list_by_tx_hash(tx_hash)
-                if not str(row["run_id"]).startswith("api-action:") or int(row["id"]) in valid_operation_ids
-            ]
-            error = self._finalize_operations(tx_hash, receipt, rows, block)
-            for row in valid_actions:
-                record_verified_receipt(
-                    self.session, str(row["action_id"]), tx_index=int(row["tx_index"]),
-                    receipt=receipt, observed_at=utcnow_iso(),
-                )
-            self.session.commit()
-        except BaseException:
-            self.session.rollback()
-            raise
-        if len(valid_actions) != len(action_rows):
-            return "transaction_intent_mismatch"
-        return error
+        if retained is None:
+            return "transaction_identity_missing"
+        native = LedgerReconciler(session=self.session, settings=self.lifecycle_settings,
+            web3_client=self.web3_client, operation_reconciler=self)
+        await native.reconcile(transaction_ids=[int(retained["id"])])
+        row = native.repository.get(int(retained["id"]))
+        return str(row.get("error_message") or "transaction_review_required") if row["status"] == "REVIEW_REQUIRED" else None
 
     def _finalize_operations(
         self, tx_hash: str, receipt: dict[str, object], rows: list[dict[str, object]], block: Mapping[str, object]
@@ -519,6 +426,7 @@ class OperationReconciler:
         *,
         timeout_seconds: int = 2,
         pairs: Collection[tuple[str, str]] | None = None,
+        max_log_chunks: int = 20,
     ) -> list[ReconciliationError]:
         """Persist all missing AuctionSettled closes using one log scan per auction."""
 
@@ -532,7 +440,14 @@ class OperationReconciler:
             else None
         )
         by_auction: dict[str, list[dict[str, object]]] = {}
+        closed = {
+            int(row["round_kick_id"]) for row in self.kick_repo.list_round_operations()
+            if row.get("round_kick_id") is not None and row.get("status") == "CONFIRMED"
+            and not row.get("error_message") and operation_closes_round(row)
+        }
         for kick in kicks:
+            if int(kick["id"]) in closed or kick.get("historical_baseline"):
+                continue
             pair = (
                 normalize_address(str(kick["auction_address"])),
                 normalize_address(str(kick["token_address"])),
@@ -549,10 +464,22 @@ class OperationReconciler:
         errors: list[ReconciliationError] = []
         receipt_cache: dict[str, dict[str, object]] = {}
         block_cache: dict[int, dict[str, object]] = {}
-        latest_block = await self.web3_client.get_block_number() if by_auction else None
+        finalized = None
+        try:
+            if by_auction:
+                if await self.web3_client.get_chain_id() != self.chain_id:
+                    raise EvidenceError("WRONG_CHAIN", "Settlement lookup RPC is on another chain.")
+                finalized = await self.web3_client.get_block("finalized")
+            latest_block = rpc_int(finalized["number"]) if finalized else None
+        except Exception:
+            return [ReconciliationError("", "finality_unavailable", "Finalized settlement evidence is unavailable; retry later.")]
         for auction_address, auction_kicks in sorted(by_auction.items()):
             assert latest_block is not None
             earliest_block = min(int(kick["block_number"]) for kick in auction_kicks)
+            if latest_block - earliest_block + 1 > max_log_chunks * SETTLEMENT_LOG_BLOCK_SPAN:
+                errors.append(ReconciliationError(str(auction_kicks[0].get("tx_hash") or ""),
+                    "known_history_limit", "Retained round exceeds the bounded settlement lookup; review this exact auction/token history."))
+                continue
             try:
                 contract = self.web3_client.contract(
                     to_checksum_address(auction_address), AUCTION_ABI
@@ -612,7 +539,17 @@ class OperationReconciler:
                             tx_hash,
                             timeout_seconds=timeout_seconds,
                         )
+                        transaction = await self.web3_client.get_transaction(tx_hash)
+                        identity = hydrate_legacy_identity({"tx_hash": tx_hash}, transaction, chain_id=self.chain_id)
+                        block = await self.web3_client.get_block(rpc_int(receipt["blockNumber"]))
+                        proof = verify_evidence(identity, transaction=transaction, receipt=receipt,
+                            block=block, finalized_head=finalized, chain_id=self.chain_id)
+                        if not proof.finalized or rpc_int(receipt["status"]) != 1:
+                            raise EvidenceError("UNFINALIZED_SETTLEMENT", "A settlement needs a successful finalized receipt.")
+                        block_cache[rpc_int(block["number"])] = block
                         receipt_cache[tx_hash] = receipt
+                    if (rpc_int(receipt["blockNumber"]), rpc_int(receipt["transactionIndex"])) != position:
+                        raise EvidenceError("SETTLEMENT_POSITION_MISMATCH", "Settlement log and canonical receipt positions disagree.")
                     decoded = self.decode_receipt_fn(receipt, (auction_address,))
                 except Exception as exc:  # noqa: BLE001
                     errors.append(

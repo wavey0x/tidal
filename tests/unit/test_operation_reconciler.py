@@ -82,11 +82,24 @@ def _web3(
 
     async def get_receipt(tx_hash: str, *, timeout_seconds: int):
         del timeout_seconds
-        return receipts[tx_hash]
+        return {**receipts[tx_hash], "transactionHash": tx_hash, "from": SOURCE, "to": AUCTION}
+
+    async def get_transaction(tx_hash):
+        receipt = receipts[tx_hash]
+        return {"hash": tx_hash, "chainId": 1, "from": SOURCE, "nonce": 7,
+                "to": AUCTION, "input": "0x1234", "value": 0,
+                "blockNumber": receipt["blockNumber"], "blockHash": receipt["blockHash"],
+                "transactionIndex": receipt["transactionIndex"]}
+
+    async def get_block(identifier):
+        return {"number": latest_block if identifier == "finalized" else identifier,
+                "hash": "0x" + "22" * 32, "timestamp": 1_754_131_200}
 
     return SimpleNamespace(
         get_transaction_receipt=AsyncMock(side_effect=get_receipt),
-        get_block=AsyncMock(return_value={"timestamp": 1_754_131_200}),
+        get_transaction=AsyncMock(side_effect=get_transaction),
+        get_chain_id=AsyncMock(return_value=1),
+        get_block=AsyncMock(side_effect=get_block),
         get_block_number=AsyncMock(return_value=latest_block),
     )
 
@@ -95,11 +108,18 @@ def _receipt(*, block: int = 100, transaction_index: int = 2):
     return {
         "status": 1,
         "blockNumber": block,
+        "blockHash": "0x" + "22" * 32,
         "transactionIndex": transaction_index,
         "gasUsed": 123_456,
         "effectiveGasPrice": 2_000_000_000,
         "logs": [],
     }
+
+
+def _apply_verified_receipt(reconciler, tx_hash, receipt):
+    """Business decoding tests; native proof/atomicity is tested independently."""
+    return reconciler._finalize_operations(tx_hash, receipt,
+        reconciler.kick_repo.list_by_tx_hash(tx_hash), {"timestamp": 1_754_131_200})
 
 
 def _event_log(
@@ -154,7 +174,55 @@ class _SettlementEvents:
 
 
 @pytest.mark.asyncio
-async def test_kick_uses_actual_placed_amount_and_batch_receipt_is_fetched_once(
+@pytest.mark.parametrize("defect", ["wrong_chain", "receipt_reorg", "missing_sender", "log_position", "not_finalized"])
+async def test_direct_settlement_requires_matching_finalized_chain_evidence(session, defect):
+    repo = KickTxRepository(session)
+    repo.insert(_row(operation_type="kick", tx_hash="0x" + "66" * 32, status="CONFIRMED",
+        requested_sell_amount="100", sell_amount="100", block_number=100,
+        transaction_index=1, mined_at=MINED_AT))
+    tx_hash = "0x" + "77" * 32
+    web3 = _web3({tx_hash: _receipt(block=102)}, latest_block=101 if defect == "not_finalized" else 103)
+    events = _SettlementEvents([{"blockNumber": 102, "transactionIndex": 3 if defect == "log_position" else 2,
+                                "transactionHash": tx_hash}])
+    web3.contract = lambda *_: SimpleNamespace(events=events)
+    if defect == "wrong_chain":
+        web3.get_chain_id.return_value = 2
+    elif defect in {"receipt_reorg", "missing_sender"}:
+        original = web3.get_transaction_receipt.side_effect
+        async def defective(*args, **kwargs):
+            receipt = await original(*args, **kwargs)
+            if defect == "receipt_reorg":
+                receipt["blockHash"] = "0x" + "99" * 32
+            else:
+                del receipt["from"]
+            return receipt
+        web3.get_transaction_receipt.side_effect = defective
+    reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER,
+        decode_receipt_fn=lambda *_: DecodedReceipt(settlements=(DecodedSettlement(AUCTION, TOKEN),)))
+    errors = await reconciler.discover_direct_settlements()
+    assert bool(errors) == (defect != "not_finalized")
+    assert len(repo.list_pair_operations(AUCTION, TOKEN)) == 1
+    if defect == "not_finalized":
+        web3.get_transaction_receipt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_old_round_never_triggers_unbounded_log_indexing(session):
+    repo = KickTxRepository(session)
+    repo.insert(_row(operation_type="kick", tx_hash="0x" + "66" * 32, status="CONFIRMED",
+        requested_sell_amount="100", sell_amount="100", block_number=1,
+        transaction_index=1, mined_at=MINED_AT))
+    web3 = _web3(latest_block=1_000_001)
+    events = _SettlementEvents([])
+    web3.contract = lambda *_: SimpleNamespace(events=events)
+    reconciler = OperationReconciler(session=session, web3_client=web3, auction_kicker_address=KICKER)
+    errors = await reconciler.discover_direct_settlements()
+    assert [error.error_code for error in errors] == ["known_history_limit"]
+    assert events.event.ranges == []
+
+
+@pytest.mark.asyncio
+async def test_kick_uses_actual_placed_amount_for_all_batch_operations(
     session,
 ) -> None:
     repo = KickTxRepository(session)
@@ -179,7 +247,7 @@ async def test_kick_uses_actual_placed_amount_and_batch_receipt_is_fetched_once(
         ),
     )
 
-    assert await reconciler.reconcile_submitted() == []
+    assert _apply_verified_receipt(reconciler, "0xabc", _receipt()) is None
     rows = repo.list_by_tx_hash("0xabc")
     assert len(rows) == 2
     assert all(row["status"] == "CONFIRMED" for row in rows)
@@ -189,7 +257,7 @@ async def test_kick_uses_actual_placed_amount_and_batch_receipt_is_fetched_once(
     assert all(
         row["transaction_index"] == 2 and row["mined_at"] == MINED_AT for row in rows
     )
-    web3.get_transaction_receipt.assert_awaited_once()
+    web3.get_transaction_receipt.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -219,7 +287,7 @@ async def test_zero_recovery_resolve_is_canonical_and_linked(session) -> None:
         ),
     )
 
-    assert await reconciler.finalize_receipt("0xresolve", _receipt(block=101)) is None
+    assert _apply_verified_receipt(reconciler, "0xresolve", _receipt(block=101)) is None
     row = repo.get(resolve_id)
     assert row is not None
     assert row["sell_amount"] == "0"
@@ -259,7 +327,7 @@ async def test_resolve_and_settlement_in_same_receipt_create_one_close(session) 
         ),
     )
 
-    await reconciler.finalize_receipt("0xresolve", _receipt(block=101))
+    _apply_verified_receipt(reconciler, "0xresolve", _receipt(block=101))
     pair_rows = repo.list_pair_operations(AUCTION, TOKEN)
     assert [row["operation_type"] for row in pair_rows].count("auction_settled") == 0
 
@@ -276,13 +344,13 @@ async def test_reconciliation_is_idempotent(session) -> None:
             kicks=(DecodedKick(SOURCE, AUCTION, TOKEN, 100, 100),),
         ),
     )
-    await reconciler.finalize_receipt("0xabc", _receipt())
-    await reconciler.finalize_receipt("0xabc", _receipt())
+    _apply_verified_receipt(reconciler, "0xabc", _receipt())
+    _apply_verified_receipt(reconciler, "0xabc", _receipt())
     assert len(repo.list_by_tx_hash("0xabc")) == 1
 
 
 @pytest.mark.asyncio
-async def test_targeted_pair_repair_replays_confirmed_ambiguous_receipt(
+async def test_verified_event_corrects_requested_and_placed_ambiguity(
     session,
 ) -> None:
     repo = KickTxRepository(session)
@@ -312,12 +380,12 @@ async def test_targeted_pair_repair_replays_confirmed_ambiguous_receipt(
         ),
     )
 
-    assert await reconciler.repair_pairs({(AUCTION, TOKEN)}) == []
+    assert _apply_verified_receipt(reconciler, "0xkick", _receipt(block=100, transaction_index=1)) is None
 
     row = repo.get(kick_id)
     assert row is not None
     assert row["sell_amount"] == "100"
-    web3.get_transaction_receipt.assert_awaited_once_with("0xkick", timeout_seconds=2)
+    web3.get_transaction_receipt.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -336,7 +404,7 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
         )
     )
     web3 = _web3(
-        {"0xsettle": _receipt(block=100_050, transaction_index=3)},
+        {"0x" + "33" * 32: _receipt(block=100_050, transaction_index=3)},
         latest_block=150_000,
     )
     settlement_events = _SettlementEvents(
@@ -344,7 +412,7 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
             {
                 "blockNumber": 100_050,
                 "transactionIndex": 3,
-                "transactionHash": "0xsettle",
+                "transactionHash": "0x" + "33" * 32,
             }
         ]
     )
@@ -371,10 +439,8 @@ async def test_direct_settlement_discovery_is_linked_and_idempotent(session) -> 
         (100, 50_099),
         (50_100, 100_099),
         (100_100, 150_000),
-        (100, 50_099),
-        (50_100, 100_099),
-        (100_100, 150_000),
     ]
+    web3.get_transaction_receipt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -463,7 +529,7 @@ async def test_direct_settlement_discovery_repairs_older_unclosed_rounds(
         )
     )
     web3 = _web3(
-        {"0xold-settle": _receipt(block=150, transaction_index=3)},
+        {"0x" + "44" * 32: _receipt(block=150, transaction_index=3)},
         latest_block=250,
     )
     settlement_events = _SettlementEvents(
@@ -471,7 +537,7 @@ async def test_direct_settlement_discovery_repairs_older_unclosed_rounds(
             {
                 "blockNumber": 150,
                 "transactionIndex": 3,
-                "transactionHash": "0xold-settle",
+                "transactionHash": "0x" + "44" * 32,
             }
         ]
     )
@@ -544,7 +610,7 @@ async def test_noop_resolution_does_not_require_a_round_link(session) -> None:
         ),
     )
 
-    error_code = await reconciler.finalize_receipt("0xnoop", _receipt())
+    error_code = _apply_verified_receipt(reconciler, "0xnoop", _receipt())
 
     row = repo.list_by_tx_hash("0xnoop")[0]
     assert error_code is None

@@ -1684,13 +1684,15 @@ tbody tr:focus-within > td {
 }
 
 .kick-modal-backdrop {
+  --sheet-dim: 1;
   z-index: 100;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   padding: max(12px, env(safe-area-inset-top)) env(safe-area-inset-right) 0 env(safe-area-inset-left);
-  background: rgba(0, 0, 0, 0.45);
-  animation: modal-fade-in 150ms ease-out;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: rgba(0, 0, 0, calc(0.45 * var(--sheet-dim)));
 }
 
 .kick-modal {
@@ -1699,15 +1701,18 @@ tbody tr:focus-within > td {
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-radius: 12px 12px 0 0;
+  border-radius: 16px 16px 0 0;
   width: 100%;
   max-width: 640px;
-  height: 100%;
-  max-height: 840px;
+  max-height: min(100%, 840px);
   min-height: 0;
   min-width: 0;
-  animation: modal-slide-in 250ms ease-out;
+  overflow: hidden;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
 }
+
+.kick-modal[data-dragging] { user-select: none; }
+.kick-modal[data-dragging] .kick-modal-header { cursor: grabbing; }
 
 .kick-modal-handle {
   position: absolute;
@@ -1716,7 +1721,7 @@ tbody tr:focus-within > td {
   width: 36px;
   height: 4px;
   border-radius: 2px;
-  background: var(--divider-strong);
+  background: var(--text-secondary);
 }
 
 .kick-modal-header {
@@ -1728,6 +1733,8 @@ tbody tr:focus-within > td {
   gap: 8px;
   padding: 18px 16px 8px;
   touch-action: pinch-zoom;
+  cursor: grab;
+  user-select: none;
 }
 .kick-modal-heading { min-width: 0; align-self: center; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .kick-modal-header a, .kick-modal-header button { touch-action: manipulation; }
@@ -1764,15 +1771,6 @@ tbody tr:focus-within > td {
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes modal-slide-in {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
   }
 }
 

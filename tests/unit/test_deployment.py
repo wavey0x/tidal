@@ -39,7 +39,7 @@ def host(tmp_path, monkeypatch):
     commands, native_calls = [], []
     def command(args, **kwargs):
         commands.append(list(map(str, args)))
-        return 'loaded\n' if 'show' in args else ''
+        return 'LoadState=loaded\nActiveState=active\nMainPID=0\n' if 'show' in args else ''
     monkeypatch.setattr(deploy, 'command', command)
     monkeypatch.setattr(instance, 'verify_no_old_process', lambda _: None)
     monkeypatch.setattr(instance, 'install_entry_points', lambda *_: None)
@@ -225,6 +225,33 @@ def test_one_outer_lock_serializes_capture_deploy_and_infrastructure(host):
         with pytest.raises(BlockingIOError):
             with host.app.locked():
                 pytest.fail('second deployment obtained the shared lock')
+
+
+def test_inactive_malformed_legacy_timer_does_not_prevent_stopping_live_api(host, monkeypatch):
+    original_command = deploy.command
+    def command(args, **kwargs):
+        if args[:3] == ['systemctl', 'show', 'tidal-kicker.timer']:
+            return 'LoadState=bad-setting\nActiveState=inactive\nMainPID=0\n'
+        if args[:3] == ['systemctl', 'stop', 'tidal-kicker.timer']:
+            pytest.fail('systemd refuses stop on this already inactive legacy unit')
+        return original_command(args, **kwargs)
+    monkeypatch.setattr(deploy, 'command', command)
+    install(host)
+    assert ['systemctl', 'stop', 'tidal-api.service'] in host.commands
+
+
+@pytest.mark.parametrize('protected', [False, True])
+def test_corrected_installer_can_only_supersede_before_any_protected_transition(host, protected):
+    previous = host.app.state / 'operations/older'
+    previous.mkdir(parents=True)
+    deploy.write_json(previous / 'journal.json', {'phase': 'new', 'candidate': '/old'})
+    if protected:
+        deploy.write_json(previous / 'originals/manifest.json', {'files': {}})
+        with pytest.raises(ValueError, match='unfinished cutover'):
+            install(host)
+    else:
+        install(host)
+        assert json.loads((previous / 'journal.json').read_text())['phase'] == 'superseded-before-protection'
 
 
 def test_daily_route_update_is_idempotent_and_preserves_existing_jobs():

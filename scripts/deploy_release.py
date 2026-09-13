@@ -143,8 +143,11 @@ class Deployment:
             atomic(self.units / (name + '.d') / '90-electro-hold.conf', condition, mode=0o644)
         command(['systemctl', 'daemon-reload'])
         for name in (*TIMERS, *RETIRED, *SERVICES):
-            loaded = command(['systemctl', 'show', name, '-p', 'LoadState', '--value']).strip()
-            if loaded != 'not-found':
+            properties = command(['systemctl', 'show', name, '-p', 'LoadState,ActiveState,MainPID'])
+            state = dict(line.split('=', 1) for line in properties.splitlines() if '=' in line)
+            # A malformed or masked old unit can reject `stop` even though it
+            # has no process. Persistent conditions already prevent new starts.
+            if state.get('ActiveState') not in ('inactive', 'failed') or state.get('MainPID', '0') != '0':
                 command(['systemctl', 'stop', name])
         command(['systemctl', 'disable', *TIMERS, 'tidal-kicker.timer'])
         self.native(release, ['hold'])
@@ -316,8 +319,17 @@ class Deployment:
         release = Path(data['releases']['application']['release_path'])
         operation = self.state / 'operations' / candidate.name
         for previous in (self.state / 'operations').glob('*/journal.json'):
-            if previous.parent != operation and json.loads(previous.read_text())['phase'] != 'complete':
-                raise ValueError('Resume the unfinished cutover with its original candidate before selecting another release')
+            if previous.parent != operation:
+                prior = json.loads(previous.read_text())
+                if prior['phase'] in ('complete', 'superseded-before-protection'):
+                    continue
+                if prior['phase'] == 'new' and not (previous.parent / 'originals/manifest.json').exists():
+                    # No configuration or DB transition is permitted before
+                    # verified originals. A corrected installer may retry this
+                    # pre-protection failure, retaining the abandoned journal.
+                    write_json(previous, {**prior, 'phase': 'superseded-before-protection', 'next_candidate': str(candidate)})
+                else:
+                    raise ValueError('Resume the unfinished cutover with its original candidate before selecting another release')
         operation.mkdir(parents=True, exist_ok=True, mode=0o700)
         journal_path = operation / 'journal.json'
         journal = json.loads(journal_path.read_text()) if journal_path.exists() else {'phase': 'new', 'candidate': str(candidate)}

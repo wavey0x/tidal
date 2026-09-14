@@ -1,10 +1,12 @@
 """Deployment failures preserve originals and keep execution persistently held."""
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -56,7 +58,8 @@ def host(tmp_path, monkeypatch):
         (candidate / name).write_text(text)
         data['files'][name] = deploy.digest(candidate / name)
     deploy.write_json(candidate / 'candidate.json', data)
-    monkeypatch.setattr(instance, 'prepare_candidate', lambda *_: (candidate, data, {'scan': 'address', 'kick': 'address'}))
+    monkeypatch.setattr(instance, 'prepare_candidate', lambda *_, **__: (
+        candidate, json.loads((candidate / 'candidate.json').read_text()), {'scan': 'address', 'kick': 'address'}))
     def native(_release, args, **kwargs):
         args = list(map(str, args))
         native_calls.append(args)
@@ -74,8 +77,14 @@ def host(tmp_path, monkeypatch):
             target = Path(args[args.index('--output') + 1])
             with sqlite3.connect(instance.database) as old, sqlite3.connect(target) as new:
                 old.backup(new)
-            return {'data': {'sha256': deploy.digest(target), 'database_identity': 'fixture'}}
-        return {'data': {'activated': True, 'database_identity': 'fixture'}, 'blockers': [], 'interface_version': 1}
+            return {'data': {'sha256': deploy.digest(target), 'database_identity': 'fixture', 'schema_revision': 'fixture-schema'}}
+        if args[:2] == ['db', 'prepare-restore']:
+            with sqlite3.connect(instance.database) as current:
+                current.execute('INSERT OR IGNORE INTO operations VALUES ("prepared", "1")')
+            if instance.interrupt:
+                raise InterruptedError('interrupted after native restore preparation')
+        return {'data': {'activated': True, 'database_identity': 'fixture', 'schema_revision': 'fixture-schema'},
+            'blockers': [], 'interface_version': 1}
     monkeypatch.setattr(instance, 'native', native)
     instance.interrupt = False
     return SimpleNamespace(app=instance, commands=commands, calls=native_calls,
@@ -150,7 +159,8 @@ def test_original_external_foundry_key_is_retained_and_checked(host, tmp_path):
         host.app.protect(another, host.repository, config)
 
 
-def test_daily_capture_is_complete_verified_and_never_contains_activation(host, tmp_path):
+@pytest.fixture
+def saved_capture(host, tmp_path):
     install(host)
     archive = tmp_path / 'release.tar.gz'
     archive.write_bytes(b'fixture offline release')
@@ -162,7 +172,12 @@ def test_daily_capture_is_complete_verified_and_never_contains_activation(host, 
     candidate['releases'] = record['releases']
     deploy.write_json(host.candidate / 'candidate.json', candidate)
     (host.app.home / 'activation.json').write_text('must not restore')
-    result = host.app.capture(archive, tmp_path / 'mounted', tmp_path / 'mounted/captures', tmp_path / 'captures')
+    return host.app.capture(archive, tmp_path / 'mounted', tmp_path / 'mounted/captures', tmp_path / 'captures')
+
+
+def test_daily_capture_is_complete_verified_and_never_contains_activation(host, saved_capture):
+    result = saved_capture
+    checksum = result['release_sha256']
     assert deploy.digest(result['capture']) == deploy.digest(result['local_capture']) == result['sha256']
     with deploy.tarfile.open(result['capture']) as bundle:
         names = set(bundle.getnames())
@@ -170,6 +185,119 @@ def test_daily_capture_is_complete_verified_and_never_contains_activation(host, 
             'tidal.db', checksum + '.tar.gz', 'native-database.json', 'release.json', 'manifest.json'}
         manifest = json.load(bundle.extractfile('manifest.json'))
         assert all(hashlib.sha256(bundle.extractfile(name).read()).hexdigest() == expected for name, expected in manifest['files'].items())
+
+
+def restore(host, capture, *, overwrite=True):
+    return host.app.restore(capture['capture'], capture['sha256'], overwrite=overwrite)
+
+
+def test_restore_uses_saved_state_and_protects_displaced_state_without_migrating(host, saved_capture):
+    with sqlite3.connect(host.app.database) as database:
+        database.execute('INSERT INTO operations VALUES ("after-capture", "2")')
+    host.calls.clear()
+    host.commands.clear()
+    result = restore(host, saved_capture)
+    with sqlite3.connect(Path(result['previous_state']) / '0') as database:
+        assert database.execute('SELECT id FROM operations WHERE id="after-capture"').fetchone()
+    with sqlite3.connect(host.app.database) as database:
+        assert {row[0] for row in database.execute('SELECT id FROM operations')} == {'retained', 'imported', 'prepared'}
+    assert not any(args[:2] == ['db', 'migrate'] for args in host.calls)
+    assert [args[-1] for args in host.commands if args[:2] == ['systemctl', 'start']] == ['tidal-api.service']
+    assert result['workers_held'] and (host.app.state / 'workers-held').exists()
+    assert json.loads((host.app.state / 'latest-capture.json').read_text())['origin'] == 'verified-restore'
+    host.app.resume()  # The independently retrieved capture satisfies the existing gate.
+
+
+def test_restore_retry_preserves_native_preparation_and_subsequent_state(host, saved_capture):
+    host.app.interrupt = True
+    with pytest.raises(InterruptedError, match='restore preparation'):
+        restore(host, saved_capture)
+    assert (host.app.state / 'held').exists() and (host.app.state / 'workers-held').exists()
+    with sqlite3.connect(host.app.database) as database:
+        database.execute('INSERT INTO operations VALUES ("after-preparation", "2")')
+    for operation in (lambda: install(host), host.app.resume):
+        with pytest.raises(ValueError, match='interrupted restore'):
+            operation()
+    host.app.interrupt = False
+    restore(host, saved_capture)
+    calls = len([args for args in host.calls if args[:2] == ['db', 'prepare-restore']])
+    assert restore(host, saved_capture)['changed'] is False
+    assert len([args for args in host.calls if args[:2] == ['db', 'prepare-restore']]) == calls
+    with sqlite3.connect(host.app.database) as database:
+        assert database.execute('SELECT id FROM operations WHERE id="after-preparation"').fetchone()
+
+
+@pytest.mark.parametrize('existing', ['database', 'sidecar', 'empty'])
+def test_restore_requires_explicit_overwrite_only_when_state_exists(host, saved_capture, existing):
+    if existing != 'database':
+        host.app.database.unlink()
+    if existing == 'sidecar':
+        Path(str(host.app.database) + '-wal').write_bytes(b'uncertain retained state')
+    if existing == 'empty':
+        assert restore(host, saved_capture, overwrite=False)['status'] == 'restored'
+    else:
+        with pytest.raises(ValueError, match='explicit restore overwrite'):
+            restore(host, saved_capture, overwrite=False)
+
+
+@pytest.mark.parametrize('problem', ['checksum', 'unknown-phase', 'unfinished-install', 'different-restore'])
+def test_invalid_or_conflicting_restore_does_not_change_database(host, saved_capture, problem):
+    before = deploy.digest(host.app.database)
+    capture = dict(saved_capture)
+    if problem == 'checksum':
+        capture['sha256'] = '0' * 64
+    elif problem == 'unfinished-install':
+        deploy.write_json(host.app.state / 'operations/first/journal.json', {'phase': 'protected'})
+    else:
+        selected = capture['sha256'] if problem == 'unknown-phase' else '0' * 64
+        deploy.write_json(host.app.state / 'recovery' / selected / 'restore.json',
+            {'phase': 'unrecognized' if problem == 'unknown-phase' else 'installed'})
+    with pytest.raises(ValueError):
+        restore(host, capture)
+    assert deploy.digest(host.app.database) == before
+
+
+@pytest.mark.parametrize('problem', ['member-hash', 'schema', 'release', 'duplicate', 'link'])
+def test_restore_rejects_inconsistent_capture_before_changing_live_state(host, saved_capture, tmp_path, problem):
+    with deploy.tarfile.open(saved_capture['capture']) as original:
+        contents = {member.name: original.extractfile(member).read() for member in original.getmembers()}
+    manifest = json.loads(contents['manifest.json'])
+    if problem == 'member-hash':
+        contents['tidal.db'] = b'corrupt snapshot'
+    elif problem in ('schema', 'release'):
+        name = 'native-database.json' if problem == 'schema' else 'release.json'
+        value = json.loads(contents[name])
+        if problem == 'schema':
+            value['data']['schema_revision'] = 'incompatible'
+        else:
+            value['revision'] = 'different'
+        contents[name] = json.dumps(value).encode()
+        manifest['files'][name] = hashlib.sha256(contents[name]).hexdigest()
+        contents['manifest.json'] = json.dumps(manifest).encode()
+    changed = tmp_path / 'changed.tar.gz'
+    with deploy.tarfile.open(changed, 'w:gz') as bundle:
+        for name, content in contents.items():
+            member = deploy.tarfile.TarInfo(name)
+            member.size = len(content)
+            bundle.addfile(member, io.BytesIO(content))
+        if problem in ('duplicate', 'link'):
+            member = deploy.tarfile.TarInfo('tidal.db' if problem == 'duplicate' else 'indirect')
+            if problem == 'link':
+                member.type, member.linkname = deploy.tarfile.SYMTYPE, '/outside'
+            bundle.addfile(member)
+    before = deploy.digest(host.app.database)
+    with pytest.raises(ValueError):
+        host.app.restore(changed, deploy.digest(changed), overwrite=True)
+    assert deploy.digest(host.app.database) == before
+
+
+def test_replacement_host_does_not_need_the_retired_daily_mirror(host, monkeypatch):
+    written = {}
+    monkeypatch.setattr(deploy, 'atomic', lambda path, content, **_: written.update({str(path): content}))
+    monkeypatch.setitem(sys.modules, 'install_daily_capture', daily)
+    deploy.Deployment.install_entry_points(host.app, host.release, '/fixture/archive')
+    assert '/usr/local/sbin/tidal-backup' in written
+    assert not any(path.endswith('/server-backup/backup.sh') for path in written)
 
 
 def test_resume_requires_matching_capture_before_any_native_activation(host):

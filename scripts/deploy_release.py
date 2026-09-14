@@ -167,7 +167,7 @@ class Deployment:
             except (FileNotFoundError, ProcessLookupError, PermissionError):
                 continue
 
-    def prepare_candidate(self, archive, checksum, configuration):
+    def prepare_candidate(self, archive, checksum, configuration, *, saved_units=False):
         archive, configuration = Path(archive).resolve(), Path(configuration).resolve()
         if not re.fullmatch('[0-9a-f]{64}', checksum) or digest(archive) != checksum:
             raise ValueError('Select the exact retained artifact checksum')
@@ -196,7 +196,8 @@ class Deployment:
                 path.chmod(0o755 if path.is_dir() else 0o644 | (path.stat().st_mode & 0o111))
         metadata = json.loads((release / 'electro-release.json').read_text())
         files = {name: (configuration / name).read_bytes() for name in PRIVATE_FILES}
-        files.update({name: value.encode() for name, value in unit_files(release, self.config, self.state, self.user.pw_name).items()})
+        files.update({name: (configuration / name).read_bytes() if saved_units else value.encode()
+            for name, value in unit_files(release, self.config, self.state, self.user.pw_name).items()})
         identity = hashlib.sha256(json.dumps({name: hashlib.sha256(value).hexdigest() for name, value in files.items()}, sort_keys=True).encode()).hexdigest()
         candidate = self.state / 'candidates' / identity
         candidate.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -315,6 +316,7 @@ class Deployment:
         return report
 
     def install(self, archive, checksum, configuration, repository):
+        self.require_completed_restores()
         candidate, data, signers = self.prepare_candidate(archive, checksum, configuration)
         release = Path(data['releases']['application']['release_path'])
         operation = self.state / 'operations' / candidate.name
@@ -369,6 +371,14 @@ class Deployment:
             report = self.native(release, ['db', 'migrate'])
         write_json(operation / 'migration.json', report)
         self.native(release, ['db', 'check'])
+        self.publish_installation(candidate, data, signers, archive, protected)
+        journal['phase'] = 'complete'
+        write_json(journal_path, journal)
+        return {'status': 'installed', 'workers_held': True, 'candidate': str(candidate), 'originals': str(protected)}
+
+    def publish_installation(self, candidate, data, signers, archive, protected):
+        """Shared final installation step for upgrades and saved-state recovery."""
+        release = Path(data['releases']['application']['release_path'])
         for name in (*SERVICES, *TIMERS):
             atomic(self.units / name, (candidate / name).read_bytes(), mode=0o644)
         # Retired aliases are permanently masked; retain their original unit
@@ -389,9 +399,139 @@ class Deployment:
         sync_directory(self.state)
         command(['systemctl', 'enable', 'tidal-api.service'])
         command(['systemctl', 'start', 'tidal-api.service'])
-        journal['phase'] = 'complete'
-        write_json(journal_path, journal)
-        return {'status': 'installed', 'workers_held': True, 'candidate': str(candidate), 'originals': str(protected)}
+
+    def require_completed_restores(self, selected=None):
+        for receipt in (self.state / 'recovery').glob('*/restore.json'):
+            if receipt != selected and json.loads(receipt.read_text())['phase'] != 'complete':
+                raise ValueError('Finish the interrupted restore with its original capture first')
+
+    def restore(self, capture, checksum, *, overwrite=False):
+        """Restore the existing native capture format; never upgrade its schema.
+
+        The retained input and one phase receipt make retry safe even if native
+        preparation committed before a process interruption. Storage retrieval
+        belongs to the caller. No old configuration discovery is needed here.
+        """
+        capture = Path(capture).resolve()
+        if not re.fullmatch('[a-f0-9]{64}', checksum) or digest(capture) != checksum:
+            raise ValueError('Select the exact independently retrieved capture checksum')
+        operation = self.state / 'recovery' / checksum
+        receipt = operation / 'restore.json'
+        self.require_completed_restores(receipt)
+        for previous in (self.state / 'operations').glob('*/journal.json'):
+            if json.loads(previous.read_text())['phase'] not in ('complete', 'superseded-before-protection'):
+                raise ValueError('Finish the interrupted installation before restoring a capture')
+        journal = json.loads(receipt.read_text()) if receipt.exists() else {'phase': 'new'}
+        if journal['phase'] not in ('new', 'protected', 'installed', 'prepared', 'complete'):
+            raise ValueError('Unknown restore phase; preserve the current state for inspection')
+        operation.mkdir(mode=0o700, parents=True, exist_ok=True)
+        inputs = operation / 'inputs'
+        inputs.mkdir(mode=0o700, exist_ok=True)
+        with tarfile.open(capture) as bundle:
+            members = bundle.getmembers()
+            names = [member.name for member in members]
+            if len(names) != len(set(names)) or any(not member.isfile() for member in members):
+                raise ValueError('Native recovery requires unique regular capture members')
+            manifest = json.load(bundle.extractfile('manifest.json'))
+            release = json.load(bundle.extractfile('release.json'))
+            archive_name = release['archive_sha256'] + '.tar.gz'
+            expected = {*PRIVATE_FILES, *SERVICES, *TIMERS, 'tidal.db', 'release.json',
+                'native-database.json', archive_name}
+            if (not re.fullmatch('[a-f0-9]{64}', release['archive_sha256'])
+                    or manifest['format'] != 'tidal-capture-v1'
+                    or set(manifest['files']) != expected or set(names) != expected | {'manifest.json'}):
+                raise ValueError('Capture must contain exactly one Tidal database, runtime and configuration')
+            # Validate the complete input before publishing any extracted member.
+            for name, expected_hash in manifest['files'].items():
+                if hashlib.file_digest(bundle.extractfile(name), 'sha256').hexdigest() != expected_hash:
+                    raise ValueError('Capture member checksum changed: ' + name)
+            for name in expected:
+                target = inputs / name
+                if target.exists():
+                    if target.is_symlink() or digest(target) != manifest['files'][name]:
+                        raise ValueError('Retained recovery input changed: ' + name)
+                else:
+                    atomic(target, bundle.extractfile(name).read())
+        original = operation / 'capture.tar.gz'
+        if not original.exists():
+            atomic(original, capture.read_bytes())
+        if digest(original) != checksum:
+            raise ValueError('Retained original capture changed')
+        candidate, data, signers = self.prepare_candidate(inputs / archive_name,
+            release['archive_sha256'], inputs, saved_units=True)
+        if data['releases']['application'] != release:
+            raise ValueError('Saved release identity differs from its offline artifact')
+        runtime = Path(data['releases']['application']['release_path'])
+        database = json.loads((inputs / 'native-database.json').read_text())['data']
+        if database['sha256'] != manifest['files']['tidal.db']:
+            raise ValueError('Native database evidence differs from captured bytes')
+        with tempfile.TemporaryDirectory(prefix='tidal-restore-check-') as temporary:
+            shutil.chown(temporary, self.user.pw_uid, self.user.pw_gid)
+            source = Path(temporary) / 'tidal.db'
+            atomic(source, (inputs / 'tidal.db').read_bytes(), owner=self.user)
+            checked = self.native(runtime, ['db', 'check', '--database', source])['data']
+        if any(checked[key] != database[key] for key in ('database_identity', 'schema_revision')):
+            raise ValueError('Database does not match its saved identity and schema')
+        if journal['phase'] == 'complete':
+            active, active_runtime = self.check_active()
+            if (active['releases'] != data['releases'] or self.native(active_runtime,
+                    ['db', 'check'])['data']['database_identity'] != database['database_identity']):
+                raise ValueError('Completed restore no longer matches the active application')
+            return {'status': 'restored', 'changed': False, 'workers_held': (self.state / 'workers-held').exists()}
+        if journal['phase'] == 'new' and any(Path(str(self.database) + suffix).exists()
+                for suffix in ('', '-wal', '-shm')) and not overwrite:
+            raise ValueError('Existing application data requires explicit restore overwrite')
+        protected = operation / 'previous'
+        write_json(receipt, journal)
+        try:
+            self.hold(runtime)
+            self.verify_no_old_process(self.home)
+            if journal['phase'] == 'new':
+                protected.mkdir(mode=0o700, exist_ok=True)
+                previous = [Path(str(self.database) + suffix) for suffix in ('', '-wal', '-shm')]
+                previous += [self.state / 'active.json', *(self.config / name for name in PRIVATE_FILES),
+                    *(self.units / name for name in (*SERVICES, *TIMERS))]
+                for index, path in enumerate(previous):
+                    saved = protected / str(index)
+                    if path.is_file():
+                        atomic(saved, path.read_bytes())
+                write_json(protected / 'files.json', {'paths': [str(path) for path in previous],
+                    'sha256': {str(index): digest(protected / str(index))
+                        for index, path in enumerate(previous) if path.is_file()}})
+                journal['phase'] = 'protected'
+                write_json(receipt, journal)
+            originals = json.loads((protected / 'files.json').read_text())
+            if any(digest(protected / name) != value for name, value in originals['sha256'].items()):
+                raise ValueError('Protected previous state changed')
+            if journal['phase'] == 'protected':
+                self.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                shutil.chown(self.database.parent, self.user.pw_uid, self.user.pw_gid)
+                for suffix in ('-wal', '-shm'):
+                    Path(str(self.database) + suffix).unlink(missing_ok=True)
+                atomic(self.database, (inputs / 'tidal.db').read_bytes(), owner=self.user)
+                self.config.mkdir(mode=0o750, parents=True, exist_ok=True)
+                os.chown(self.config, 0, self.user.pw_gid)
+                for name in PRIVATE_FILES:
+                    atomic(self.config / name, (candidate / name).read_bytes(), owner=self.user)
+                journal['phase'] = 'installed'
+                write_json(receipt, journal)
+            if journal['phase'] == 'installed':
+                self.native(runtime, ['db', 'prepare-restore', '--credential-file', self.home / 'recovery-access.json'])
+                self.native(runtime, ['db', 'check'])
+                journal['phase'] = 'prepared'
+                write_json(receipt, journal)
+            self.publish_installation(candidate, data, signers, inputs / archive_name, protected)
+            write_json(self.state / 'latest-capture.json', {'capture': str(original), 'sha256': checksum,
+                'release_sha256': release['archive_sha256'], 'database': database,
+                'captured_at': manifest['captured_at'], 'origin': 'verified-restore'})
+            journal['phase'] = 'complete'
+            write_json(receipt, journal)
+        except BaseException:
+            atomic(self.state / 'held', '')
+            atomic(self.state / 'workers-held', '')
+            raise
+        return {'status': 'restored', 'changed': True, 'workers_held': True,
+            'database': checked, 'previous_state': str(protected)}
 
     def install_entry_points(self, release, archive):
         # Old console script locations now use the selected native runtime.
@@ -407,6 +547,8 @@ class Deployment:
         atomic('/usr/local/sbin/tidal-backup', capture, mode=0o755)
         from install_daily_capture import integrate
         daily = Path(self.user.pw_dir) / 'server-backup/backup.sh'
+        if not daily.exists():
+            return  # A replacement host need not have the retired mirror job.
         original = daily.read_text()
         saved = self.state / 'original-daily-backup.sh'
         if not saved.exists():
@@ -477,6 +619,7 @@ class Deployment:
         return result
 
     def resume(self):
+        self.require_completed_restores()
         record, release = self.check_active()
         capture = json.loads((self.state / 'latest-capture.json').read_text())
         if capture['release_sha256'] != record['releases']['application']['archive_sha256'] or digest(capture['capture']) != capture['sha256']:
@@ -518,6 +661,10 @@ def main():
     install.add_argument('--sha256', required=True)
     install.add_argument('--configuration', type=Path, required=True)
     install.add_argument('--legacy-repository', type=Path, default=Path('/home/wavey/tidal'))
+    restore = sub.add_parser('restore')
+    restore.add_argument('--capture', type=Path, required=True)
+    restore.add_argument('--sha256', required=True)
+    restore.add_argument('--overwrite', action='store_true')
     capture = sub.add_parser('capture')
     capture.add_argument('--archive', type=Path, required=True)
     capture.add_argument('--storage-mount', type=Path, default=Path('/mnt/storage-box'))
@@ -532,6 +679,8 @@ def main():
     with deployment.locked():
         if args.operation == 'install':
             result = deployment.install(args.archive, args.sha256, args.configuration, args.legacy_repository)
+        elif args.operation == 'restore':
+            result = deployment.restore(args.capture, args.sha256, overwrite=args.overwrite)
         elif args.operation == 'capture':
             result = deployment.capture(args.archive, args.storage_mount, args.destination, args.output)
         else:

@@ -3,8 +3,8 @@
 Tidal owns one SQLite database, one configuration, one encrypted signing key and
 one runtime release. Recovery restores that state, checks retained transactions,
 refreshes current observations and waits for explicit activation. The backup
-playbook handles files, service holds and recovery-point selection; it does not
-reimplement auction policy or transaction reconciliation.
+playbook retrieves saved inputs and invokes the app-owned installation and recovery
+commands. Tidal owns service holds, state preparation and worker resumption.
 
 ## What to retain
 
@@ -29,70 +29,57 @@ tidal db snapshot --database /path/to/tidal.db --output /backup/new-snapshot.sql
 Existing output files are never overwritten. The snapshot is checked before
 publication and carries a checksum. The outer backup job copies it and its
 matching runtime/configuration to the existing backup destination. The deployed
-backup scheduler determines cadence; adding a second destination is optional.
+backup scheduler determines cadence. Electro uses its existing Storage Box.
 
 ## Restore, then resume
 
-1. Isolate the original signing instance. Stop and persistently hold every API,
-   scanner, kick service and timer before replacing local files. `tidal hold`
-   revokes native activation; it cannot stop an old release that predates the
-   native lock. Service holds must survive reboot.
-2. Select and verify the saved recovery point and matching release archive.
-   Extract the archive into its final release directory and prepare it offline:
+For Electro's existing `tidal-capture-v1` archives, use the app-owned installer
+from a reviewed Tidal checkout. It supports the retained offline runtime inside
+the capture, including releases created before this restore command existed.
+The replacement needs the same service user and paths as the original host.
+
+1. Isolate the original signing instance, retrieve the selected capture from
+   storage, verify its recorded checksum and restore while held:
 
    ```bash
-   RELEASE/.python/bin/python3.12 RELEASE/scripts/prepare_release.py RELEASE
+   sudo python3 scripts/deploy_release.py restore --capture /private/capture.tar.gz --sha256 CAPTURE_SHA256
    ```
 
-3. Restore the database and protected configuration/key files while held. Use
-   one absolute configuration path and the same interpreter for all services.
-   Preserve any displaced database and its sidecars for interrupted recovery.
-4. Run the native checks and prepare new API access:
+   This verifies every member, prepares the exact saved runtime offline, restores
+   the consistent database and configuration, and starts only the read-only API.
+   It never upgrades the saved schema. Native preparation rotates API access,
+   marks prices stale and suppresses old alerts while preserving transaction
+   identities, amounts, timestamps and history. The fresh API credential is in
+   `/home/wavey/.tidal/recovery-access.json`, readable only by its owner.
+
+   Existing database files or sidecars require explicit `--overwrite`; displaced
+   state is retained privately. Retry the identical command after interruption.
+   The receipt prevents recopying the database after native preparation, and
+   workers remain held across reboot. Preserve the receipt and retained inputs.
+
+2. Check API health, actual restored dashboard/log data, authentication and public
+   routing. The API can serve saved data while RPC is unavailable. After confirming
+   source isolation and resolving any ambiguous external actions, explicitly resume:
 
    ```bash
-   tidal check-config --config /path/to/server.yaml --json
-   tidal db check --config /path/to/server.yaml --json
-   tidal db prepare-restore --config /path/to/server.yaml --credential-file /private/recovery-access.json --json
+   sudo python3 scripts/deploy_release.py resume
    ```
 
-   Restore preparation revokes old API keys, writes a new credential to the
-   protected output file, marks cached prices stale and suppresses old alert
-   transitions. It preserves transaction identities, amounts, timestamps,
-   no-fill policy and reviewed history baselines.
-5. Start the read-only API while workers remain held. Check `/health`, real
-   dashboard/log data, authentication and the UI. RPC or price-provider recovery
-   must not prevent basic API service from the restored database.
-6. Reconcile and observe current state:
+   The installer verifies the retrieved capture matches the active release and
+   database, reconciles known transactions, refreshes observations without sending
+   transactions or notifications, and invokes native activation. It then starts
+   normal worker cycles and enables the existing timers. A failed worker cycle
+   reinstates the hold. Known pending transactions continue to block their signer.
 
-   ```bash
-   tidal reconcile --config /path/to/server.yaml --json
-   tidal refresh --recovery --config /path/to/server.yaml --json
-   tidal status --config /path/to/server.yaml --json
-   ```
+Verify a normal cycle or legitimate no-work result, independently retrieve a
+post-recovery backup and the next scheduled backup, and record elapsed recovery
+time and necessary manual decisions. These live checks remain commissioning
+work; local command tests do not prove replacement-host recovery.
 
-   Recovery refresh creates no signer, broadcaster, price client or notification
-   transport. Reconciliation checks retained hashes and bounded known rounds;
-   it never rebroadcasts or replaces a transaction. It does not scan the whole
-   historical chain to invent missing submissions.
-7. Once dependencies and retained evidence permit execution, explicitly run
-   `tidal resume --config /path/to/server.yaml --json`. This binds activation to
-   the database UUID, chain, signers and checked account nonce. Then release the
-   service holds and enable the existing schedules. Native resume itself never
-   enables timers. A known pending transaction continues to block its signer
-   while schedules can observe and reconcile.
-8. Verify a normal scanner/kick cycle or legitimate no-work result, take and
-   retrieve a post-recovery backup, and retrieve the next scheduled backup.
-   Record elapsed recovery time and any manual intervention.
-
-An unavailable route or required Curve quote leaves the affected candidate
-unsent and retains its error audit. When these are the only candidate failures,
-the kick command reports `WAITING_FOR_DEPENDENCY` (exit 75); the existing timer
-can retry normally. Malformed quote data, execution failures and unexpected
-exceptions still fail explicitly. Do not relax quote requirements to resume.
-
-The outer recovery workflow should expose two operator actions: restore into a
-held state, then resume. Its journal records completed phases so interruption
-does not require guessing which files were replaced.
+For diagnosis, the existing `tidal check-config`, `tidal db check`, `tidal status`,
+`tidal reconcile` and `tidal refresh --recovery` commands remain available. Native
+`tidal resume` alone does not enable systemd timers; use the installer above for
+Electro's complete resumption procedure.
 
 ## Pending transactions and historical gaps
 

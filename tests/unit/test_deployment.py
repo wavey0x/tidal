@@ -187,6 +187,33 @@ def test_daily_capture_is_complete_verified_and_never_contains_activation(host, 
         assert all(hashlib.sha256(bundle.extractfile(name).read()).hexdigest() == expected for name, expected in manifest['files'].items())
 
 
+def test_local_capture_reuses_native_format_without_claiming_storage_success(host, saved_capture, tmp_path):
+    archive = host.app.releases.parent / 'tidal-artifacts' / (saved_capture['release_sha256'] + '.tar.gz')
+    archive.parent.mkdir()
+    archive.write_bytes((tmp_path / 'release.tar.gz').read_bytes())
+    previous = (host.app.state / 'latest-capture.json').read_bytes()
+    host.commands.clear()
+    output = tmp_path / 'staging/capture.tar'
+    captured = host.app.capture(None, '/unavailable', '/unavailable/captures', output, local_only=True)
+    assert not any(args[0] == 'mountpoint' for args in host.commands)
+    assert (host.app.state / 'latest-capture.json').read_bytes() == previous
+    assert output.read_bytes()[:2] != b'\x1f\x8b'
+    with deploy.tarfile.open(output, 'r:') as bundle:
+        assert json.load(bundle.extractfile('manifest.json'))['format'] == 'tidal-capture-v1'
+        assert bundle.extractfile(archive.name).read() == archive.read_bytes()
+    assert restore(host, captured)['status'] == 'restored'
+
+
+def test_reconciliation_uses_native_procedure_and_holds_workers_without_stopping_api(host):
+    install(host)
+    host.commands.clear()
+    result = host.app.reconcile()
+    assert host.calls[-1] == ['reconcile']
+    assert json.loads((host.app.state / 'reconciliation.json').read_text()) == result
+    assert (host.app.state / 'workers-held').exists() and not (host.app.state / 'held').exists()
+    assert ['systemctl', 'stop', 'tidal-api.service'] not in host.commands
+
+
 def restore(host, capture, *, overwrite=True):
     return host.app.restore(capture['capture'], capture['sha256'], overwrite=overwrite)
 

@@ -31,6 +31,19 @@ publication and carries a checksum. The outer backup job copies it and its
 matching runtime/configuration to the existing backup destination. The deployed
 backup scheduler determines cadence. Electro uses its existing Storage Box.
 
+The shared backup job can capture all inputs with the same app-owned installer:
+
+```bash
+sudo python3 /usr/local/lib/tidal/deploy_release.py capture --local-only --output /private/staging/capture.tar
+```
+
+This writes the existing native capture format in an uncompressed outer tar so
+restic can deduplicate unchanged release bytes. It owns the application lock,
+selects the actual installed archive from `tidal-artifacts`, and does not claim a
+successful remote backup. Upload and independent retrieval belong to the backup
+job. The existing daily mounted-Storage-Box capture remains supported until that
+replacement is commissioned.
+
 ## Restore, then resume
 
 For Electro's existing `tidal-capture-v1` archives, use the app-owned installer

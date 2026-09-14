@@ -143,16 +143,20 @@ class Deployment:
                 condition += f'ConditionPathExists=!{self.state}/workers-held\n'
             atomic(self.units / (name + '.d') / '90-electro-hold.conf', condition, mode=0o644)
         command(['systemctl', 'daemon-reload'])
+        installed_timers = []
         for name in (*TIMERS, *RETIRED, *SERVICES):
             if workers_only and name == 'tidal-api.service':
                 continue
             properties = command(['systemctl', 'show', name, '-p', 'LoadState,ActiveState,MainPID'])
             state = dict(line.split('=', 1) for line in properties.splitlines() if '=' in line)
+            if name in (*TIMERS, 'tidal-kicker.timer') and state.get('LoadState') != 'not-found':
+                installed_timers.append(name)
             # A malformed or masked old unit can reject `stop` even though it
             # has no process. Persistent conditions already prevent new starts.
             if state.get('ActiveState') not in ('inactive', 'failed') or state.get('MainPID', '0') != '0':
                 command(['systemctl', 'stop', name])
-        command(['systemctl', 'disable', *TIMERS, 'tidal-kicker.timer'])
+        if installed_timers:
+            command(['systemctl', 'disable', *installed_timers])
         self.native(release, ['hold'])
 
     def verify_no_old_process(self, repository):

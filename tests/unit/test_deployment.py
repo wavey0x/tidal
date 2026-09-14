@@ -214,6 +214,20 @@ def test_reconciliation_uses_native_procedure_and_holds_workers_without_stopping
     assert ['systemctl', 'stop', 'tidal-api.service'] not in host.commands
 
 
+def test_hold_on_replacement_host_disables_only_installed_timers(host, monkeypatch):
+    def command(args, **kwargs):
+        host.commands.append(list(map(str, args)))
+        if 'show' in args:
+            loaded = 'loaded' if args[2] == 'tidal.timer' else 'not-found'
+            return f'LoadState={loaded}\nActiveState=inactive\nMainPID=0\n'
+        return ''
+    monkeypatch.setattr(deploy, 'command', command)
+    host.app.hold(host.release)
+    assert [args for args in host.commands if args[:2] == ['systemctl', 'disable']] == [
+        ['systemctl', 'disable', 'tidal.timer']]
+    assert (host.app.state / 'held').exists() and (host.app.state / 'workers-held').exists()
+
+
 def restore(host, capture, *, overwrite=True):
     return host.app.restore(capture['capture'], capture['sha256'], overwrite=overwrite)
 

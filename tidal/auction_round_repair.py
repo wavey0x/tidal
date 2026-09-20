@@ -59,20 +59,36 @@ class AuctionRoundRepair:
             settings=settings,
         )
 
-    async def run(self, *, auction: str, token: str, apply: bool) -> RepairReport:
+    async def run(
+        self, *, auction: str, token: str, apply: bool,
+        kick_id: int | None = None, settlement_tx_hash: str | None = None,
+    ) -> RepairReport:
         """Inspect or repair exactly one selected pair, never the entire DB."""
         pairs = {(normalize_address(auction), normalize_address(token))}
+        if (kick_id is None) != (settlement_tx_hash is None):
+            raise ValueError("Provide both --kick-id and --settlement-tx for an exact settlement repair")
+        if kick_id is not None:
+            kick = self.repo.get(kick_id)
+            if kick is None or kick.get("operation_type") != "kick" or (
+                kick.get("auction_address"), kick.get("token_address")
+            ) not in pairs or kick.get("status") != "CONFIRMED":
+                raise ValueError("Select a confirmed kick in the requested auction/token pair")
         with execution_lock(self.settings.resolved_home_path / "execution.lock"):
             if apply:
-                assert_history_repair_unblocked(self.session)
+                if settlement_tx_hash is None:
+                    assert_history_repair_unblocked(self.session)
                 from tidal.recovery import chain_readiness
                 await chain_readiness(self.settings, self.web3_client)
-            return await self._run(pairs=pairs, apply=apply)
+            return await self._run(pairs=pairs, apply=apply, kick_id=kick_id, settlement_tx_hash=settlement_tx_hash)
 
-    async def _run(self, *, pairs: set[tuple[str, str]], apply: bool) -> RepairReport:
+    async def _run(
+        self, *, pairs: set[tuple[str, str]], apply: bool,
+        kick_id: int | None = None, settlement_tx_hash: str | None = None,
+    ) -> RepairReport:
         before = self._snapshot()
         errors: list[ReconciliationError] = []
         if apply:
+            self.reconciler.rebuild_round_links(pairs)
             tx_hashes = {
                 str(row["tx_hash"])
                 for auction, token in pairs
@@ -81,6 +97,7 @@ class AuctionRoundRepair:
                 and not row.get("historical_baseline")
                 and row.get("operation_type")
                 in {"kick", "resolve_auction", "sweep_auction"}
+                and (kick_id is None or row["id"] == kick_id or row.get("round_kick_id") == kick_id)
             }
             errors.extend(
                 await self.reconciler.reconcile_receipts(
@@ -93,11 +110,13 @@ class AuctionRoundRepair:
                 await self.reconciler.discover_direct_settlements(
                     timeout_seconds=2,
                     pairs=pairs,
+                    kick_id=kick_id,
+                    settlement_tx_hash=settlement_tx_hash,
                 )
             )
             self.reconciler.rebuild_round_links(pairs)
-            assert_history_repair_unblocked(self.session)
-            if not errors:
+            if not errors and settlement_tx_hash is None:
+                assert_history_repair_unblocked(self.session)
                 await self._baseline_unprovable_rounds(pairs)
         audits = await self._audit_pairs(pairs)
         after = self._snapshot()

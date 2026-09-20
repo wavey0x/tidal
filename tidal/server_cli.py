@@ -110,6 +110,8 @@ def db_init(config: ConfigOption = None) -> None:
 def db_repair_auction_rounds(
     auction: str = typer.Option(..., "--auction", help="Exact auction to review."),
     token: str = typer.Option(..., "--token", help="Exact sell token to review."),
+    kick_id: int | None = typer.Option(None, "--kick-id", min=1, help="Confirmed kick for an exact settlement repair."),
+    settlement_tx: str | None = typer.Option(None, "--settlement-tx", help="Verify this settlement transaction instead of searching logs; requires --kick-id."),
     config: ConfigOption = None,
     json_output: JsonOption = False,
     apply: bool = typer.Option(
@@ -119,6 +121,13 @@ def db_repair_auction_rounds(
     ),
 ) -> None:
     import asyncio
+
+    if (kick_id is None) != (settlement_tx is None):
+        raise typer.BadParameter("Provide both --kick-id and --settlement-tx.")
+    if settlement_tx is not None:
+        import re
+        if re.fullmatch(r"0x[0-9a-fA-F]{64}", settlement_tx) is None:
+            raise typer.BadParameter("--settlement-tx must be a 0x-prefixed 32-byte transaction hash.")
 
     configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
     cli_ctx = CLIContext(config)
@@ -133,7 +142,7 @@ def db_repair_auction_rounds(
                     session=session,
                     settings=settings,
                     web3_client=web3_client,
-                ).run(auction=auction, token=token, apply=apply)
+                ).run(auction=auction, token=token, apply=apply, kick_id=kick_id, settlement_tx_hash=settlement_tx)
         finally:
             await web3_client.close()
             database.engine.dispose()

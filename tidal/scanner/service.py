@@ -233,6 +233,7 @@ class ScannerService:
                     stage="OPERATION_RECONCILIATION",
                     error_code=error.error_code,
                     error_message=error.error_message,
+                    token_address=error.token_address,
                 )
                 for error in reconciliation_errors
             )

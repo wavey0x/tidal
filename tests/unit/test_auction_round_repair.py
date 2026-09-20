@@ -459,3 +459,64 @@ def test_repair_recomputes_round_links_in_chain_order(session) -> None:
     assert rows[old_close_id]["round_kick_id"] == old_kick_id
     assert rows[latest_close_id]["round_kick_id"] == latest_kick_id
     assert rows[no_op_id]["round_kick_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_exhaustion_preserves_unresolved_history_without_baselining(session):
+    from tidal.operation_reconciler import ReconciliationError
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(_row("kick", "0x" + "1" * 64, created_at=MINED_AT,
+        status="CONFIRMED", requested_sell_amount="100", sell_amount="100",
+        block_number=100, transaction_index=1, mined_at=MINED_AT))
+    repair = _repair(session, _web3({}, active=False))
+    repair.reconciler.discover_direct_settlements.return_value = [ReconciliationError(
+        "0x" + "1" * 64, "known_history_limit", "Search exhausted for this kick.", AUCTION, TOKEN, kick_id)]
+    report = await repair.run(auction=AUCTION, token=TOKEN, apply=True)
+    assert not report.passed
+    assert repo.get(kick_id)["historical_baseline"] == 0
+    assert report.pairs[0].outcome == "INCOMPLETE"
+    assert report.reconciliation_errors[0].kick_id == kick_id
+
+
+@pytest.mark.asyncio
+async def test_exact_settlement_repair_never_baselines_other_gaps(session):
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(_row("kick", "0x" + "1" * 64, created_at=MINED_AT,
+        status="CONFIRMED", requested_sell_amount="100", sell_amount="100",
+        block_number=100, transaction_index=1, mined_at=MINED_AT))
+    repair = _repair(session, _web3({}, active=False))
+    report = await repair.run(auction=AUCTION, token=TOKEN, apply=True,
+        kick_id=kick_id, settlement_tx_hash="0x" + "2" * 64)
+    assert not report.passed
+    assert repo.get(kick_id)["historical_baseline"] == 0
+    assert repair.reconciler.discover_direct_settlements.await_args.kwargs["kick_id"] == kick_id
+
+
+@pytest.mark.asyncio
+async def test_exact_settlement_selector_must_belong_to_pair(session):
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(_row("kick", "0x" + "1" * 64, created_at=MINED_AT,
+        status="CONFIRMED", requested_sell_amount="100", sell_amount="100",
+        block_number=100, transaction_index=1, mined_at=MINED_AT))
+    repair = _repair(session, _web3({}))
+    with pytest.raises(ValueError, match="requested auction/token pair"):
+        await repair.run(auction=AUCTION, token="0x" + "9" * 40, apply=True,
+            kick_id=kick_id, settlement_tx_hash="0x" + "2" * 64)
+    repair.reconciler.discover_direct_settlements.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_exact_evidence_repair_does_not_require_overriding_unrelated_pending_attempt(session):
+    repo = KickTxRepository(session)
+    kick_id = repo.insert(_row("kick", "0x" + "1" * 64, created_at=MINED_AT,
+        status="CONFIRMED", requested_sell_amount="100", sell_amount="100",
+        block_number=100, transaction_index=1, mined_at=MINED_AT))
+    transaction_id = session.execute(models.transactions.insert().values(operation="kick",
+        tx_hash="0x" + "9" * 64, status="PENDING", legacy=1, created_at=MINED_AT, updated_at=MINED_AT)).lastrowid
+    session.commit()
+    repair = _repair(session, _web3({}))
+    await repair.run(auction=AUCTION, token=TOKEN, apply=True, kick_id=kick_id, settlement_tx_hash="0x" + "2" * 64)
+    repair.reconciler.discover_direct_settlements.assert_awaited_once()
+    assert repo.get(kick_id)["historical_baseline"] == 0
+    from tidal.transactions import TransactionRepository
+    assert TransactionRepository(session).get(transaction_id)["status"] == "PENDING"

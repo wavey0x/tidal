@@ -222,7 +222,7 @@ def kick_run(
                                 "Another operation owns execution; retrying within this cycle."
                                 if outcome.blocked_code == "BUSY" else
                                 "Waiting for the retained transaction to finalize before preparing the next source.",
-                            ])
+                            ], border_style="cyan")
                         last_wait_code = outcome.blocked_code
                         # run_once has released the execution lock, and no DB
                         # transaction remains open while the scanner progresses.

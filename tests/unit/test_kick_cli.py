@@ -185,7 +185,8 @@ def outcome(code=None, attempted=0):
     )
 
 
-def test_hourly_cycle_retries_contention_then_waits_for_finality_between_sources(native, monkeypatch):
+@pytest.mark.parametrize("json_output", [False, True])
+def test_hourly_cycle_retries_contention_then_waits_for_finality_between_sources(native, monkeypatch, json_output):
     calls, sleeps, sessions = [], [], []
     now = [0]
     monkeypatch.setattr(kick_cli, "time", SimpleNamespace(monotonic=lambda: now[0]))
@@ -221,17 +222,22 @@ def test_hourly_cycle_retries_contention_then_waits_for_finality_between_sources
 
     monkeypatch.setattr(kick_cli, "build_txn_service", build)
     monkeypatch.setattr(kick_cli.asyncio, "sleep", sleep)
-    response = invoke(native, "--headless", "--wait-seconds", "90", "--json")
+    response = invoke(native, "--headless", "--wait-seconds", "90", *(["--json"] if json_output else []))
     assert response.exit_code == 0, response.output
     assert calls == ["strategy", "strategy", "fee_burner", "fee_burner"]
     assert sleeps == [15, 15]
-    payload = json.loads(response.stdout)
-    assert len(payload["data"]["runs"]) == 2
-    assert payload["data"]["pending_transactions"] == 0
+    if json_output:
+        payload = json.loads(response.stdout)
+        assert len(payload["data"]["runs"]) == 2
+        assert payload["data"]["pending_transactions"] == 0
+    else:
+        assert response.stdout.count("Waiting to continue") == 2
+        assert "Waiting for the retained transaction to finalize" in response.stdout
 
 
 @pytest.mark.parametrize("code,status", [("BUSY", None), ("UNRESOLVED_ATTEMPTS", "INCLUDED")])
-def test_hourly_cycle_has_one_shared_deadline(native, monkeypatch, code, status):
+@pytest.mark.parametrize("json_output", [False, True])
+def test_hourly_cycle_has_one_shared_deadline(native, monkeypatch, code, status, json_output):
     now, calls = [0], []
     monkeypatch.setattr(kick_cli, "time", SimpleNamespace(monotonic=lambda: now[0]))
     def build(effective, session, **kwargs):
@@ -245,15 +251,20 @@ def test_hourly_cycle_has_one_shared_deadline(native, monkeypatch, code, status)
         now[0] += seconds
     monkeypatch.setattr(kick_cli, "build_txn_service", build)
     monkeypatch.setattr(kick_cli.asyncio, "sleep", sleep)
-    response = invoke(native, "--headless", "--wait-seconds", "20", "--json")
+    response = invoke(native, "--headless", "--wait-seconds", "20", *(["--json"] if json_output else []))
     assert response.exit_code == 75, response.output
-    payload = json.loads(response.stdout)
     assert now[0] == 20 and calls == ["strategy", "strategy"]
-    assert payload["data"]["remaining_profiles"] == ["strategy", "fee_burner"]
-    assert any(row["code"] == "CYCLE_TIME_LIMIT" for row in payload["blockers"])
+    if json_output:
+        payload = json.loads(response.stdout)
+        assert payload["data"]["remaining_profiles"] == ["strategy", "fee_burner"]
+        assert any(row["code"] == "CYCLE_TIME_LIMIT" for row in payload["blockers"])
+    else:
+        assert "Execution deferred" in response.stdout
+        assert "No eligible candidates" not in response.stdout
 
 
-def test_review_required_is_never_automatically_retried(native, monkeypatch):
+@pytest.mark.parametrize("json_output", [False, True])
+def test_review_required_is_never_automatically_retried(native, monkeypatch, json_output):
     with Database(native.settings.database_url).session() as session:
         retained(session, "strategy", status="REVIEW_REQUIRED")
     calls = []
@@ -266,7 +277,7 @@ def test_review_required_is_never_automatically_retried(native, monkeypatch):
         pytest.fail("review must not be retried")
     monkeypatch.setattr(kick_cli, "build_txn_service", build)
     monkeypatch.setattr(kick_cli.asyncio, "sleep", sleep)
-    response = invoke(native, "--headless", "--wait-seconds", "90", "--json")
+    response = invoke(native, "--headless", "--wait-seconds", "90", *(["--json"] if json_output else []))
     assert response.exit_code == 75, response.output
     assert calls == ["fee_burner", "strategy"]
 

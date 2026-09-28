@@ -19,6 +19,9 @@ from tidal.migrations import run_migrations
 from tidal.operation_reconciler import DecodedKick, DecodedReceipt, DecodedSettlement, OperationReconciler
 from tidal.persistence import models
 from tidal.persistence.db import Database
+from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
+from tidal.transaction_service.service import TxnService
+from tidal.transaction_service.types import KickPlan
 
 TARGET = "0x" + "2" * 40
 AUCTION = "0x" + "3" * 40
@@ -148,6 +151,32 @@ async def submit(runtime, operations=None):
                      "gas": 100000, "type": 2, "maxFeePerGas": 2000000000, "maxPriorityFeePerGas": 1000000000},
         operations=operations if operations is not None else [operation()], action="kick",
     )
+
+
+@pytest.mark.asyncio
+async def test_next_source_prepares_only_after_retained_transaction_finalizes(runtime):
+    await submit(runtime)
+    planner = SimpleNamespace(plan=AsyncMock(return_value=KickPlan(
+        source_type="fee_burner", source_address=None, auction_address=None, token_address=None,
+        limit=None, eligible_count=0, selected_count=0, ready_count=0,
+    )))
+    service = TxnService(
+        executor=SimpleNamespace(managed_executor=runtime.executor, signer=runtime.signer),
+        planner=planner, txn_run_repository=TxnRunRepository(runtime.session),
+        kick_tx_repository=KickTxRepository(runtime.session),
+        lock_path=runtime.settings.resolved_home_path / "execution.lock",
+    )
+    for mined in (False, True):
+        runtime.rpc.mined = mined
+        result = await service.run_once(live=True, source_type="fee_burner")
+        assert result.blocked_code == "UNRESOLVED_ATTEMPTS"
+        planner.plan.assert_not_awaited()
+    runtime.rpc.finalized = 102
+    result = await service.run_once(live=True, source_type="fee_burner")
+    assert result.status == "SUCCESS"
+    planner.plan.assert_awaited_once()
+    assert runtime.rpc.sends == runtime.signer.calls == 1
+    assert runtime.session.execute(select(models.transactions.c.status)).scalar_one() == "CONFIRMED"
 
 
 @pytest.mark.asyncio

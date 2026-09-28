@@ -10,6 +10,7 @@ from pathlib import Path
 import structlog
 
 from tidal.lifecycle import LifecycleError, execution_lock
+from tidal.transactions import TransactionRepository
 from tidal.transaction_service.kick_execute import BatchExecutionBlocked
 from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.time import utcnow_iso
@@ -204,6 +205,15 @@ class TxnService:
                     managed._activation()
                     self.kick_tx_repository.session.commit()
                     await managed.reconciler.reconcile()
+                    pending = TransactionRepository(self.kick_tx_repository.session).unresolved(
+                        signer=self._planner_sender(),
+                    )
+                    self.kick_tx_repository.session.commit()
+                    if pending:
+                        raise LifecycleError(
+                            "UNRESOLVED_ATTEMPTS",
+                            f"{len(pending)} retained attempt(s) require reconciliation before this signer can send.",
+                        )
                 return await self._run(
                     run_id=run_id, started_at=started_at, live=live, batch=batch,
                     source_type=source_type, source_address=source_address,
@@ -212,12 +222,13 @@ class TxnService:
                     allow_killed_gauge=allow_killed_gauge,
                 )
         except LifecycleError as exc:
-            if exc.code != "BUSY":
+            if exc.code not in {"BUSY", "UNRESOLVED_ATTEMPTS"}:
                 raise
-            logger.info("txn_lock_held", run_id=run_id)
+            logger.info("txn_execution_deferred", run_id=run_id, reason=exc.code)
             return TxnRunResult(
-                run_id=run_id, status="BUSY", candidates_found=0,
+                run_id=run_id, status="BUSY" if exc.code == "BUSY" else "WAITING", candidates_found=0,
                 kicks_attempted=0, kicks_succeeded=0, kicks_failed=0,
+                blocked_code=exc.code, failure_summary={str(exc): 1},
             )
 
     async def _run(
@@ -290,6 +301,7 @@ class TxnService:
 
         kicks_attempted = 0 if live else len(plan.resolve_operations) + len(plan.kick_operations)
         blocked_reason = None
+        blocked_code = None
         kicks_succeeded = 0
         kicks_failed = 0
         dependency_failures = 0
@@ -347,6 +359,7 @@ class TxnService:
                         kicks_failed += f
                         kicks_attempted += a
                 blocked_reason = f"{exc.code}: {exc}"
+                blocked_code = exc.code
                 logger.info("txn_execution_waiting", run_id=run_id, reason=blocked_reason)
         else:
             now_iso = utcnow_iso()
@@ -407,4 +420,5 @@ class TxnService:
             limited_candidate_count=plan.limited_count,
             failure_summary=failure_summary,
             dependency_failures=dependency_failures,
+            blocked_code=blocked_code,
         )

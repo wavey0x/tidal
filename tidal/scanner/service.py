@@ -13,7 +13,7 @@ from sqlalchemy import select
 from tidal.config import MonitoredFeeBurner
 from tidal.persistence import models
 from tidal.async_resources import close_client
-from tidal.lifecycle import execution_lock
+from tidal.lifecycle import LifecycleError, execution_lock
 from tidal.paths import default_txn_lock_path
 from tidal.alerts.base import AlertSink
 from tidal.constants import ADDITIONAL_DISCOVERY_VAULTS, CORE_REWARD_TOKENS
@@ -151,8 +151,24 @@ class ScannerService:
         self.execution_lock_path = execution_lock_path or default_txn_lock_path()
 
     async def scan_once(self, on_progress: ProgressCallback | None = None) -> ScanRunResult:
-        with execution_lock(self.execution_lock_path):
+        # Observation must not exclude transaction execution for the duration
+        # of discovery, RPC reads, prices and enrichment.
+        with execution_lock(self.execution_lock_path.with_name("scan.lock")):
             return await self._scan_once(on_progress)
+
+    async def _execution_stage(self, stage: str, operation):
+        """Protect complete execution stages; contention only defers that stage."""
+        self._commit_stage()
+        try:
+            with execution_lock(self.execution_lock_path):
+                result = await operation()
+                self._commit_stage()
+                return result
+        except LifecycleError as exc:
+            if exc.code != "BUSY":
+                raise
+            logger.info("scan_execution_deferred", stage=stage, reason=exc.code)
+            return None
 
     async def close(self) -> None:
         try:
@@ -240,7 +256,10 @@ class ScannerService:
 
         if self.operation_reconciler is not None:
             add_reconciliation_errors(
-                await self.operation_reconciler.reconcile_submitted(timeout_seconds=2)
+                await self._execution_stage(
+                    "OPERATION_RECONCILIATION",
+                    lambda: self.operation_reconciler.reconcile_submitted(timeout_seconds=2),
+                ) or []
             )
             self._commit_stage()
 
@@ -578,12 +597,15 @@ class ScannerService:
                             )
                         )
 
-            settlement_result = await self.auction_settler.settle_stale_auctions(
-                run_id=run_id,
-                sources=settlement_sources,
+            settlement_result = await self._execution_stage(
+                "AUCTION_SETTLEMENT",
+                lambda: self.auction_settler.settle_stale_auctions(
+                    run_id=run_id, sources=settlement_sources,
+                ),
             )
-            stage_h_stats = asdict(settlement_result.stats)
-            errors.extend(settlement_result.errors)
+            if settlement_result is not None:
+                stage_h_stats = asdict(settlement_result.stats)
+                errors.extend(settlement_result.errors)
         _progress(
             6,
             "Settling stale auctions",
@@ -796,13 +818,16 @@ class ScannerService:
 
         _progress(10, "Enabling auction tokens")
         if self.auction_token_enabler is not None:
-            enablement_result = await self.auction_token_enabler.enable_missing_tokens(
-                run_id=run_id,
-                candidates=auto_enable_candidates,
-                enabled_tokens_by_auction=enabled_tokens_by_auction,
+            enablement_result = await self._execution_stage(
+                "AUCTION_ENABLEMENT",
+                lambda: self.auction_token_enabler.enable_missing_tokens(
+                    run_id=run_id, candidates=auto_enable_candidates,
+                    enabled_tokens_by_auction=enabled_tokens_by_auction,
+                ),
             )
-            stage_i_stats = asdict(enablement_result.stats)
-            errors.extend(enablement_result.errors)
+            if enablement_result is not None:
+                stage_i_stats = asdict(enablement_result.stats)
+                errors.extend(enablement_result.errors)
         _progress(
             10,
             "Enabling auction tokens",
@@ -835,11 +860,13 @@ class ScannerService:
 
         if self.operation_reconciler is not None:
             assert self.operation_reconciliation_pairs_fn is not None
-            reconciliation_errors = await self.operation_reconciler.repair_pairs(
-                self.operation_reconciliation_pairs_fn(),
-                timeout_seconds=2,
+            reconciliation_errors = await self._execution_stage(
+                "AUCTION_ROUND_RECONCILIATION",
+                lambda: self.operation_reconciler.repair_pairs(
+                    self.operation_reconciliation_pairs_fn(), timeout_seconds=2,
+                ),
             )
-            add_reconciliation_errors(reconciliation_errors)
+            add_reconciliation_errors(reconciliation_errors or [])
             self._commit_stage()
 
         _progress(12, "Enriching AuctionScan")

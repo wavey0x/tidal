@@ -77,7 +77,7 @@ async def test_completed_scans_use_one_post_commit_alert_hook(status: str, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_scan_holds_shared_lock_through_observation_and_alert_evaluation(tmp_path):
+async def test_scan_excludes_other_scans_but_allows_execution_through_observation_and_alerts(tmp_path):
     import asyncio
     from tidal.lifecycle import LifecycleError, execution_lock
 
@@ -85,19 +85,25 @@ async def test_scan_holds_shared_lock_through_observation_and_alert_evaluation(t
 
     async def competing_command():
         with pytest.raises(LifecycleError) as error:
-            with execution_lock(scanner.execution_lock_path):
-                pytest.fail("Other task must not mutate scan decisions")
+            with execution_lock(scanner.execution_lock_path.with_name("scan.lock")):
+                pytest.fail("Other scan must not overlap observation or alert dispatch")
         assert error.value.code == "BUSY"
+        with execution_lock(scanner.execution_lock_path):
+            pass
 
     async def observe(**kwargs):
         await asyncio.create_task(competing_command())
-        # The owning task can enter the same lock for a managed action.
+        # The owning scan can also enter execution for its managed stages.
         with execution_lock(scanner.execution_lock_path):
             return ScanRunResult("run", "SUCCESS", 1, 1, 1, 1, 0)
 
     scanner._run_scan = observe
-    scanner.alert_dispatcher.dispatch = AsyncMock(side_effect=lambda _: None)
+    async def dispatch(_):
+        await asyncio.create_task(competing_command())
+    scanner.alert_dispatcher.dispatch = AsyncMock(side_effect=dispatch)
     await scanner.scan_once()
+    with execution_lock(scanner.execution_lock_path.with_name("scan.lock")):
+        pass
     with execution_lock(scanner.execution_lock_path):
         pass
 

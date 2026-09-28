@@ -484,3 +484,4 @@ class TxnRunResult:
     limited_candidate_count: int = 0
     failure_summary: dict[str, int] | None = None
     dependency_failures: int = 0
+    blocked_code: str | None = None

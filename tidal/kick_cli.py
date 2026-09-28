@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import AsyncExitStack
 from dataclasses import asdict
 
@@ -28,6 +29,41 @@ from tidal.runtime import build_txn_service
 from tidal.transactions import TransactionRepository
 
 app = typer.Typer(help="Inspect and execute kicks locally on the application host", no_args_is_help=True)
+
+_CONTINUATION_POLL_SECONDS = 15
+
+
+def _ordered_profiles(session, profiles: list[str], *, sender: str, chain_id: int) -> list[str]:
+    """Give the other source the next turn, using the retained submission ledger."""
+    if len(profiles) < 2:
+        return profiles
+    last_source = session.execute(
+        select(models.kick_txs.c.source_type)
+        .join(models.transactions, models.kick_txs.c.transaction_id == models.transactions.c.id)
+        .where(
+            models.transactions.c.chain_id == chain_id,
+            models.transactions.c.signer == sender.lower(),
+            models.transactions.c.profile == "kick",
+            models.kick_txs.c.source_type.in_(profiles),
+        )
+        .order_by(models.transactions.c.id.desc(), models.kick_txs.c.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return sorted(profiles, key=lambda profile: profile == last_source)
+
+
+def _retryable_wait(outcome, pending: list[dict]) -> bool:
+    # Once a source has submitted, give the next source its turn. Rebuild its
+    # preparation only after finality; never keep a quoted transaction to send later.
+    if outcome.kicks_attempted:
+        return False
+    if outcome.blocked_code == "BUSY":
+        return True
+    return (
+        outcome.blocked_code == "UNRESOLVED_ATTEMPTS"
+        and bool(pending)
+        and all(row["status"] in {"RECORDED", "PENDING", "INCLUDED"} for row in pending)
+    )
 
 
 def _normalize_source_type_filter(value: str | None) -> str | None:
@@ -96,6 +132,10 @@ def kick_run(
     require_curve_quote: bool | None = typer.Option(None, "--require-curve/--no-require-curve"),
     allow_killed_gauge: bool = typer.Option(False, "--allow-killed-gauge"),
     allow_no_fill_retry: bool = typer.Option(False, "--allow-no-fill-retry"),
+    wait_seconds: int = typer.Option(
+        0, "--wait-seconds", min=0, max=2700,
+        help="Continue through temporary lock and pending-transaction waits within this total cycle budget (headless only).",
+    ),
 ) -> None:
     """Prepare and execute locally under the shared lock; retained attempts gate sends."""
     unattended = no_confirmation or headless
@@ -108,6 +148,8 @@ def kick_run(
         raise typer.BadParameter("--allow-no-fill-retry requires both --auction and --token")
     if allow_no_fill_retry and headless:
         raise typer.BadParameter("--allow-no-fill-retry cannot be used with --headless")
+    if wait_seconds and (not headless or dry_run):
+        raise typer.BadParameter("--wait-seconds requires --headless and cannot be used with --dry-run")
     configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
     ctx = CLIContext(config)
 
@@ -128,8 +170,20 @@ def kick_run(
         ) if not dry_run else None
         profiles = [selected] if selected else ["strategy", "fee_burner"]
         runs = []
+        remaining_profiles = []
+        deadline = time.monotonic() + wait_seconds
         with ctx.session() as session:
-            for profile in profiles:
+            if wait_seconds:
+                profiles = _ordered_profiles(
+                    session, profiles, sender=execution.sender, chain_id=ctx.settings.chain_id,
+                )
+                session.commit()
+            for profile_index, profile in enumerate(profiles):
+                # The first pass always runs. Later passes must fit the same
+                # budget, including preparation and RPC time, not a new timeout.
+                if wait_seconds and profile_index and time.monotonic() >= deadline:
+                    remaining_profiles = profiles[profile_index:]
+                    break
                 effective = _profile_settings(
                     ctx.settings, profile, min_usd_value=min_usd_value,
                     max_base_fee_gwei=max_base_fee_gwei, require_curve_quote=require_curve_quote,
@@ -139,17 +193,43 @@ def kick_run(
                         effective, session, signer=execution.signer if execution else None,
                         confirm_fn=None if unattended or dry_run else confirm, owned_clients=clients,
                     )
-                    try:
-                        outcome = await service.run_once(
-                            live=not dry_run, batch=batch, source_type=profile,
-                            source_address=source, auction_address=auction, token_address=token,
-                            limit=limit, allow_no_fill_retry=allow_no_fill_retry,
-                            allow_killed_gauge=allow_killed_gauge,
+                    last_wait_code = None
+                    while True:
+                        try:
+                            outcome = await service.run_once(
+                                live=not dry_run, batch=batch, source_type=profile,
+                                source_address=source, auction_address=auction, token_address=token,
+                                limit=limit, allow_no_fill_retry=allow_no_fill_retry,
+                                allow_killed_gauge=allow_killed_gauge,
+                            )
+                        except LifecycleError as exc:
+                            if runs:
+                                return result(exc.code, data={"runs": runs}, blockers=[{"code": exc.code, "message": str(exc)}])
+                            raise
+                        session.commit()
+                        pending = TransactionRepository(session).unresolved(
+                            signer=execution.sender if execution else None,
                         )
-                    except LifecycleError as exc:
-                        if runs:
-                            return result(exc.code, data={"runs": runs}, blockers=[{"code": exc.code, "message": str(exc)}])
-                        raise
+                        session.commit()
+                        if not wait_seconds or not _retryable_wait(outcome, pending):
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            remaining_profiles = profiles[profile_index:]
+                            break
+                        if not json_output and outcome.blocked_code != last_wait_code:
+                            render_status_panel("Waiting to continue", [
+                                "Another operation owns execution; retrying within this cycle."
+                                if outcome.blocked_code == "BUSY" else
+                                "Waiting for the retained transaction to finalize before preparing the next source.",
+                            ])
+                        last_wait_code = outcome.blocked_code
+                        # run_once has released the execution lock, and no DB
+                        # transaction remains open while the scanner progresses.
+                        await asyncio.sleep(min(_CONTINUATION_POLL_SECONDS, remaining))
+                        if time.monotonic() >= deadline:
+                            remaining_profiles = profiles[profile_index:]
+                            break
                     session.commit()
                     runs.append(asdict(outcome))
                     if not json_output:
@@ -161,20 +241,26 @@ def kick_run(
                             auction_address=auction, run_rows=rows, verbose=verbose,
                             sender=execution.sender if execution else None,
                         )
-            pending = TransactionRepository(session).unresolved()
-        waiting_runs = [run for run in runs if run["status"] in {"BUSY", "WAITING"}]
-        code = "WAITING" if pending or waiting_runs else "OK"
+                if remaining_profiles:
+                    break
+            pending = TransactionRepository(session).unresolved(signer=execution.sender if execution else None)
+        waiting_runs = [run for run in runs if run["status"] in {"BUSY", "WAITING"}
+                        and (run["blocked_code"] != "UNRESOLVED_ATTEMPTS" or pending)]
+        code = "WAITING" if pending or waiting_runs or remaining_profiles else "OK"
         blockers = [{"code": "UNRESOLVED_ATTEMPTS", "message": f"{len(pending)} retained attempt(s) await reconciliation."}] if pending else []
         blockers.extend({"code": run["status"], "message": "Another command owns execution; retry later." if run["status"] == "BUSY"
                          else "; ".join((run.get("failure_summary") or {"Execution is held for review": 1}).keys())}
                         for run in waiting_runs)
+        if remaining_profiles:
+            blockers.append({"code": "CYCLE_TIME_LIMIT", "message": "Cycle time budget reached; remaining sources will be reconsidered next hour."})
         if any(run["kicks_failed"] for run in runs):
             dependency_only = all(run["kicks_failed"] == run["dependency_failures"] for run in runs)
             code = "WAITING_FOR_DEPENDENCY" if dependency_only else "EXECUTION_ERROR"
             message = ("Required quotes are unavailable; affected candidates remain unsent and will be checked next cycle."
                        if dependency_only else "One or more operations failed; inspect the retained run details.")
             blockers.append({"code": code, "message": message})
-        return result(code, data={"runs": runs, "pending_transactions": len(pending)}, blockers=blockers)
+        return result(code, data={"runs": runs, "pending_transactions": len(pending),
+                                  "remaining_profiles": remaining_profiles}, blockers=blockers)
 
     emit_operation(lambda: asyncio.run(execute()), json_output=json_output)
 

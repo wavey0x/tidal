@@ -1,4 +1,6 @@
 from pathlib import Path
+import asyncio
+import fcntl
 import sqlite3
 from contextlib import closing
 
@@ -27,6 +29,7 @@ from tidal.persistence.repositories import (
     VaultRepository,
 )
 from tidal.scanner.service import ScannerService
+from tidal.lifecycle import LifecycleError, execution_lock
 from tidal.scanner.auction_mapper import AuctionMappingRefreshResult, FeeBurnerAuctionRefreshResult
 from tidal.scanner.auction_token_enabler import (
     AuctionTokenEnablementPassResult,
@@ -459,7 +462,7 @@ async def test_scanner_persists_lowercase_and_zero_balances() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scanner_releases_sqlite_writer_before_price_refresh(tmp_path: Path) -> None:
+async def test_scanner_releases_sqlite_writer_before_price_refresh(tmp_path: Path, monkeypatch) -> None:
     engine = create_engine(
         f"sqlite:///{tmp_path / 'contention.db'}",
         connect_args={"timeout": 0.1},
@@ -522,12 +525,48 @@ async def test_scanner_releases_sqlite_writer_before_price_refresh(tmp_path: Pat
             alert_sink=NullAlertSink(),
         )
 
+        scanner.execution_lock_path = tmp_path / "execution.lock"
+        refresh = scanner.token_price_refresh_service.refresh_many
+        async def probe(*args, **kwargs):
+            # Probe through independent kernel locks, not reentrant ownership.
+            with scanner.execution_lock_path.open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                result = await refresh(*args, **kwargs)
+            with scanner.execution_lock_path.with_name("scan.lock").open("a") as lock:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return result
+        monkeypatch.setattr(scanner.token_price_refresh_service, "refresh_many", probe)
         result = await scanner.scan_once()
         assert result.status == "SUCCESS"
 
     with closing(sqlite3.connect(str(tmp_path / "contention.db") + ".snapshot")) as snapshot:
         assert snapshot.execute("SELECT status FROM scan_runs").fetchone() == ("RUNNING",)
         assert snapshot.execute("SELECT count(*) FROM strategy_token_balances_latest").fetchone()[0] > 0
+
+
+@pytest.mark.asyncio
+async def test_scanner_execution_stage_defers_contention_and_protects_full_operation(tmp_path):
+    from unittest.mock import AsyncMock, Mock
+    scanner = object.__new__(ScannerService)
+    scanner.execution_lock_path = tmp_path / "execution.lock"
+    scanner.session = Mock()
+    operation = AsyncMock(return_value="sent")
+    with execution_lock(scanner.execution_lock_path):
+        # A different task cannot inherit reentrant ownership.
+        assert await asyncio.create_task(scanner._execution_stage("SETTLE", operation)) is None
+    operation.assert_not_awaited()
+
+    async def prepare_and_send():
+        with scanner.execution_lock_path.open("a") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return "sent"
+    assert await scanner._execution_stage("SETTLE", prepare_and_send) == "sent"
+    with scanner.execution_lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with pytest.raises(LifecycleError, match="held"):
+        await scanner._execution_stage("SETTLE", AsyncMock(side_effect=LifecycleError("HELD", "held")))
 
 
 @pytest.mark.asyncio

@@ -707,7 +707,9 @@ def render_kick_run_summary(
     deferred_same_auction_count = getattr(result, "deferred_same_auction_count", 0)
     limited_candidate_count = getattr(result, "limited_candidate_count", 0)
 
-    if skipped_count and skipped_count == len(run_rows):
+    if getattr(result, "status", None) in {"BUSY", "WAITING"} and result.candidates_found == 0:
+        render_status_panel("Execution deferred", list(result.failure_summary or {"Execution is waiting": 1}))
+    elif skipped_count and skipped_count == len(run_rows):
         typer.echo("Skipped by operator. No transaction sent.")
     elif result.candidates_found == 0:
         typer.echo("No eligible candidates.")

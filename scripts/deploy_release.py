@@ -82,8 +82,8 @@ def unit_files(release, config, state, user):
             'SuccessExitStatus=75\nTimeoutStartSec=45min\n',
         'tidal-kick.service': '[Unit]\nDescription=Tidal kick automation cycle\nAfter=network-online.target\n' + workers +
             '\n[Service]\nType=oneshot\n' + common +
-            ''.join(f'ExecStart={cli} kick run --config {config}/server.yml --headless --source-type {source}\n'
-                    for source in ('strategy', 'fee-burner')) + 'SuccessExitStatus=75\nTimeoutStartSec=12min\n',
+            f'ExecStart={cli} kick run --config {config}/server.yml --headless --wait-seconds 2700\n'
+            'SuccessExitStatus=75\nTimeoutStartSec=50min\n',
         'tidal.timer': '[Unit]\nDescription=Tidal scanner every fifteen minutes\n' + workers +
             '\n[Timer]\nOnCalendar=*-*-* *:0/15:00 UTC\nPersistent=true\nUnit=tidal.service\n\n[Install]\nWantedBy=timers.target\n',
         'tidal-kick.timer': '[Unit]\nDescription=Tidal hourly kick cycle\n' + workers +
@@ -131,10 +131,11 @@ class Deployment:
             raise RuntimeError('Tidal remains held: ' + result['code'] + '; inspect the native command')
         return result
 
-    def hold(self, release):
+    def hold(self, release, *, workers_only=False):
         # Persist conditions before stopping anything. A reboot at any following
         # instruction cannot restart an old writer or bypass the worker hold.
-        atomic(self.state / 'held', '')
+        if not workers_only:
+            atomic(self.state / 'held', '')
         atomic(self.state / 'workers-held', '')
         for name in (*SERVICES, *TIMERS, *RETIRED):
             condition = f'[Unit]\nConditionPathExists=!{self.state}/held\n'
@@ -142,14 +143,20 @@ class Deployment:
                 condition += f'ConditionPathExists=!{self.state}/workers-held\n'
             atomic(self.units / (name + '.d') / '90-electro-hold.conf', condition, mode=0o644)
         command(['systemctl', 'daemon-reload'])
+        installed_timers = []
         for name in (*TIMERS, *RETIRED, *SERVICES):
+            if workers_only and name == 'tidal-api.service':
+                continue
             properties = command(['systemctl', 'show', name, '-p', 'LoadState,ActiveState,MainPID'])
             state = dict(line.split('=', 1) for line in properties.splitlines() if '=' in line)
+            if name in (*TIMERS, 'tidal-kicker.timer') and state.get('LoadState') != 'not-found':
+                installed_timers.append(name)
             # A malformed or masked old unit can reject `stop` even though it
             # has no process. Persistent conditions already prevent new starts.
             if state.get('ActiveState') not in ('inactive', 'failed') or state.get('MainPID', '0') != '0':
                 command(['systemctl', 'stop', name])
-        command(['systemctl', 'disable', *TIMERS, 'tidal-kicker.timer'])
+        if installed_timers:
+            command(['systemctl', 'disable', *installed_timers])
         self.native(release, ['hold'])
 
     def verify_no_old_process(self, repository):
@@ -167,10 +174,15 @@ class Deployment:
             except (FileNotFoundError, ProcessLookupError, PermissionError):
                 continue
 
-    def prepare_candidate(self, archive, checksum, configuration):
+    def prepare_candidate(self, archive, checksum, configuration, *, saved_units=False):
         archive, configuration = Path(archive).resolve(), Path(configuration).resolve()
         if not re.fullmatch('[0-9a-f]{64}', checksum) or digest(archive) != checksum:
             raise ValueError('Select the exact retained artifact checksum')
+        retained = self.releases.parent / 'tidal-artifacts' / (checksum + '.tar.gz')
+        if not retained.exists():
+            atomic(retained, archive.read_bytes())
+        if digest(retained) != checksum:
+            raise ValueError('Retained offline artifact changed')
         release = self.releases / checksum
         release.mkdir(parents=True, exist_ok=True)
         self.releases.chmod(0o755)
@@ -196,7 +208,8 @@ class Deployment:
                 path.chmod(0o755 if path.is_dir() else 0o644 | (path.stat().st_mode & 0o111))
         metadata = json.loads((release / 'electro-release.json').read_text())
         files = {name: (configuration / name).read_bytes() for name in PRIVATE_FILES}
-        files.update({name: value.encode() for name, value in unit_files(release, self.config, self.state, self.user.pw_name).items()})
+        files.update({name: (configuration / name).read_bytes() if saved_units else value.encode()
+            for name, value in unit_files(release, self.config, self.state, self.user.pw_name).items()})
         identity = hashlib.sha256(json.dumps({name: hashlib.sha256(value).hexdigest() for name, value in files.items()}, sort_keys=True).encode()).hexdigest()
         candidate = self.state / 'candidates' / identity
         candidate.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -315,6 +328,7 @@ class Deployment:
         return report
 
     def install(self, archive, checksum, configuration, repository):
+        self.require_completed_restores()
         candidate, data, signers = self.prepare_candidate(archive, checksum, configuration)
         release = Path(data['releases']['application']['release_path'])
         operation = self.state / 'operations' / candidate.name
@@ -369,6 +383,14 @@ class Deployment:
             report = self.native(release, ['db', 'migrate'])
         write_json(operation / 'migration.json', report)
         self.native(release, ['db', 'check'])
+        self.publish_installation(candidate, data, signers, archive, protected)
+        journal['phase'] = 'complete'
+        write_json(journal_path, journal)
+        return {'status': 'installed', 'workers_held': True, 'candidate': str(candidate), 'originals': str(protected)}
+
+    def publish_installation(self, candidate, data, signers, archive, protected):
+        """Shared final installation step for upgrades and saved-state recovery."""
+        release = Path(data['releases']['application']['release_path'])
         for name in (*SERVICES, *TIMERS):
             atomic(self.units / name, (candidate / name).read_bytes(), mode=0o644)
         # Retired aliases are permanently masked; retain their original unit
@@ -389,11 +411,145 @@ class Deployment:
         sync_directory(self.state)
         command(['systemctl', 'enable', 'tidal-api.service'])
         command(['systemctl', 'start', 'tidal-api.service'])
-        journal['phase'] = 'complete'
-        write_json(journal_path, journal)
-        return {'status': 'installed', 'workers_held': True, 'candidate': str(candidate), 'originals': str(protected)}
+
+    def require_completed_restores(self, selected=None):
+        for receipt in (self.state / 'recovery').glob('*/restore.json'):
+            if receipt != selected and json.loads(receipt.read_text())['phase'] != 'complete':
+                raise ValueError('Finish the interrupted restore with its original capture first')
+
+    def restore(self, capture, checksum, *, overwrite=False):
+        """Restore the existing native capture format; never upgrade its schema.
+
+        The retained input and one phase receipt make retry safe even if native
+        preparation committed before a process interruption. Storage retrieval
+        belongs to the caller. No old configuration discovery is needed here.
+        """
+        capture = Path(capture).resolve()
+        if not re.fullmatch('[a-f0-9]{64}', checksum) or digest(capture) != checksum:
+            raise ValueError('Select the exact independently retrieved capture checksum')
+        operation = self.state / 'recovery' / checksum
+        receipt = operation / 'restore.json'
+        self.require_completed_restores(receipt)
+        for previous in (self.state / 'operations').glob('*/journal.json'):
+            if json.loads(previous.read_text())['phase'] not in ('complete', 'superseded-before-protection'):
+                raise ValueError('Finish the interrupted installation before restoring a capture')
+        journal = json.loads(receipt.read_text()) if receipt.exists() else {'phase': 'new'}
+        if journal['phase'] not in ('new', 'protected', 'installed', 'prepared', 'complete'):
+            raise ValueError('Unknown restore phase; preserve the current state for inspection')
+        operation.mkdir(mode=0o700, parents=True, exist_ok=True)
+        inputs = operation / 'inputs'
+        inputs.mkdir(mode=0o700, exist_ok=True)
+        with tarfile.open(capture) as bundle:
+            members = bundle.getmembers()
+            names = [member.name for member in members]
+            if len(names) != len(set(names)) or any(not member.isfile() for member in members):
+                raise ValueError('Native recovery requires unique regular capture members')
+            manifest = json.load(bundle.extractfile('manifest.json'))
+            release = json.load(bundle.extractfile('release.json'))
+            archive_name = release['archive_sha256'] + '.tar.gz'
+            expected = {*PRIVATE_FILES, *SERVICES, *TIMERS, 'tidal.db', 'release.json',
+                'native-database.json', archive_name}
+            if (not re.fullmatch('[a-f0-9]{64}', release['archive_sha256'])
+                    or manifest['format'] != 'tidal-capture-v1'
+                    or set(manifest['files']) != expected or set(names) != expected | {'manifest.json'}):
+                raise ValueError('Capture must contain exactly one Tidal database, runtime and configuration')
+            # Validate the complete input before publishing any extracted member.
+            for name, expected_hash in manifest['files'].items():
+                if hashlib.file_digest(bundle.extractfile(name), 'sha256').hexdigest() != expected_hash:
+                    raise ValueError('Capture member checksum changed: ' + name)
+            for name in expected:
+                target = inputs / name
+                if target.exists():
+                    if target.is_symlink() or digest(target) != manifest['files'][name]:
+                        raise ValueError('Retained recovery input changed: ' + name)
+                else:
+                    atomic(target, bundle.extractfile(name).read())
+        original = operation / 'capture.tar.gz'
+        if not original.exists():
+            atomic(original, capture.read_bytes())
+        if digest(original) != checksum:
+            raise ValueError('Retained original capture changed')
+        candidate, data, signers = self.prepare_candidate(inputs / archive_name,
+            release['archive_sha256'], inputs, saved_units=True)
+        if data['releases']['application'] != release:
+            raise ValueError('Saved release identity differs from its offline artifact')
+        runtime = Path(data['releases']['application']['release_path'])
+        database = json.loads((inputs / 'native-database.json').read_text())['data']
+        if database['sha256'] != manifest['files']['tidal.db']:
+            raise ValueError('Native database evidence differs from captured bytes')
+        with tempfile.TemporaryDirectory(prefix='tidal-restore-check-') as temporary:
+            shutil.chown(temporary, self.user.pw_uid, self.user.pw_gid)
+            source = Path(temporary) / 'tidal.db'
+            atomic(source, (inputs / 'tidal.db').read_bytes(), owner=self.user)
+            checked = self.native(runtime, ['db', 'check', '--database', source])['data']
+        if any(checked[key] != database[key] for key in ('database_identity', 'schema_revision')):
+            raise ValueError('Database does not match its saved identity and schema')
+        if journal['phase'] == 'complete':
+            active, active_runtime = self.check_active()
+            if (active['releases'] != data['releases'] or self.native(active_runtime,
+                    ['db', 'check'])['data']['database_identity'] != database['database_identity']):
+                raise ValueError('Completed restore no longer matches the active application')
+            return {'status': 'restored', 'changed': False, 'workers_held': (self.state / 'workers-held').exists()}
+        if journal['phase'] == 'new' and any(Path(str(self.database) + suffix).exists()
+                for suffix in ('', '-wal', '-shm')) and not overwrite:
+            raise ValueError('Existing application data requires explicit restore overwrite')
+        protected = operation / 'previous'
+        write_json(receipt, journal)
+        try:
+            self.hold(runtime)
+            self.verify_no_old_process(self.home)
+            if journal['phase'] == 'new':
+                protected.mkdir(mode=0o700, exist_ok=True)
+                previous = [Path(str(self.database) + suffix) for suffix in ('', '-wal', '-shm')]
+                previous += [self.state / 'active.json', *(self.config / name for name in PRIVATE_FILES),
+                    *(self.units / name for name in (*SERVICES, *TIMERS))]
+                for index, path in enumerate(previous):
+                    saved = protected / str(index)
+                    if path.is_file():
+                        atomic(saved, path.read_bytes())
+                write_json(protected / 'files.json', {'paths': [str(path) for path in previous],
+                    'sha256': {str(index): digest(protected / str(index))
+                        for index, path in enumerate(previous) if path.is_file()}})
+                journal['phase'] = 'protected'
+                write_json(receipt, journal)
+            originals = json.loads((protected / 'files.json').read_text())
+            if any(digest(protected / name) != value for name, value in originals['sha256'].items()):
+                raise ValueError('Protected previous state changed')
+            if journal['phase'] == 'protected':
+                self.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                shutil.chown(self.database.parent, self.user.pw_uid, self.user.pw_gid)
+                for suffix in ('-wal', '-shm'):
+                    Path(str(self.database) + suffix).unlink(missing_ok=True)
+                atomic(self.database, (inputs / 'tidal.db').read_bytes(), owner=self.user)
+                self.config.mkdir(mode=0o750, parents=True, exist_ok=True)
+                os.chown(self.config, 0, self.user.pw_gid)
+                for name in PRIVATE_FILES:
+                    atomic(self.config / name, (candidate / name).read_bytes(), owner=self.user)
+                journal['phase'] = 'installed'
+                write_json(receipt, journal)
+            if journal['phase'] == 'installed':
+                self.native(runtime, ['db', 'prepare-restore', '--credential-file', self.home / 'recovery-access.json'])
+                self.native(runtime, ['db', 'check'])
+                journal['phase'] = 'prepared'
+                write_json(receipt, journal)
+            self.publish_installation(candidate, data, signers, inputs / archive_name, protected)
+            write_json(self.state / 'latest-capture.json', {'capture': str(original), 'sha256': checksum,
+                'release_sha256': release['archive_sha256'], 'database': database,
+                'captured_at': manifest['captured_at'], 'origin': 'verified-restore'})
+            journal['phase'] = 'complete'
+            write_json(receipt, journal)
+        except BaseException:
+            atomic(self.state / 'held', '')
+            atomic(self.state / 'workers-held', '')
+            raise
+        return {'status': 'restored', 'changed': True, 'workers_held': True,
+            'database': checked, 'previous_state': str(protected)}
 
     def install_entry_points(self, release, archive):
+        # One app-owned installer also supports captures from older runtimes.
+        installer = Path('/usr/local/lib/tidal/deploy_release.py')
+        for name in ('deploy_release.py', 'install_daily_capture.py'):
+            atomic(installer.with_name(name), Path(__file__).with_name(name).read_bytes(), mode=0o644)
         # Old console script locations now use the selected native runtime.
         # Preserve their previous bytes/links in the original-state archive.
         launcher = f'#!/bin/bash\nset -euo pipefail\nexport TIDAL_HOME={self.home}\nexport TIDAL_CONFIG={self.config}/server.yml\nexport TIDAL_ENV_FILE={self.config}/server.env\nexec {release}/.venv/bin/python -I -m tidal.cli "$@"\n'
@@ -401,12 +557,14 @@ class Deployment:
                          '.local/share/uv/tools/tidal/bin/tidal', '.local/share/uv/tools/tidal/bin/tidal-server'):
             atomic(Path(self.user.pw_dir) / relative, launcher, mode=0o755)
         # Retain the existing application-owned pathname as a strict dispatcher.
-        dispatcher = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {release}/scripts/deploy_release.py "$@"\n'
+        dispatcher = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {installer} "$@"\n'
         atomic(Path(self.user.pw_dir) / 'tidal/deploy-tidal.sh', dispatcher, mode=0o755)
-        capture = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {release}/scripts/deploy_release.py capture --archive {Path(archive).resolve()}\n'
+        capture = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {installer} capture\n'
         atomic('/usr/local/sbin/tidal-backup', capture, mode=0o755)
         from install_daily_capture import integrate
         daily = Path(self.user.pw_dir) / 'server-backup/backup.sh'
+        if not daily.exists():
+            return  # A replacement host need not have the retired mirror job.
         original = daily.read_text()
         saved = self.state / 'original-daily-backup.sh'
         if not saved.exists():
@@ -425,19 +583,23 @@ class Deployment:
                 raise ValueError('Active configuration differs from retained inputs')
         return record, Path(record['releases']['application']['release_path'])
 
-    def capture(self, archive, storage_mount, destination, output):
-        command(['mountpoint', '-q', storage_mount])
+    def capture(self, archive, storage_mount, destination, output, *, local_only=False):
+        if not local_only:
+            command(['mountpoint', '-q', storage_mount])
         record, release = self.check_active()
         checksum = record['releases']['application']['archive_sha256']
+        archive = archive or (self.releases.parent / 'tidal-artifacts' / (checksum + '.tar.gz'))
         if digest(archive) != checksum:
             raise ValueError('Backup requires the exact installed offline artifact')
         destination, output = Path(destination), Path(output)
-        if not destination.resolve().is_relative_to(Path(storage_mount).resolve()):
+        if not local_only and not destination.resolve().is_relative_to(Path(storage_mount).resolve()):
             raise ValueError('Capture destination must use the selected mounted Storage Box')
-        destination.mkdir(parents=True, exist_ok=True)
-        output.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not local_only:
+            destination.mkdir(parents=True, exist_ok=True)
         capture_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
-        with tempfile.TemporaryDirectory(prefix='.capture-', dir=output) as temporary:
+        local = output if local_only else output / (capture_id + '.tar.gz')
+        local.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.TemporaryDirectory(prefix='.capture-', dir=local.parent) as temporary:
             stage = Path(temporary)
             with tempfile.TemporaryDirectory(prefix='tidal-snapshot-') as scratch:
                 shutil.chown(scratch, self.user.pw_uid, self.user.pw_gid)
@@ -456,13 +618,21 @@ class Deployment:
             manifest = {'format': 'tidal-capture-v1', 'captured_at': datetime.now(timezone.utc).isoformat(),
                 'files': {path.name: digest(path) for path in stage.iterdir()}}
             write_json(stage / 'manifest.json', manifest)
-            local = output / (capture_id + '.tar.gz')
-            with tarfile.open(local, 'x:gz') as bundle:
+            # The existing native format remains unchanged. An uncompressed
+            # outer tar lets restic deduplicate the unchanged offline runtime.
+            with tarfile.open(local, 'x' if local_only else 'x:gz') as bundle:
                 for path in sorted(stage.iterdir()):
                     bundle.add(path, arcname=path.name)
         with local.open('rb') as stream:
             os.fsync(stream.fileno())
         captured_sha = digest(local)
+        result = {'capture': str(local), 'local_capture': str(local), 'sha256': captured_sha,
+            'release_sha256': checksum, 'release': record['releases']['application'], 'signers': record['signers'],
+            'database': native['data'], 'database_path': str(self.database), 'captured_at': manifest['captured_at'],
+            'configuration_sha256': {str((self.config if name in PRIVATE_FILES else self.units) / name): manifest['files'][name]
+                for name in (*PRIVATE_FILES, *SERVICES, *TIMERS)}}
+        if local_only:
+            return result  # Staging is not evidence of a successful remote backup.
         remote = destination / local.name
         partial = remote.with_name('.' + remote.name + '.partial')
         shutil.copyfile(local, partial)
@@ -471,12 +641,20 @@ class Deployment:
         if digest(partial) != captured_sha:
             raise ValueError('Storage Box capture verification failed')
         partial.replace(remote)
-        result = {'capture': str(remote), 'local_capture': str(local), 'sha256': captured_sha,
-            'release_sha256': checksum, 'database': native['data'], 'captured_at': manifest['captured_at']}
+        result['capture'] = str(remote)
         write_json(self.state / 'latest-capture.json', result)
         return result
 
+    def reconcile(self):
+        self.require_completed_restores()
+        _, release = self.check_active()
+        self.hold(release, workers_only=True)
+        result = self.native(release, ['reconcile'], allow_blocked=True)
+        write_json(self.state / 'reconciliation.json', result)
+        return result
+
     def resume(self):
+        self.require_completed_restores()
         record, release = self.check_active()
         capture = json.loads((self.state / 'latest-capture.json').read_text())
         if capture['release_sha256'] != record['releases']['application']['archive_sha256'] or digest(capture['capture']) != capture['sha256']:
@@ -496,7 +674,7 @@ class Deployment:
         sync_directory(self.state)
         try:
             command(['systemctl', 'start', 'tidal.service'], timeout=2800)
-            command(['systemctl', 'start', 'tidal-kick.service'], timeout=900)
+            command(['systemctl', 'start', 'tidal-kick.service'], timeout=3100)
             status = self.native(release, ['status'], allow_blocked=True)
             if not status['data'].get('activated'):
                 raise RuntimeError('Initial worker cycle invalidated activation')
@@ -518,12 +696,18 @@ def main():
     install.add_argument('--sha256', required=True)
     install.add_argument('--configuration', type=Path, required=True)
     install.add_argument('--legacy-repository', type=Path, default=Path('/home/wavey/tidal'))
+    restore = sub.add_parser('restore')
+    restore.add_argument('--capture', type=Path, required=True)
+    restore.add_argument('--sha256', required=True)
+    restore.add_argument('--overwrite', action='store_true')
     capture = sub.add_parser('capture')
-    capture.add_argument('--archive', type=Path, required=True)
+    capture.add_argument('--archive', type=Path)
+    capture.add_argument('--local-only', action='store_true', help='Write an uncompressed capture at --output for the backup job')
     capture.add_argument('--storage-mount', type=Path, default=Path('/mnt/storage-box'))
     capture.add_argument('--destination', type=Path, default=Path('/mnt/storage-box/backup/tidal-native'))
     capture.add_argument('--output', type=Path, default=Path('/var/backups/tidal'))
     sub.add_parser('resume')
+    sub.add_parser('reconcile')
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error('Run the application deployment entry point as root')
@@ -532,8 +716,12 @@ def main():
     with deployment.locked():
         if args.operation == 'install':
             result = deployment.install(args.archive, args.sha256, args.configuration, args.legacy_repository)
+        elif args.operation == 'restore':
+            result = deployment.restore(args.capture, args.sha256, overwrite=args.overwrite)
         elif args.operation == 'capture':
-            result = deployment.capture(args.archive, args.storage_mount, args.destination, args.output)
+            result = deployment.capture(args.archive, args.storage_mount, args.destination, args.output, local_only=args.local_only)
+        elif args.operation == 'reconcile':
+            result = deployment.reconcile()
         else:
             result = deployment.resume()
     print(json.dumps(result, sort_keys=True))

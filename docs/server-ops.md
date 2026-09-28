@@ -10,9 +10,24 @@ The existing service layout remains an API, a scanner timer and a kick timer:
 ```bash
 tidal api serve --config /path/to/server.yaml
 tidal scan run --config /path/to/server.yaml --no-confirmation --auto-settle --auto-enable-tokens
-tidal kick run --config /path/to/server.yaml --headless --source-type strategy
-tidal kick run --config /path/to/server.yaml --headless --source-type fee-burner
+tidal kick run --config /path/to/server.yaml --headless --wait-seconds 2700
 ```
+
+The hourly kick service evaluates both source profiles in one bounded cycle.
+It retries temporary execution contention and waits for retained transactions
+to finalize before preparing the next source. The 45-minute budget is shared
+across sources; the service timeout is 50 minutes. It releases the execution
+lock and database transaction between checks. Review-required attempts and
+other policy blockers remain blocked. A source that submitted gets one pass
+per cycle; the last source to submit is considered second next hour, using
+the existing transaction ledger. Each profile retains its own thresholds,
+gas limits and quote requirements.
+
+The scanner uses `TIDAL_HOME/scan.lock` to prevent overlapping scans.
+Observation does not hold `execution.lock`; reconciliation, settlement and
+token enablement take that lock for their complete execution stages. A busy
+execution stage is deferred while observation continues. Deployment and
+recovery still stop all database users before replacing state.
 
 Use persistent service holds for deployment and restore, including every old
 writer. Remove automatic startup migrations. The API can serve the restored

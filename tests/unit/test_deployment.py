@@ -438,6 +438,10 @@ def test_daily_route_update_is_idempotent_and_preserves_existing_jobs():
     source = '# existing migration archive\noverall_status=0\n# existing rsync\nrsync -avz --delete "$dir" "$DEST_DIR"\n'
     updated = daily.integrate(source)
     assert daily.integrate(updated) == updated
+    renamed = updated.replace('tidal_excludes', 'mirror_excludes')
+    assert daily.integrate(renamed) == renamed
+    with pytest.raises(ValueError, match='incomplete'):
+        daily.integrate(renamed.replace('"${mirror_excludes[@]}"', ''))
     assert updated.count('/usr/local/sbin/tidal-backup') == 1
     assert '# existing migration archive' in updated and '# existing rsync' in updated
     assert '--delete-excluded' not in updated

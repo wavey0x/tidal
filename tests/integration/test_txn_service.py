@@ -308,16 +308,17 @@ def _build_txn_service(session, *, preparer=None, executor=None, planner=None, l
 
 
 @pytest.mark.asyncio
-async def test_pending_signer_waits_before_planning_and_creates_no_empty_runs(session):
+@pytest.mark.parametrize("status", ["RECORDED", "PENDING", "INCLUDED", "REVIEW_REQUIRED"])
+async def test_pending_signer_waits_before_planning_and_creates_no_empty_runs(session, status):
     session.execute(insert(models.transactions).values(
-        operation="kick", status="INCLUDED", signer="0x" + "1" * 40,
+        operation="kick", status=status, signer="0x" + "1" * 40,
         created_at="2026-09-28T00:00:00+00:00", updated_at="2026-09-28T00:00:00+00:00",
     ))
     session.commit()
     service = _build_txn_service(session)
     for _ in range(2):
         result = await service.run_once(live=True, source_type="fee_burner")
-        assert result.status == "WAITING" and result.blocked_code == "UNRESOLVED_ATTEMPTS"
+        assert result.status == "WAITING"
         assert result.kicks_attempted == 0
         service.planner.plan.assert_not_awaited()
         assert not session.in_transaction()

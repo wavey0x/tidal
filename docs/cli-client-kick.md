@@ -15,14 +15,13 @@ managed sender. `--dry-run` writes diagnostics without unlocking or sending.
 Interactive live runs request confirmation; unattended live JSON requires
 `--no-confirmation` or `--headless`.
 
-The hourly service uses `--headless --wait-seconds 2700` for one combined cycle.
-`--wait-seconds` defaults to zero and accepts at most 2700 seconds; it requires
-live headless execution. Within that total budget, temporary lock contention
-and unresolved transactions can be reconsidered before preparing a source.
-Previously submitted transactions are never resent. Review-required attempts
-are not retried. The cycle considers the last submitting source second, using
-the retained ledger so restart does not reset its turn. Budget exhaustion
-returns exit code 75 with `CYCLE_TIME_LIMIT` and `remaining_profiles` in JSON.
+The scheduled service uses `--headless` for one pass through both sources.
+It exits with code 75 when execution is busy or a retained transaction remains
+unresolved. The timer starts the next pass one minute after completion; the
+command does not sleep or retry internally. Headless live runs consider the
+last submitting source second, using the retained ledger so restart does not
+reset its turn. Finality and review checks remain in force, and previously
+submitted transactions are never resent.
 
 Filter with `--source`, `--auction`, `--token` and `--limit`. Explicit
 `--min-usd-value`, `--max-base-fee-gwei` and `--require-curve/--no-require-curve`

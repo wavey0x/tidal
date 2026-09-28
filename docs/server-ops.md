@@ -10,18 +10,21 @@ The existing service layout remains an API, a scanner timer and a kick timer:
 ```bash
 tidal api serve --config /path/to/server.yaml
 tidal scan run --config /path/to/server.yaml --no-confirmation --auto-settle --auto-enable-tokens
-tidal kick run --config /path/to/server.yaml --headless --wait-seconds 2700
+tidal kick run --config /path/to/server.yaml --headless
 ```
 
-The hourly kick service evaluates both source profiles in one bounded cycle.
-It retries temporary execution contention and waits for retained transactions
-to finalize before preparing the next source. The 45-minute budget is shared
-across sources; the service timeout is 50 minutes. It releases the execution
-lock and database transaction between checks. Review-required attempts and
-other policy blockers remain blocked. A source that submitted gets one pass
-per cycle; the last source to submit is considered second next hour, using
-the existing transaction ledger. Each profile retains its own thresholds,
-gas limits and quote requirements.
+The kick service evaluates both source profiles once and exits. Its timer
+starts another pass one minute after the previous pass finishes, so runs do
+not overlap. Lock contention and unresolved transactions return exit code 75,
+which the service treats as a normal wait until the next tick. Each pass
+reconciles retained transactions before preparing fresh candidates. The last
+source to submit is considered second on the next pass, using the existing
+transaction ledger. Review-required attempts stay blocked; no transaction is
+automatically resent.
+
+Checking every minute does not override the configured lot caps, cooldowns,
+gas limits or quote requirements. The usual 24-hour cooldown still applies;
+explicit shorter cooldowns can now take effect between hourly boundaries.
 
 The scanner uses `TIDAL_HOME/scan.lock` to prevent overlapping scans.
 Observation does not hold `execution.lock`; reconciliation, settlement and

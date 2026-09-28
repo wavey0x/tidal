@@ -82,12 +82,12 @@ def unit_files(release, config, state, user):
             'SuccessExitStatus=75\nTimeoutStartSec=45min\n',
         'tidal-kick.service': '[Unit]\nDescription=Tidal kick automation cycle\nAfter=network-online.target\n' + workers +
             '\n[Service]\nType=oneshot\n' + common +
-            f'ExecStart={cli} kick run --config {config}/server.yml --headless --wait-seconds 2700\n'
-            'SuccessExitStatus=75\nTimeoutStartSec=50min\n',
+            f'ExecStart={cli} kick run --config {config}/server.yml --headless\n'
+            'SuccessExitStatus=75\nTimeoutStartSec=12min\n',
         'tidal.timer': '[Unit]\nDescription=Tidal scanner every fifteen minutes\n' + workers +
             '\n[Timer]\nOnCalendar=*-*-* *:0/15:00 UTC\nPersistent=true\nUnit=tidal.service\n\n[Install]\nWantedBy=timers.target\n',
-        'tidal-kick.timer': '[Unit]\nDescription=Tidal hourly kick cycle\n' + workers +
-            '\n[Timer]\nOnBootSec=2min\nOnCalendar=hourly\nAccuracySec=30s\nPersistent=true\nUnit=tidal-kick.service\n\n[Install]\nWantedBy=timers.target\n',
+        'tidal-kick.timer': '[Unit]\nDescription=Tidal kick checks every minute\n' + workers +
+            '\n[Timer]\nOnBootSec=2min\nOnUnitInactiveSec=1min\nAccuracySec=1s\nUnit=tidal-kick.service\n\n[Install]\nWantedBy=timers.target\n',
     }
 
 
@@ -674,7 +674,7 @@ class Deployment:
         sync_directory(self.state)
         try:
             command(['systemctl', 'start', 'tidal.service'], timeout=2800)
-            command(['systemctl', 'start', 'tidal-kick.service'], timeout=3100)
+            command(['systemctl', 'start', 'tidal-kick.service'], timeout=900)
             status = self.native(release, ['status'], allow_blocked=True)
             if not status['data'].get('activated'):
                 raise RuntimeError('Initial worker cycle invalidated activation')

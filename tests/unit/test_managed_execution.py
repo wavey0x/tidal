@@ -169,7 +169,7 @@ async def test_next_source_prepares_only_after_retained_transaction_finalizes(ru
     for mined in (False, True):
         runtime.rpc.mined = mined
         result = await service.run_once(live=True, source_type="fee_burner")
-        assert result.blocked_code == "UNRESOLVED_ATTEMPTS"
+        assert result.status == "WAITING" and result.kicks_attempted == 0
         planner.plan.assert_not_awaited()
     runtime.rpc.finalized = 102
     result = await service.run_once(live=True, source_type="fee_burner")

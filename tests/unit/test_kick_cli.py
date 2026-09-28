@@ -1,10 +1,8 @@
 """Native CLI contracts; sending and policy behavior are tested at their owners."""
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import json
-import fcntl
 import pytest
 import yaml
 from sqlalchemy import insert, select, update
@@ -13,7 +11,6 @@ from typer.testing import CliRunner
 from tidal.cli import app
 from tidal.config import load_server_settings
 from tidal.migrations import run_migrations
-from tidal.lifecycle import execution_lock
 from tidal.persistence import models
 from tidal.persistence.db import Database
 from tidal.resources import read_template_text
@@ -177,131 +174,86 @@ def retained(session, source, *, status="CONFIRMED", signer="0x" + "1" * 40, pro
     return transaction_id
 
 
-def outcome(code=None, attempted=0):
+def outcome(status="SUCCESS", attempted=0):
     return TxnRunResult(
-        run_id="fixture", status="BUSY" if code == "BUSY" else "WAITING" if code else "SUCCESS",
-        candidates_found=attempted, kicks_attempted=attempted, kicks_succeeded=0, kicks_failed=0,
-        blocked_code=code,
+        run_id="fixture", status=status, candidates_found=attempted,
+        kicks_attempted=attempted, kicks_succeeded=0, kicks_failed=0,
     )
 
 
 @pytest.mark.parametrize("json_output", [False, True])
-def test_hourly_cycle_retries_contention_then_waits_for_finality_between_sources(native, monkeypatch, json_output):
-    calls, sleeps, sessions = [], [], []
-    now = [0]
-    monkeypatch.setattr(kick_cli, "time", SimpleNamespace(monotonic=lambda: now[0]))
-
-    def build(effective, session, **kwargs):
-        sessions.append(session)
-        async def run_once(**options):
-            source = options["source_type"]
-            calls.append(source)
-            with execution_lock(effective.resolved_home_path / "execution.lock"):
-                if len(calls) == 1:
-                    return outcome("BUSY")
-                if source == "strategy":
-                    retained(session, source, status="PENDING")
-                    # A partial pass has already sent; it must not be repeated.
-                    return outcome("UNRESOLVED_ATTEMPTS", attempted=1)
-                if len(calls) == 3:
-                    return outcome("UNRESOLVED_ATTEMPTS")
-                assert session.execute(select(models.transactions.c.status)).scalar_one() == "CONFIRMED"
-                return outcome()
-        return SimpleNamespace(run_once=run_once)
-
-    async def sleep(seconds):
-        assert all(not session.in_transaction() for session in sessions)
-        with (native.settings.resolved_home_path / "execution.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            # Another worker can both acquire execution and write while we wait.
-            with Database(native.settings.database_url).session() as session:
-                session.execute(update(models.transactions).values(status="CONFIRMED"))
-                session.commit()
-        sleeps.append(seconds)
-        now[0] += seconds
-
-    monkeypatch.setattr(kick_cli, "build_txn_service", build)
-    monkeypatch.setattr(kick_cli.asyncio, "sleep", sleep)
-    response = invoke(native, "--headless", "--wait-seconds", "90", *(["--json"] if json_output else []))
-    assert response.exit_code == 0, response.output
-    assert calls == ["strategy", "strategy", "fee_burner", "fee_burner"]
-    assert sleeps == [15, 15]
-    if json_output:
-        payload = json.loads(response.stdout)
-        assert len(payload["data"]["runs"]) == 2
-        assert payload["data"]["pending_transactions"] == 0
-    else:
-        assert response.stdout.count("Waiting to continue") == 2
-        assert "Waiting for the retained transaction to finalize" in response.stdout
-
-
-@pytest.mark.parametrize("code,status", [("BUSY", None), ("UNRESOLVED_ATTEMPTS", "INCLUDED")])
-@pytest.mark.parametrize("json_output", [False, True])
-def test_hourly_cycle_has_one_shared_deadline(native, monkeypatch, code, status, json_output):
-    now, calls = [0], []
-    monkeypatch.setattr(kick_cli, "time", SimpleNamespace(monotonic=lambda: now[0]))
-    def build(effective, session, **kwargs):
-        if status:
-            retained(session, "strategy", status=status)
-        async def run_once(**options):
-            calls.append(options["source_type"])
-            return outcome(code)
-        return SimpleNamespace(run_once=run_once)
-    async def sleep(seconds):
-        now[0] += seconds
-    monkeypatch.setattr(kick_cli, "build_txn_service", build)
-    monkeypatch.setattr(kick_cli.asyncio, "sleep", sleep)
-    response = invoke(native, "--headless", "--wait-seconds", "20", *(["--json"] if json_output else []))
-    assert response.exit_code == 75, response.output
-    assert now[0] == 20 and calls == ["strategy", "strategy"]
-    if json_output:
-        payload = json.loads(response.stdout)
-        assert payload["data"]["remaining_profiles"] == ["strategy", "fee_burner"]
-        assert any(row["code"] == "CYCLE_TIME_LIMIT" for row in payload["blockers"])
-    else:
-        assert "Execution deferred" in response.stdout
-        assert "No eligible candidates" not in response.stdout
-
-
-@pytest.mark.parametrize("json_output", [False, True])
-def test_review_required_is_never_automatically_retried(native, monkeypatch, json_output):
-    with Database(native.settings.database_url).session() as session:
-        retained(session, "strategy", status="REVIEW_REQUIRED")
+@pytest.mark.parametrize("status", ["BUSY", "WAITING"])
+def test_deferred_pass_returns_without_retrying_either_source(native, monkeypatch, json_output, status):
     calls = []
     def build(*args, **kwargs):
         async def run_once(**options):
             calls.append(options["source_type"])
-            return outcome("UNRESOLVED_ATTEMPTS")
+            return outcome(status)
         return SimpleNamespace(run_once=run_once)
-    async def sleep(seconds):
-        pytest.fail("review must not be retried")
     monkeypatch.setattr(kick_cli, "build_txn_service", build)
-    monkeypatch.setattr(kick_cli.asyncio, "sleep", sleep)
-    response = invoke(native, "--headless", "--wait-seconds", "90", *(["--json"] if json_output else []))
+    response = invoke(native, "--headless", *(["--json"] if json_output else []))
     assert response.exit_code == 75, response.output
+    assert calls == ["strategy", "fee_burner"]
+    if json_output:
+        payload = json.loads(response.stdout)
+        assert payload["code"] == "WAITING"
+        assert len(payload["data"]["runs"]) == 2
+    else:
+        assert response.stdout.count("Execution deferred") == 2
+        assert "No eligible candidates" not in response.stdout
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_next_timer_pass_gives_other_source_a_turn_after_finality(native, monkeypatch, json_output):
+    calls = []
+    def build(effective, session, **kwargs):
+        async def run_once(**options):
+            source = options["source_type"]
+            calls.append(source)
+            if session.execute(select(models.transactions).where(
+                models.transactions.c.status == "PENDING",
+            )).first():
+                return outcome("WAITING")
+            retained(session, source, status="PENDING")
+            return outcome("WAITING", attempted=1)
+        return SimpleNamespace(run_once=run_once)
+    monkeypatch.setattr(kick_cli, "build_txn_service", build)
+    args = ["--headless", *(["--json"] if json_output else [])]
+    first = invoke(native, *args)
+    assert first.exit_code == 75, first.output
+    assert calls == ["strategy", "fee_burner"]
+    calls.clear()
+    # An intervening timer tick must not duplicate the retained submission.
+    pending = invoke(native, *args)
+    assert pending.exit_code == 75, pending.output
     assert calls == ["fee_burner", "strategy"]
+    with Database(native.settings.database_url).session() as session:
+        assert len(session.execute(select(models.transactions)).all()) == 1
+        session.execute(update(models.transactions).values(status="CONFIRMED"))
+        session.commit()
+    calls.clear()
+    finalized = invoke(native, *args)
+    assert finalized.exit_code == 75, finalized.output
+    assert calls == ["fee_burner", "strategy"]
+    with Database(native.settings.database_url).session() as session:
+        assert session.execute(select(models.kick_txs.c.source_type).order_by(
+            models.kick_txs.c.id,
+        )).scalars().all() == ["strategy", "fee_burner"]
 
 
-def test_next_hour_uses_retained_submission_order_even_after_restart(native):
+def test_next_pass_uses_retained_submission_order_even_after_restart(native):
     with Database(native.settings.database_url).session() as session:
         retained(session, "strategy")
         # Scanner operations and other signers/chains cannot consume a turn.
         retained(session, "fee_burner", profile="scan")
         retained(session, "fee_burner", signer="0x" + "2" * 40)
         retained(session, "fee_burner", chain_id=2)
-    response = invoke(native, "--headless", "--wait-seconds", "90", "--json")
+    response = invoke(native, "--headless", "--json")
     assert response.exit_code == 0, response.output
     assert [options["source_type"] for _, _, options in native.captured] == ["fee_burner", "strategy"]
     with Database(native.settings.database_url).session() as session:
         retained(session, "fee_burner")
     native.captured.clear()
-    response = invoke(native, "--headless", "--wait-seconds", "90", "--json")
+    response = invoke(native, "--headless", "--json")
     assert response.exit_code == 0, response.output
     assert [options["source_type"] for _, _, options in native.captured] == ["strategy", "fee_burner"]
-
-
-@pytest.mark.parametrize("args", [[], ["--dry-run"], ["--headless", "--dry-run"]])
-def test_continuation_requires_live_headless_before_unlock(native, args):
-    response = invoke(native, "--wait-seconds", "30", *args)
-    assert response.exit_code == 2
-    assert native.unlocks == []

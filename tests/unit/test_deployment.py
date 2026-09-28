@@ -25,15 +25,20 @@ deploy = module('deploy_release')
 daily = module('install_daily_capture')
 
 
-def test_hourly_kicker_is_one_bounded_cycle_for_both_sources():
+def test_kicker_timer_runs_one_pass_and_waits_a_minute_after_completion():
     units = deploy.unit_files('/release', '/config', '/state', 'wavey')
     service = units['tidal-kick.service']
     assert service.count('ExecStart=') == 1
-    assert '--headless --wait-seconds 2700' in service
+    assert '--headless\n' in service
+    assert '--wait-seconds' not in service
     assert '--source-type' not in service
-    assert 'TimeoutStartSec=50min' in service
+    assert 'TimeoutStartSec=12min' in service
     assert 'SuccessExitStatus=75' in service
-    assert 'OnCalendar=hourly' in units['tidal-kick.timer']
+    timer = units['tidal-kick.timer']
+    assert 'OnUnitInactiveSec=1min' in timer
+    assert 'AccuracySec=1s' in timer
+    assert 'OnCalendar=' not in timer
+    assert 'OnBootSec=2min' in timer
 
 
 @pytest.fixture

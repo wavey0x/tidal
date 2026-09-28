@@ -228,7 +228,7 @@ class TxnService:
             return TxnRunResult(
                 run_id=run_id, status="BUSY" if exc.code == "BUSY" else "WAITING", candidates_found=0,
                 kicks_attempted=0, kicks_succeeded=0, kicks_failed=0,
-                blocked_code=exc.code, failure_summary={str(exc): 1},
+                failure_summary={str(exc): 1},
             )
 
     async def _run(
@@ -301,7 +301,6 @@ class TxnService:
 
         kicks_attempted = 0 if live else len(plan.resolve_operations) + len(plan.kick_operations)
         blocked_reason = None
-        blocked_code = None
         kicks_succeeded = 0
         kicks_failed = 0
         dependency_failures = 0
@@ -359,7 +358,6 @@ class TxnService:
                         kicks_failed += f
                         kicks_attempted += a
                 blocked_reason = f"{exc.code}: {exc}"
-                blocked_code = exc.code
                 logger.info("txn_execution_waiting", run_id=run_id, reason=blocked_reason)
         else:
             now_iso = utcnow_iso()
@@ -420,5 +418,4 @@ class TxnService:
             limited_candidate_count=plan.limited_count,
             failure_summary=failure_summary,
             dependency_failures=dependency_failures,
-            blocked_code=blocked_code,
         )

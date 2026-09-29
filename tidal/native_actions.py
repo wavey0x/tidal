@@ -106,15 +106,14 @@ async def run_auction_action(*, settings, session, signer, action: str, auction:
                         raise LifecycleError("INVALID_INTENT", "Prepared gas estimate/limit is missing or outside the configured cap.")
                     rows = operation_rows(prepared["preview"], tx_index=index, operation=intent["operation"],
                                           run_id=run_id, created_at=utcnow_iso())
-                    # Preserve the existing manual auction command's current-base
-                    # fee policy and bounded priority fee. Scheduled kick caps are
-                    # explicit profiles applied by their own native caller.
+                    # Leave room for base-fee increases before inclusion.
+                    # Scheduled kick caps remain in their own native caller.
                     base_fee = await web3.get_base_fee()
                     priority = await resolve_priority_fee_wei(web3, settings.txn_max_priority_fee_gwei)
                     attempt = await managed.submit(transaction={
                         "to": intent["to"], "data": intent["data"], "chainId": intent["chainId"],
                         "value": rpc_int(intent.get("value", 0)), "gas": int(limit), "type": 2,
-                        "maxFeePerGas": base_fee + priority, "maxPriorityFeePerGas": priority,
+                        "maxFeePerGas": 2 * base_fee + priority, "maxPriorityFeePerGas": priority,
                     }, operations=rows, action=rows[0]["operation_type"], prepared_at_monotonic=prepared_at)
                     result["transactions"].append(attempt)
                     result["unsubmitted"] -= 1

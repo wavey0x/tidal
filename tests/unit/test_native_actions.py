@@ -49,6 +49,15 @@ async def test_all_token_links_are_committed_before_the_single_native_send(runti
 
 
 @pytest.mark.asyncio
+async def test_manual_fee_ceiling_preserves_tip_after_a_base_fee_increase(runtime, prepared):
+    await run(runtime)
+    tx = runtime.signer.last_transaction
+    next_base_fee = 1125000000  # A full block can raise the base fee by 12.5%.
+    assert tx["maxFeePerGas"] == 3000000000
+    assert tx["maxFeePerGas"] - next_base_fee >= tx["maxPriorityFeePerGas"]
+
+
+@pytest.mark.asyncio
 async def test_pending_first_batch_leaves_remaining_work_unsubmitted(runtime, prepared):
     prepared["transactions"].append(copy.deepcopy(prepared["transactions"][0]))
     prepared["preview"]["preparedOperations"].append({

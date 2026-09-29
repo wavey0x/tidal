@@ -24,8 +24,9 @@ async def resolve_priority_fee_wei(web3_client, max_priority_fee_gwei: int | flo
     try:
         suggested_wei = await web3_client.get_max_priority_fee()
     except Exception:  # noqa: BLE001
-        fallback_wei = int(_DEFAULT_PRIORITY_FEE_GWEI * 10**9)
-        return min(fallback_wei, cap_wei)
+        suggested_wei = 0
+    if suggested_wei <= 0:
+        suggested_wei = int(_DEFAULT_PRIORITY_FEE_GWEI * 10**9)
     return min(suggested_wei, cap_wei)
 
 _ERROR_STRING_SELECTOR = keccak(text="Error(string)")[:4]

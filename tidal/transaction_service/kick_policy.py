@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from collections.abc import Mapping
 from pathlib import Path
@@ -90,6 +91,16 @@ class CooldownPolicy:
             (normalized_auction, normalized_token),
             self.default_minutes,
         )
+
+
+def kick_cooldown_until(kick: Mapping[str, object] | None, minutes: int) -> datetime | None:
+    """Only the latest relevant kick can impose (or clear) a pair's cooldown."""
+    if kick is None or minutes <= 0 or kick["cooldown_cleared_at"] is not None:
+        return None
+    try:
+        return datetime.fromisoformat(str(kick["created_at"])) + timedelta(minutes=minutes)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)

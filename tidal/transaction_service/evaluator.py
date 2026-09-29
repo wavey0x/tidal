@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import structlog
 from sqlalchemy import literal, null, select
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
 from tidal.auction_rounds import NoFillAction, NoFillGuard
-from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy
+from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy, kick_cooldown_until
 from tidal.transaction_service.types import KickAction, KickCandidate, KickDecision, SkipReason, SourceType
 
 logger = structlog.get_logger(__name__)
@@ -188,25 +188,16 @@ def _apply_cooldown_policy(
             candidate.auction_address,
             candidate.token_address,
         )
-        if last_kick is None:
-            allowed.append(candidate)
-            continue
-
-        try:
-            last_kick_at = datetime.fromisoformat(str(last_kick["created_at"]))
-        except (TypeError, ValueError):
-            allowed.append(candidate)
-            continue
-
-        expires_at = last_kick_at + timedelta(minutes=cooldown_minutes)
+        expires_at = kick_cooldown_until(last_kick, cooldown_minutes)
         now = datetime.now(timezone.utc)
-        if expires_at <= now:
+        if expires_at is None or expires_at <= now:
             allowed.append(candidate)
             continue
 
+        last_kick_at = str(last_kick["created_at"])
         detail = (
             f"cooldown {cooldown_minutes}m"
-            f" | last kick {last_kick_at.isoformat()}"
+            f" | last kick {last_kick_at}"
             f" | until {expires_at.isoformat()}"
         )
         cooldown_skips.append(
@@ -223,7 +214,7 @@ def _apply_cooldown_policy(
             auction=candidate.auction_address,
             token=candidate.token_address,
             reason="cooldown",
-            last_kick_at=last_kick_at.isoformat(),
+            last_kick_at=last_kick_at,
             cooldown_minutes=cooldown_minutes,
             cooldown_until=expires_at.isoformat(),
         )

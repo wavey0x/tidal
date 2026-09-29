@@ -1,6 +1,8 @@
 """Native CLI contracts; sending and policy behavior are tested at their owners."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import datetime, timedelta, timezone
+import fcntl
 
 import json
 import pytest
@@ -51,6 +53,116 @@ def native(tmp_path, monkeypatch):
 
 def invoke(native, *args):
     return CliRunner().invoke(app, ["kick", "run", "--config", str(native.config), *args])
+
+
+@pytest.fixture
+def cooldown_rows(native):
+    auction = "0x" + "2" * 40
+    tokens = ["0x" + value * 40 for value in "34567"]
+    now = datetime.now(timezone.utc)
+    database = Database(native.settings.database_url)
+    with database.session() as session:
+        for token, target, when in [
+            (tokens[0], auction, now - timedelta(hours=1)),
+            (tokens[0], auction, now),
+            (tokens[1], auction, now),
+            (tokens[2], auction, now),
+            (tokens[0], "0x" + "8" * 40, now),
+            (tokens[3], auction, now - timedelta(days=2)),
+        ]:
+            session.execute(insert(models.kick_txs).values(
+                run_id="cooldown", token_address=token, auction_address=target,
+                status="CONFIRMED", created_at=when.isoformat(),
+            ))
+        session.commit()
+    database.engine.dispose()
+    return auction, tokens
+
+
+def read_cooldowns(native):
+    database = Database(native.settings.database_url)
+    try:
+        with database.session() as session:
+            return [dict(row) for row in session.execute(select(models.kick_txs).order_by(models.kick_txs.c.id)).mappings()]
+    finally:
+        database.engine.dispose()
+
+
+def clear_cooldowns(native, auction, tokens, *args):
+    selectors = [item for token in tokens for item in ("--token", token)]
+    return CliRunner().invoke(app, ["kick", "clear-cooldown", "--config", str(native.config),
+                                  "--auction", auction, *selectors, "--json", *args])
+
+
+def test_cooldown_clear_preview_batch_isolation_persistence_and_idempotence(native, cooldown_rows):
+    auction, tokens = cooldown_rows
+    selected = [tokens[0], tokens[1], tokens[0], tokens[3], tokens[4]]
+    before = read_cooldowns(native)
+    preview = clear_cooldowns(native, auction, selected, "--dry-run")
+    assert preview.exit_code == 0, preview.output
+    assert [row["status"] for row in json.loads(preview.stdout)["data"]["tokens"]] == [
+        "would_clear", "would_clear", "no_active_cooldown", "no_active_cooldown",
+    ]
+    assert read_cooldowns(native) == before
+    response = clear_cooldowns(native, auction, selected)
+    assert response.exit_code == 0, response.output
+    assert [row["status"] for row in json.loads(response.stdout)["data"]["tokens"]] == [
+        "cleared", "cleared", "no_active_cooldown", "no_active_cooldown",
+    ]
+    after = read_cooldowns(native)
+    for index, (old, new) in enumerate(zip(before, after, strict=True)):
+        if index in (1, 2):
+            assert new["cooldown_cleared_at"] is not None
+            assert {**new, "cooldown_cleared_at": None} == old
+        else:
+            assert new == old
+    repeated = clear_cooldowns(native, auction, selected)
+    assert repeated.exit_code == 0, repeated.output
+    assert json.loads(repeated.stdout)["data"]["tokens"][0]["status"] == "already_cleared"
+    assert read_cooldowns(native) == after
+    assert native.unlocks == native.captured == []
+
+
+def test_cooldown_clear_validates_whole_batch_before_writing(native, cooldown_rows):
+    auction, tokens = cooldown_rows
+    before = read_cooldowns(native)
+    response = clear_cooldowns(native, auction, [tokens[0], "invalid"])
+    assert response.exit_code == 2
+    assert read_cooldowns(native) == before
+
+
+def test_cooldown_clear_rolls_back_whole_batch_on_failure(native, cooldown_rows, monkeypatch):
+    auction, tokens = cooldown_rows
+    before = read_cooldowns(native)
+    original = kick_cli.KickTxRepository.update_fields
+    calls = []
+    def fail_second(self, kick_id, **values):
+        calls.append(kick_id)
+        if len(calls) == 2:
+            raise RuntimeError("write failure")
+        original(self, kick_id, **values)
+    monkeypatch.setattr(kick_cli.KickTxRepository, "update_fields", fail_second)
+    response = clear_cooldowns(native, auction, tokens[:2])
+    assert response.exit_code == 1
+    assert len(calls) == 2
+    assert read_cooldowns(native) == before
+
+
+def test_cooldown_clear_respects_runner_execution_lock(native, cooldown_rows):
+    auction, tokens = cooldown_rows
+    before = read_cooldowns(native)
+    with (native.settings.resolved_home_path / "execution.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        response = clear_cooldowns(native, auction, tokens[:2])
+    assert response.exit_code == 75, response.output
+    assert json.loads(response.stdout)["code"] == "BUSY"
+    assert read_cooldowns(native) == before
+
+
+@pytest.mark.parametrize("selectors", [[], ["--auction", "0x" + "2" * 40], ["--token", "0x" + "3" * 40]])
+def test_cooldown_clear_requires_exact_auction_and_tokens(selectors):
+    response = CliRunner().invoke(app, ["kick", "clear-cooldown", *selectors])
+    assert response.exit_code == 2
 
 
 def test_native_kick_preserves_distinct_scheduled_profiles_and_needs_no_api(native):

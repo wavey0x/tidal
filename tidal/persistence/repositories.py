@@ -945,7 +945,17 @@ class KickTxRepository:
         *,
         before_position: tuple[int, int] | None = None,
     ) -> dict[str, object] | None:
-        rows = self.list_pair_operations(auction_address, token_address)
+        rows = self.session.execute(select(
+            models.kick_txs.c.id, models.kick_txs.c.operation_type,
+            models.kick_txs.c.status, models.kick_txs.c.round_kick_id,
+            models.kick_txs.c.resolution_path, models.kick_txs.c.block_number,
+            models.kick_txs.c.transaction_index,
+            models.kick_txs.c.source_type, models.kick_txs.c.source_address,
+            models.kick_txs.c.strategy_address,
+        ).where(
+            models.kick_txs.c.auction_address == auction_address,
+            models.kick_txs.c.token_address == token_address,
+        )).mappings().all()
         confirmed_closes = {
             int(row["round_kick_id"])
             for row in rows
@@ -971,7 +981,7 @@ class KickTxRepository:
                     int(row["transaction_index"]),
                 ) >= before_position:
                     continue
-            candidates.append(row)
+            candidates.append(dict(row))
         if not candidates:
             return None
         candidates.sort(
@@ -995,7 +1005,7 @@ class KickTxRepository:
                 models.kick_txs.c.token_address == token_address,
                 models.kick_txs.c.status.in_(("CONFIRMED", "SUBMITTED")),
             )
-            .order_by(models.kick_txs.c.created_at.desc())
+            .order_by(models.kick_txs.c.created_at.desc(), models.kick_txs.c.id.desc())
             .limit(1)
         )
         row = self.session.execute(stmt).mappings().first()

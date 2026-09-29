@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 import typer
 from sqlalchemy import select
@@ -19,12 +20,14 @@ from tidal.cli_renderers import (
     render_status_panel, render_warning_panel,
 )
 from tidal.cli_validation import require_no_confirmation_for_json
-from tidal.lifecycle import LifecycleError, result
+from tidal.lifecycle import LifecycleError, execution_lock, result
 from tidal.lifecycle_cli import emit_operation
 from tidal.logging import OutputMode, configure_logging
 from tidal.ops.kick_inspect import inspect_kick_candidates
 from tidal.persistence import models
+from tidal.persistence.repositories import KickTxRepository
 from tidal.runtime import build_txn_service
+from tidal.transaction_service.kick_policy import kick_cooldown_until
 from tidal.transactions import TransactionRepository
 
 app = typer.Typer(help="Inspect and execute kicks locally on the application host", no_args_is_help=True)
@@ -97,6 +100,60 @@ def kick_inspect(
                     render_kick_inspect(found, show_all=show_all)
         return result("OK", data=data)
     emit_operation(inspect, json_output=json_output)
+
+
+@app.command("clear-cooldown")
+def clear_cooldown(
+    auction: str = typer.Option(..., "--auction", help="Exact auction address."),
+    token: list[str] = typer.Option(..., "--token", help="Exact sell token; repeat for multiple tokens."),
+    config: ConfigOption = None,
+    json_output: JsonOption = False,
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview selected cooldowns without changing them."),
+) -> None:
+    """Clear selected cooldowns so the normal runner can consider them again."""
+    auction_address = normalize_cli_address(auction, param_hint="--auction")
+    tokens = list(dict.fromkeys(normalize_cli_address(value, param_hint="--token") for value in token))
+    configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
+    ctx = CLIContext(config)
+
+    def clear() -> dict:
+        rows = []
+        with execution_lock(ctx.settings.resolved_home_path / "execution.lock"), ctx.session(read_only=dry_run) as session:
+            repo = KickTxRepository(session)
+            policy = ctx.settings.kick_config.cooldown_policy
+            now = datetime.now(timezone.utc)
+            for token_address in tokens:
+                kick = repo.last_kick_for_auction_token(auction_address, token_address)
+                until = kick_cooldown_until(kick, policy.resolve_minutes(
+                    auction_address=auction_address, token_address=token_address,
+                ))
+                cleared_at = kick["cooldown_cleared_at"] if kick else None
+                if cleared_at is not None:
+                    status = "already_cleared"
+                elif until is None or until <= now:
+                    status = "no_active_cooldown"
+                elif dry_run:
+                    status = "would_clear"
+                else:
+                    cleared_at = now.isoformat()
+                    repo.update_fields(int(kick["id"]), cooldown_cleared_at=cleared_at)
+                    status = "cleared"
+                rows.append({
+                    "token": token_address, "status": status,
+                    "kick_id": kick["id"] if kick else None,
+                    "cooldown_until": until.isoformat() if until else None,
+                    "cooldown_cleared_at": cleared_at,
+                })
+            if not dry_run:
+                session.commit()
+        data = {"auction": auction_address, "tokens": rows} if json_output else {
+            "auction": auction_address,
+            **{row["token"]: f"{row['status'].replace('_', ' ')} (kick {row['kick_id']})"
+               if row["kick_id"] is not None else "no kick history" for row in rows},
+        }
+        return result("DRY_RUN" if dry_run else "OK", data=data)
+
+    emit_operation(clear, json_output=json_output)
 
 
 @app.command("run")

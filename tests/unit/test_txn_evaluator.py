@@ -757,6 +757,34 @@ def test_build_shortlist_expired_cooldown_allows(session):
     assert shortlist.cooldown_skips == []
 
 
+@pytest.mark.parametrize("next_status,blocked", [
+    (None, False), ("SUBMITTED", True), ("CONFIRMED", True),
+    ("REVERTED", False), ("DRY_RUN", False), ("SKIP", False), ("ERROR", False),
+])
+def test_cleared_latest_kick_does_not_resurrect_older_cooldown_and_new_kick_rearms(session, next_status, blocked):
+    _seed_data(session, auction_address="0xauction1")
+    repo = KickTxRepository(session)
+    now = datetime.now(timezone.utc).isoformat()
+    row = dict(run_id="old-run", token_address="0xtoken1", auction_address="0xauction1",
+               status="CONFIRMED", created_at=now)
+    # Equal timestamps must still select the newer ID. The older cooldown
+    # remains uncleared and must never reappear behind the cleared latest kick.
+    repo.insert(row)
+    repo.insert({**row, "cooldown_cleared_at": now})
+    if next_status:
+        repo.insert({**row, "run_id": "new-run", "status": next_status})
+    options = dict(usd_threshold=100, max_data_age_seconds=600, kick_tx_repository=repo,
+                   cooldown_policy=CooldownPolicy(default_minutes=60, auction_token_overrides_minutes={}))
+    for _ in range(2):
+        shortlist = build_shortlist(session, **options)
+        assert bool(shortlist.cooldown_skips) is blocked
+        assert bool(shortlist.selected_candidates) is not blocked
+        session.commit()
+    # A clear only changes cooldown eligibility, not the minimum value rule.
+    options["usd_threshold"] = 3000
+    assert build_shortlist(session, **options).selected_candidates == []
+
+
 def test_build_shortlist_ignored_candidate_allows_next_same_auction_candidate(session):
     now = datetime.now(timezone.utc).isoformat()
     session.execute(insert(models.fee_burners).values(

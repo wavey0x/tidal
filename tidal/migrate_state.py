@@ -5,7 +5,7 @@ import sqlite3
 from urllib.parse import quote
 
 from tidal.legacy_import import import_legacy, read_source
-from tidal.lifecycle import SCHEMA_REVISION, LifecycleError, clear_activation, execution_lock, inspect_database, result
+from tidal.lifecycle import LifecycleError, clear_activation, execution_lock, inspect_database, result
 from tidal.migrations import run_migrations
 from tidal.persistence.db import Database
 
@@ -32,13 +32,16 @@ def migrate_state(settings, *, source_database: Path | None = None, outbox: Path
         uri = f"file:{quote(str(target.resolve()), safe='/')}?mode=ro"
         with closing(sqlite3.connect(uri, uri=True)) as connection:
             try:
-                revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+                connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+                retiring_actions = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='api_actions'"
+                ).fetchone() is not None
             except (sqlite3.Error, TypeError) as exc:
                 raise LifecycleError("INVALID_DATABASE", "Database has no recognized migration revision.") from exc
-        if revision != SCHEMA_REVISION and source_database is None:
+        if retiring_actions and source_database is None:
             raise LifecycleError("LEGACY_SOURCES_REQUIRED", "Preserve the coherent original DB/outbox pair, then pass --source-database and --outbox.")
         imported = {}
-        if revision != SCHEMA_REVISION:
+        if retiring_actions:
             run_migrations(settings.database_url, "0030_recovery_notifications")
         if source_database is not None:
             database = Database(settings.database_url)

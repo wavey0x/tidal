@@ -33,6 +33,28 @@ def _kick_columns(db_path: Path) -> set[str]:
         }
 
 
+def test_cooldown_migration_preserves_history_and_upgrades_native_database_without_legacy_sources(tmp_path, monkeypatch):
+    from tidal.config import Settings
+    from tidal.migrate_state import migrate_state
+
+    monkeypatch.setenv("TIDAL_HOME", str(tmp_path))
+    db_path = tmp_path / "tidal.db"
+    command.upgrade(_alembic_config(db_path), "0031_retire_action_protocol")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("""INSERT INTO kick_txs
+            (run_id, token_address, auction_address, status, tx_hash, created_at)
+            VALUES ('retained', 'token', 'auction', 'CONFIRMED', 'hash', 'original-time')""")
+    settings = Settings(DB_PATH=db_path)
+    assert migrate_state(settings)["data"]["schema_revision"] == "0032_kick_cooldown_clear"
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("""SELECT status, tx_hash, created_at, cooldown_cleared_at
+            FROM kick_txs""").fetchall() == [("CONFIRMED", "hash", "original-time", None)]
+    assert migrate_state(settings)["code"] == "MIGRATED_AND_HELD"
+    root = Path(__file__).resolve().parents[2]
+    name = "versions/0032_kick_cooldown_clear.py"
+    assert (root / "alembic" / name).read_bytes() == (root / "tidal/_resources/alembic" / name).read_bytes()
+
+
 def test_drop_token_logo_state_migration_preserves_token_and_price_facts(
     tmp_path: Path,
 ) -> None:

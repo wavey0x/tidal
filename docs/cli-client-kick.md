@@ -32,3 +32,17 @@ it does not bypass the one-unresolved-attempt-per-signer rule.
 `--headless`. It is a deliberate policy override, not a recovery retry mechanism.
 See [operator policy](operator-guide.md), [kick selection](kick-selection.md)
 and [recovery](recovery.md). There are no API URL/key flags or remote outbox.
+
+Clear the current cooldown for selected auction/token pairs so the scheduled
+runner can process them normally:
+
+```bash
+tidal kick clear-cooldown --auction 0xAUCTION --token 0xTOKEN1 --token 0xTOKEN2
+```
+
+The command applies immediately, needs no signer or RPC, and supports `--json`
+for automation. Add `--dry-run` for a read-only preview. Repeated clears are
+harmless; pairs without an active cooldown are unchanged. The clear is recorded
+on the latest kick, survives restarts and gas/quote skips, and never changes its
+transaction history. A new kick starts its own normal cooldown. All other
+eligibility and execution checks still apply; this command does not submit a kick.

@@ -23,7 +23,7 @@ from tidal.errors import AddressNormalizationError
 from tidal.time import utcnow_iso
 
 INTERFACE_VERSION = 1
-SCHEMA_REVISION = "0031_retire_action_protocol"
+SCHEMA_REVISION = "0032_kick_cooldown_clear"
 _locks: ContextVar[dict[Path, tuple[object, ...]]] = ContextVar("tidal_execution_locks", default={})
 
 

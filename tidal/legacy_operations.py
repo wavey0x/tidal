@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from tidal.normalizers import normalize_address
+from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
 
 
@@ -26,7 +28,12 @@ def ensure_legacy_operations(
 
     repo = KickTxRepository(session)
     run_id = f"api-action:{action_row['action_id']}"
-    existing_operations = repo.list_by_tx_hash(str(tx_hash))
+    # The one-time import runs before later migrations. Read only the original
+    # operation identity, not fields added by the current runtime's schema.
+    existing_operations = [dict(row) for row in session.execute(select(
+        models.kick_txs.c.id, models.kick_txs.c.run_id, models.kick_txs.c.operation_type,
+        models.kick_txs.c.auction_address, models.kick_txs.c.token_address,
+    ).where(models.kick_txs.c.tx_hash == str(tx_hash))).mappings()]
     operation_ids: set[int] = set()
     for operation in _prepared_log_operations(
         session,

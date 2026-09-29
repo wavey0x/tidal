@@ -176,17 +176,31 @@ class _SettlementEvents:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("defect", ["wrong_chain", "receipt_reorg", "missing_sender", "log_position", "not_finalized"])
+@pytest.mark.parametrize("defect", ["wrong_chain", "receipt_reorg", "missing_sender", "log_position", "not_finalized", "finalized_conflict", "missing_finalized_hash"])
 async def test_direct_settlement_requires_matching_finalized_chain_evidence(session, defect):
     repo = KickTxRepository(session)
     repo.insert(_row(operation_type="kick", tx_hash="0x" + "66" * 32, status="CONFIRMED",
         requested_sell_amount="100", sell_amount="100", block_number=100,
         transaction_index=1, mined_at=MINED_AT))
     tx_hash = "0x" + "77" * 32
-    web3 = _web3({tx_hash: _receipt(block=102)}, latest_block=101 if defect == "not_finalized" else 103)
+    head = 101 if defect == "not_finalized" else 102 if defect == "finalized_conflict" else 103
+    web3 = _web3({tx_hash: _receipt(block=102)}, latest_block=head)
     events = _SettlementEvents([{"blockNumber": 102, "transactionIndex": 3 if defect == "log_position" else 2,
                                 "transactionHash": tx_hash}])
     web3.contract = lambda *_: SimpleNamespace(events=events)
+    if defect in {"finalized_conflict", "missing_finalized_hash"}:
+        original_block = web3.get_block.side_effect
+
+        async def defective_block(identifier):
+            block = await original_block(identifier)
+            if identifier == "finalized":
+                if defect == "finalized_conflict":
+                    block["hash"] = "0x" + "99" * 32
+                else:
+                    del block["hash"]
+            return block
+
+        web3.get_block.side_effect = defective_block
     if defect == "wrong_chain":
         web3.get_chain_id.return_value = 2
     elif defect in {"receipt_reorg", "missing_sender"}:

@@ -67,7 +67,6 @@ class Settings(BaseSettings):
     managed_signers: dict[str, str] = Field(default_factory=dict, alias="MANAGED_SIGNERS")
     execution_profiles: dict[str, ExecutionProfile] = Field(default_factory=dict, alias="EXECUTION_PROFILES")
     chain_read_max_age_seconds: int = Field(default=180, gt=0, alias="CHAIN_READ_MAX_AGE_SECONDS")
-    finality_max_age_seconds: int = Field(default=1800, gt=0, alias="FINALITY_MAX_AGE_SECONDS")
 
     scan_concurrency: int = Field(default=20, alias="SCAN_CONCURRENCY")
     rpc_timeout_seconds: int = Field(default=10, alias="RPC_TIMEOUT_SECONDS")

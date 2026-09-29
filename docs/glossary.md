@@ -48,9 +48,9 @@ An intended operation such as kick, enablement or settlement. Preparation create
 
 Local permission to execute, bound to the database UUID, chain, declared signers and checked account nonce. It is excluded from backups and recreated only by explicit native resume.
 
-## Finality
+## Confirmation
 
-Canonical finalized chain evidence matching a retained transaction's exact identity and intent. Receipt inclusion alone is provisional and continues to block that signer.
+A verified canonical mined receipt matching the retained transaction's exact identity, intent and required business events. Managed execution proceeds after confirmation; historical settlement searches retain their finalized-block boundary.
 
 ## Shortlist
 

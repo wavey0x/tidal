@@ -78,3 +78,23 @@ and kick cycles before enabling their timers. Failure leaves workers held.
 Verify a post-cutover capture and the next existing daily scheduled capture.
 The shared outer lock is `/var/lib/electro-backup/locks/application-tidal`;
 creating this lock does not deploy the later infrastructure service.
+
+## One-time receipt-confirmation cutover
+
+Keep writers held and verify the normal pre-deployment backup. Before running
+reconciliation with this release, convert the retired transaction state once:
+
+```sql
+UPDATE transactions SET status = 'PENDING'
+WHERE status = 'INCLUDED';
+```
+
+Preserve transaction identities and recorded block evidence. Remove
+`finality_max_age_seconds` / `FINALITY_MAX_AGE_SECONDS` from deployment
+configuration if present. The release has no compatibility path for these old
+states or settings. This conversion is an operator deployment step, not a
+startup hook or recurring migration.
+
+Reconcile using fresh receipts, verify no retired states remain, capture the
+new release and state, then resume through the normal deployment entry point.
+Unmined attempts and conflicting evidence continue to hold the signer.

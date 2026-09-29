@@ -2,7 +2,7 @@
 
 The wrapper's event proves completion but omits the recovered amount. Require
 the exact call, matching auction close, and both equal ERC-20 transfer legs.
-Only the native ledger calls this after exact finalized transaction validation.
+Only the native ledger calls this after exact mined transaction validation.
 """
 from eth_abi import decode
 from eth_abi.exceptions import DecodingError

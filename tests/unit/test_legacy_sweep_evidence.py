@@ -57,7 +57,7 @@ def test_legacy_sweep_requires_complete_unambiguous_bound_evidence(change):
     assert legacy_sweep_evidence(transaction, receipt) == ()
 
 @pytest.mark.asyncio
-async def test_finalized_legacy_sweep_updates_only_its_linked_operation_without_sending(runtime):
+async def test_mined_legacy_sweep_updates_only_its_linked_operation_without_sending(runtime):
     transaction_id, action, tx = seed(runtime, 'sweep-and-settle')
     ids = convert(runtime, transaction_id, action, tx)
     retained, receipt = evidence()

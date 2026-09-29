@@ -129,7 +129,7 @@ def test_delivered_submission_is_imported_without_modifying_sources_and_retries_
     assert before == [hashlib.sha256(path.read_bytes()).hexdigest() for path in (original, outbox)]
 
 
-def test_reported_receipt_cannot_manufacture_finality(retained):
+def test_reported_receipt_cannot_manufacture_chain_verification(retained):
     _, session, _, outbox = retained
     report(outbox, "receipt", receiptStatus="CONFIRMED", blockNumber=123)
     run(retained)

@@ -96,7 +96,7 @@ Electro's complete resumption procedure.
 
 ## Pending transactions and historical gaps
 
-An included transaction remains provisional until canonical finalized evidence
+A transaction completes when a canonical mined receipt
 matches its exact signer, nonce, hash and unsigned intent. Missing events or
 conflicting evidence require review. An unavailable receipt is not proof that a
 transaction was never broadcast.

@@ -25,7 +25,6 @@ def evidence():
             "blockNumber": 100, "blockHash": BLOCK, "transactionIndex": 2,
         },
         "block": {"number": 100, "hash": BLOCK, "timestamp": 1789316805},
-        "finalized_head": {"number": 101, "hash": OTHER},
         "chain_id": 1,
     }
 
@@ -38,20 +37,11 @@ def retained():
 
 
 @pytest.mark.parametrize("status", [0, 1])
-def test_finalized_receipt_identity_does_not_claim_a_business_outcome(status):
+def test_mined_receipt_identity_does_not_claim_a_business_outcome(status):
     proof = evidence()
     proof["receipt"]["status"] = status
     checked = verify_evidence(retained(), **proof)
-    assert checked.finalized is True
     assert checked.receipt["status"] == status
-
-
-def test_included_receipt_is_provisional_until_a_later_finalized_head():
-    proof = evidence()
-    proof["finalized_head"] = {"number": 99, "hash": OTHER}
-    assert verify_evidence(retained(), **proof).finalized is False
-    proof["finalized_head"] = {"number": 100, "hash": BLOCK}
-    assert verify_evidence(retained(), **proof).finalized is True
 
 
 @pytest.mark.parametrize("field", list(retained()))
@@ -100,17 +90,8 @@ def test_receipt_canonicality_checks_reject_reorg_or_conflicting_block_evidence(
     assert error.value.code == "NONCANONICAL_RECEIPT"
 
 
-def test_finalized_head_at_receipt_height_must_have_the_same_hash():
-    proof = evidence()
-    proof["finalized_head"] = {"number": 100, "hash": OTHER}
-    with pytest.raises(EvidenceError) as error:
-        verify_evidence(retained(), **proof)
-    assert error.value.code == "NONCANONICAL_RECEIPT"
-
-
 @pytest.mark.parametrize("group,field", [
     ("transaction", "chainId"), ("receipt", "blockHash"), ("block", "hash"),
-    ("finalized_head", "number"), ("finalized_head", "hash"),
 ])
 def test_incomplete_rpc_response_is_not_accepted(group, field):
     proof = evidence()
@@ -121,17 +102,17 @@ def test_incomplete_rpc_response_is_not_accepted(group, field):
 
 
 @pytest.mark.asyncio
-async def test_observation_reads_finalized_head_before_fresh_receipt_and_block():
+async def test_observation_uses_fresh_receipt_and_canonical_block_without_finality():
     calls = []
     proof = evidence()
 
     async def get_block(identifier):
         calls.append(("block", identifier))
-        return proof["finalized_head"] if identifier == "finalized" else proof["block"]
+        assert identifier == 100
+        return proof["block"]
 
     async def get_receipt(tx_hash, *, timeout_seconds):
         calls.append(("receipt", tx_hash))
-        assert calls[0] == ("block", "finalized")
         assert timeout_seconds == 2
         return proof["receipt"]
 
@@ -141,15 +122,15 @@ async def test_observation_reads_finalized_head_before_fresh_receipt_and_block()
         get_transaction=AsyncMock(return_value=proof["transaction"]),
     )
     checked = await observe_transaction(rpc, retained())
-    assert checked.finalized
-    assert calls == [("block", "finalized"), ("receipt", HASH), ("block", 100)]
+    assert checked.receipt == proof["receipt"]
+    assert calls == [("receipt", HASH), ("block", 100)]
 
 
 @pytest.mark.asyncio
 async def test_rpc_failure_preserves_the_retained_attempt():
     saved = retained()
     original = deepcopy(saved)
-    rpc = SimpleNamespace(get_block=AsyncMock(side_effect=TimeoutError("unavailable")))
+    rpc = SimpleNamespace(get_chain_id=AsyncMock(side_effect=TimeoutError("unavailable")))
     with pytest.raises(TimeoutError):
         await observe_transaction(rpc, saved)
     assert saved == original

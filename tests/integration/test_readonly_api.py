@@ -51,7 +51,7 @@ def test_api_transaction_view_reads_same_ledger_and_preserves_provisional_status
         transaction_id = session.execute(models.transactions.insert().values(
             operation="kick", profile="kick", legacy=0, chain_id=1, signer="0x" + "1" * 40,
             nonce=7, tx_hash="0x" + "ab" * 32, to_address="0x" + "2" * 40,
-            data="0x1234", value="0", status="INCLUDED", created_at="2026-09-13", updated_at="2026-09-13",
+            data="0x1234", value="0", status="PENDING", created_at="2026-09-13", updated_at="2026-09-13",
         )).lastrowid
         session.execute(models.kick_txs.insert().values(
             transaction_id=transaction_id, run_id="fixture", operation_type="kick",
@@ -62,11 +62,11 @@ def test_api_transaction_view_reads_same_ledger_and_preserves_provisional_status
     with TestClient(create_app(settings)) as client:
         headers = {"Authorization": "Bearer secret-token"}
         assert client.get("/api/v1/tidal/transactions").status_code == 401
-        data = client.get("/api/v1/tidal/transactions?status=INCLUDED", headers=headers).json()["data"]
+        data = client.get("/api/v1/tidal/transactions?status=PENDING", headers=headers).json()["data"]
         assert data["total"] == 1
         assert data["items"][0]["id"] == transaction_id
         detail = client.get(f"/api/v1/tidal/transactions/{transaction_id}", headers=headers).json()["data"]
-        assert detail["status"] == "INCLUDED"
+        assert detail["status"] == "PENDING"
         assert detail["operations"][0]["status"] == "SUBMITTED"
 
 @pytest.mark.parametrize("state", ["missing", "incompatible"])

@@ -49,7 +49,7 @@ def invoke(native, action="enable-tokens", *args):
 @pytest.mark.parametrize("json_output", [False, True])
 @pytest.mark.parametrize("statuses,code,exit_code", [
     (["CONFIRMED"], "OK", 0), (["REVERTED"], "EXECUTION_ERROR", 1),
-    (["RECORDED"], "WAITING", 75), (["INCLUDED"], "WAITING", 75),
+    (["RECORDED"], "WAITING", 75), (["PENDING"], "WAITING", 75),
     (["CONFIRMED", "PENDING"], "WAITING", 75),
 ])
 def test_text_and_json_report_retained_outcomes(native, json_output, statuses, code, exit_code):

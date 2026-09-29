@@ -167,7 +167,7 @@ Interactive and scheduled commands share the local execution owner:
 - prepare one candidate
 - confirm and send
 - retain identity and all business links before broadcasting once
-- reconcile the exact transaction; a pending or unfinalized attempt blocks further sends
+- reconcile the exact transaction; an unresolved attempt blocks further sends until its mined receipt is verified
 
 Cached prices rank candidates; fresh quotes determine transaction contents.
 Explicit batching combines compatible operations into one retained transaction.

@@ -27,7 +27,7 @@ def prohibit_network_for_isolated_tests(request, monkeypatch):
 def recording_execution():
     """Isolate caller preparation from the separately tested durable sender.
 
-    Return a provisional inclusion, never fake a finalized business outcome.
+    Return a pending submission, never fake a verified business outcome.
     """
     def build(session):
         from tidal.persistence.repositories import KickTxRepository
@@ -36,7 +36,7 @@ def recording_execution():
             del transaction, action, prepared_at_monotonic
             ids = [KickTxRepository(session).insert(row) for row in operations]
             session.commit()
-            return {"status": "INCLUDED", "tx_hash": "0x" + "ab" * 32,
+            return {"status": "PENDING", "tx_hash": "0x" + "ab" * 32,
                     "operation_ids": ids, "block_number": 999}
 
         return SimpleNamespace(submit=AsyncMock(side_effect=submit))

@@ -204,7 +204,7 @@ def test_deferred_pass_returns_without_retrying_either_source(native, monkeypatc
 
 
 @pytest.mark.parametrize("json_output", [False, True])
-def test_next_timer_pass_gives_other_source_a_turn_after_finality(native, monkeypatch, json_output):
+def test_next_timer_pass_gives_other_source_a_turn_after_confirmation(native, monkeypatch, json_output):
     calls = []
     def build(effective, session, **kwargs):
         async def run_once(**options):
@@ -232,8 +232,8 @@ def test_next_timer_pass_gives_other_source_a_turn_after_finality(native, monkey
         session.execute(update(models.transactions).values(status="CONFIRMED"))
         session.commit()
     calls.clear()
-    finalized = invoke(native, *args)
-    assert finalized.exit_code == 75, finalized.output
+    confirmed = invoke(native, *args)
+    assert confirmed.exit_code == 75, confirmed.output
     assert calls == ["fee_burner", "strategy"]
     with Database(native.settings.database_url).session() as session:
         assert session.execute(select(models.kick_txs.c.source_type).order_by(

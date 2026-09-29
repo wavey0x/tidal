@@ -55,14 +55,9 @@ class ManagedExecutor:
             if rpc_int(transaction["chainId"]) != self.settings.chain_id or await self.web3_client.get_chain_id() != self.settings.chain_id:
                 raise LifecycleError("WRONG_CHAIN", "Prepared transaction and RPC must match the configured chain.")
             head = await self.web3_client.get_block("latest")
-            finalized = await self.web3_client.get_block("finalized")
             now = time.time()
-            if (
-                not -120 <= now - rpc_int(head["timestamp"]) <= self.settings.chain_read_max_age_seconds
-                or not -120 <= now - rpc_int(finalized["timestamp"]) <= self.settings.finality_max_age_seconds
-                or rpc_int(finalized["number"]) > rpc_int(head["number"])
-            ):
-                raise LifecycleError("STALE_CHAIN", "Current chain or finality evidence is stale; keep execution held.")
+            if not -120 <= now - rpc_int(head["timestamp"]) <= self.settings.chain_read_max_age_seconds:
+                raise LifecycleError("STALE_CHAIN", "Current chain evidence is stale; keep execution held.")
             latest = await self.web3_client.get_transaction_count(self.signer.address, "latest")
             pending = await self.web3_client.get_transaction_count(self.signer.address, "pending")
             baseline = activation.get("nonce_baseline", {}).get(normalize_address(self.signer.address))

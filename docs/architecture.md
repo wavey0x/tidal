@@ -19,12 +19,14 @@ and quote age. It signs in memory, then atomically commits the exact hash,
 signer, nonce, unsigned intent and every business-operation link before one RPC
 broadcast. Signed bytes are not persisted.
 
-One unresolved attempt blocks the signer, including an included transaction
-that has not finalized. Reconciliation fetches fresh transaction, receipt,
-canonical block and finalized-head evidence. Business changes are committed
-atomically only when intent and required events match. Missing or conflicting
+One unresolved attempt blocks the signer. Reconciliation fetches fresh
+transaction, receipt and canonical block evidence. A mined receipt completes the
+attempt without waiting for finality. Business changes are committed atomically
+only when intent and required events match. Missing or conflicting
 evidence remains visible for review. There is no automatic rebroadcast,
 replacement or nonce-based guess about an unknown historical transaction.
+Confirmation reflects the current canonical chain; a subsequent reorg can require
+manual repair. Historical settlement searches retain their finalized boundary.
 
 ## Recovery boundary
 

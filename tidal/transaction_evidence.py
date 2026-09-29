@@ -1,7 +1,7 @@
 """Bounded, read-only chain evidence for a retained managed transaction.
 
-An included receipt is provisional. Business outcomes are applied separately,
-only after this check proves the exact retained intent has finalized.
+Business outcomes are applied separately after verifying the exact retained
+intent against a fresh receipt and its canonical block.
 """
 from __future__ import annotations
 
@@ -50,8 +50,6 @@ class ChainEvidence:
     transaction: dict
     receipt: dict
     block: dict
-    finalized_head: dict
-    finalized: bool
 
 
 def hydrate_legacy_identity(retained: Mapping[str, object], transaction: dict, *, chain_id: int) -> dict:
@@ -94,7 +92,7 @@ def hydrate_legacy_identity(retained: Mapping[str, object], transaction: dict, *
 
 def verify_evidence(
     retained: Mapping[str, object], *, transaction: dict, receipt: dict,
-    block: dict, finalized_head: dict, chain_id: int,
+    block: dict, chain_id: int,
 ) -> ChainEvidence:
     """Require every identity/intent field; absent legacy evidence is explicit."""
     required = ("chain_id", "signer", "nonce", "tx_hash", "to_address", "data", "value")
@@ -122,20 +120,16 @@ def verify_evidence(
             or rpc_int(receipt["transactionIndex"]) != rpc_int(transaction["transactionIndex"])
         ):
             raise EvidenceError("NONCANONICAL_RECEIPT", "Receipt and transaction do not identify the canonical block.")
-        finalized_number = rpc_int(finalized_head["number"])
-        _hash(finalized_head["hash"])
         rpc_int(block["timestamp"])
-        if block_number == finalized_number and _hash(block["hash"]) != _hash(finalized_head["hash"]):
-            raise EvidenceError("NONCANONICAL_RECEIPT", "Receipt conflicts with the finalized head.")
     except EvidenceError:
         raise
     except (KeyError, ValueError, TypeError) as exc:
         raise EvidenceError("INCOMPLETE_RPC_EVIDENCE", "RPC returned incomplete or malformed transaction evidence.") from exc
-    return ChainEvidence(transaction, receipt, block, finalized_head, block_number <= finalized_number)
+    return ChainEvidence(transaction, receipt, block)
 
 
 async def observe_transaction(web3_client, retained: Mapping[str, object]) -> ChainEvidence:
-    """Read finality first, then fetch fresh receipt, transaction and block data.
+    """Fetch fresh receipt, transaction and canonical block data.
 
     Transport/not-found exceptions propagate to the caller without changing
     durable state. No receipt supplied by a client or earlier run is accepted.
@@ -143,7 +137,6 @@ async def observe_transaction(web3_client, retained: Mapping[str, object]) -> Ch
     tx_hash = retained.get("tx_hash")
     if tx_hash is None:
         raise EvidenceError("INCOMPLETE_IDENTITY", "The retained attempt has no transaction hash.")
-    finalized_head = await web3_client.get_block("finalized")
     chain_id = await web3_client.get_chain_id()
     receipt = await web3_client.get_transaction_receipt(str(tx_hash), timeout_seconds=2)
     transaction = await web3_client.get_transaction(str(tx_hash))
@@ -154,5 +147,5 @@ async def observe_transaction(web3_client, retained: Mapping[str, object]) -> Ch
     block = await web3_client.get_block(block_number)
     return verify_evidence(
         retained, transaction=transaction, receipt=receipt, block=block,
-        finalized_head=finalized_head, chain_id=chain_id,
+        chain_id=chain_id,
     )

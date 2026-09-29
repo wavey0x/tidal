@@ -53,7 +53,6 @@ class FixtureRPC:
         self.sends = 0
         self.hash = None
         self.mined = False
-        self.finalized = 100
         self.timestamp = int(time.time())
         self.receipt_status = 1
         self.lost_response = False
@@ -68,7 +67,8 @@ class FixtureRPC:
         return Web3().eth.contract(address=Web3.to_checksum_address(address), abi=abi)
 
     async def get_block(self, identifier):
-        number = self.finalized if identifier == "finalized" else 103 if identifier == "latest" else identifier
+        assert identifier != "finalized", "Managed execution must not depend on finality"
+        number = 103 if identifier == "latest" else identifier
         return {"number": number, "hash": BLOCK if number == 101 else OTHER_BLOCK, "timestamp": self.timestamp}
 
     async def get_transaction_count(self, address, block_identifier="pending"):
@@ -154,7 +154,7 @@ async def submit(runtime, operations=None):
 
 
 @pytest.mark.asyncio
-async def test_next_source_prepares_only_after_retained_transaction_finalizes(runtime):
+async def test_next_source_prepares_as_soon_as_retained_transaction_is_mined(runtime):
     await submit(runtime)
     planner = SimpleNamespace(plan=AsyncMock(return_value=KickPlan(
         source_type="fee_burner", source_address=None, auction_address=None, token_address=None,
@@ -166,17 +166,39 @@ async def test_next_source_prepares_only_after_retained_transaction_finalizes(ru
         kick_tx_repository=KickTxRepository(runtime.session),
         lock_path=runtime.settings.resolved_home_path / "execution.lock",
     )
-    for mined in (False, True):
-        runtime.rpc.mined = mined
-        result = await service.run_once(live=True, source_type="fee_burner")
-        assert result.status == "WAITING" and result.kicks_attempted == 0
-        planner.plan.assert_not_awaited()
-    runtime.rpc.finalized = 102
+    result = await service.run_once(live=True, source_type="fee_burner")
+    assert result.status == "WAITING" and result.kicks_attempted == 0
+    planner.plan.assert_not_awaited()
+    runtime.rpc.mined = True
     result = await service.run_once(live=True, source_type="fee_burner")
     assert result.status == "SUCCESS"
     planner.plan.assert_awaited_once()
     assert runtime.rpc.sends == runtime.signer.calls == 1
     assert runtime.session.execute(select(models.transactions.c.status)).scalar_one() == "CONFIRMED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_status", [0, 1])
+async def test_mined_attempt_releases_signer_for_next_nonce(runtime, receipt_status):
+    runtime.rpc.mined = True
+    runtime.rpc.receipt_status = receipt_status
+    first = await submit(runtime)
+    assert first["status"] == ("CONFIRMED" if receipt_status else "REVERTED")
+    runtime.rpc.mined = False
+    runtime.rpc.get_transaction_count = AsyncMock(return_value=8)
+
+    async def send(signed):
+        return "0x" + keccak(signed).hex()
+
+    runtime.rpc.send_raw_transaction = AsyncMock(side_effect=send)
+    second = await submit(runtime)
+    assert second["nonce"] == 8
+    assert second["status"] == "PENDING"
+    assert runtime.signer.calls == 2
+    runtime.rpc.send_raw_transaction.assert_awaited_once()
+    with pytest.raises(LifecycleError, match="retained attempt"):
+        await submit(runtime)
+    assert runtime.signer.calls == 2
 
 
 @pytest.mark.asyncio
@@ -243,14 +265,10 @@ async def test_process_loss_after_commit_retains_identity_without_rebroadcast(ru
 
 
 @pytest.mark.asyncio
-async def test_inclusion_does_not_apply_business_outcomes_until_finality(runtime):
+async def test_mined_receipt_applies_business_outcomes_immediately(runtime):
     runtime.rpc.mined = True
     result = await submit(runtime)
-    assert result["status"] == "INCLUDED"
-    row = runtime.session.execute(select(models.kick_txs)).mappings().one()
-    assert row["status"] == "SUBMITTED"
-    assert row["sell_amount"] is None
-    runtime.rpc.finalized = 102
+    assert result["status"] == "CONFIRMED"
     assert await runtime.executor.reconciler.reconcile() == []
     assert runtime.executor.repository.get(result["id"])["status"] == "CONFIRMED"
     row = runtime.session.execute(select(models.kick_txs)).mappings().one()
@@ -262,7 +280,6 @@ async def test_inclusion_does_not_apply_business_outcomes_until_finality(runtime
 @pytest.mark.asyncio
 async def test_evm_success_without_required_business_events_stays_in_review(runtime):
     runtime.rpc.mined = True
-    runtime.rpc.finalized = 102
     runtime.operation_reconciler.decode_receipt_fn = lambda *_: DecodedReceipt()
     result = await submit(runtime)
     assert result["status"] == "REVIEW_REQUIRED"
@@ -273,7 +290,7 @@ async def test_evm_success_without_required_business_events_stays_in_review(runt
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event_present", [True, False])
-async def test_native_token_enablement_links_identity_and_requires_finalized_event(runtime, event_present):
+async def test_native_token_enablement_links_identity_and_requires_mined_event(runtime, event_present):
     from tidal.persistence.repositories import AuctionEnabledTokenRepository, KickTxRepository
     from tidal.scanner.auction_token_enabler import (
         AuctionEnableCandidate, AuctionEnableSource, AuctionTokenEnablementService, AuctionTokenEnablementStats,
@@ -299,11 +316,9 @@ async def test_native_token_enablement_links_identity_and_requires_finalized_eve
         run_id="fixture", batch=[candidate], gas_estimate=100000,
         base_fee_gwei=0.1, priority_fee_wei=1000000000, stats=stats,
     ) == []
-    assert stats.tokens_confirmed == 0
-    assert stats.enable_transactions_submitted == 1
-    assert runtime.session.execute(select(models.auction_enabled_tokens_latest)).first() is None
-    runtime.rpc.finalized = 102
-    await runtime.executor.reconciler.reconcile()
+    assert stats.tokens_confirmed == int(event_present)
+    assert stats.enable_transactions_submitted == int(not event_present)
+    assert stats.enable_transactions_confirmed == int(event_present)
     tx = runtime.session.execute(select(models.transactions)).mappings().one()
     op = runtime.session.execute(select(models.kick_txs)).mappings().one()
     assert op["transaction_id"] == tx["id"]
@@ -314,9 +329,8 @@ async def test_native_token_enablement_links_identity_and_requires_finalized_eve
 
 
 @pytest.mark.asyncio
-async def test_reverted_finalized_transaction_is_not_a_success(runtime):
+async def test_reverted_mined_transaction_is_not_a_success(runtime):
     runtime.rpc.mined = True
-    runtime.rpc.finalized = 102
     runtime.rpc.receipt_status = 0
     result = await submit(runtime)
     assert result["status"] == "REVERTED"
@@ -326,7 +340,6 @@ async def test_reverted_finalized_transaction_is_not_a_success(runtime):
 @pytest.mark.asyncio
 async def test_conflicting_receipt_block_remains_held(runtime):
     runtime.rpc.mined = True
-    runtime.rpc.finalized = 102
     runtime.rpc.receipt_block_hash = OTHER_BLOCK
     result = await submit(runtime)
     assert result["status"] == "REVIEW_REQUIRED"
@@ -334,9 +347,8 @@ async def test_conflicting_receipt_block_remains_held(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finalized", [100, 102])
 @pytest.mark.parametrize("reported_status", ["SUBMITTED", "CONFIRMED"])
-async def test_explicit_replacement_requires_finality_and_never_confirms_original_business(runtime, finalized, reported_status):
+async def test_explicit_mined_replacement_never_confirms_original_business(runtime, reported_status):
     original = await submit(runtime)
     if reported_status == "CONFIRMED":
         runtime.session.execute(models.transactions.update().values(legacy=1))
@@ -357,22 +369,14 @@ async def test_explicit_replacement_requires_finality_and_never_confirms_origina
 
     runtime.rpc.get_transaction = replacement_tx
     runtime.rpc.get_transaction_receipt = receipt
-    runtime.rpc.finalized = finalized
-    if finalized == 100:
-        with pytest.raises(LifecycleError, match="not finalized"):
-            await runtime.executor.reconciler.resolve_with_replacement(
-                transaction_id=original["id"], replacement_hash=replacement_hash, note="Fixture cancellation reviewed",
-            )
-        assert runtime.executor.repository.get(original["id"])["status"] == "PENDING"
-    else:
-        result = await runtime.executor.reconciler.resolve_with_replacement(
-            transaction_id=original["id"], replacement_hash=replacement_hash, note="Fixture cancellation reviewed",
-        )
-        assert result["status"] == "SUPERSEDED"
-        assert result["resolved_by_hash"] == replacement_hash
-        row = runtime.session.execute(select(models.kick_txs)).mappings().one()
-        assert row["status"] == "SUPERSEDED"
-        assert row["sell_amount"] is None
+    result = await runtime.executor.reconciler.resolve_with_replacement(
+        transaction_id=original["id"], replacement_hash=replacement_hash, note="Fixture cancellation reviewed",
+    )
+    assert result["status"] == "SUPERSEDED"
+    assert result["resolved_by_hash"] == replacement_hash
+    row = runtime.session.execute(select(models.kick_txs)).mappings().one()
+    assert row["status"] == "SUPERSEDED"
+    assert row["sell_amount"] is None
     assert runtime.rpc.sends == runtime.signer.calls == 1
 
 

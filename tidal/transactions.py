@@ -15,7 +15,7 @@ from tidal.transaction_evidence import EvidenceError, hydrate_legacy_identity, o
 from tidal.legacy_evidence import legacy_sweep_evidence
 
 TERMINAL_STATUSES = frozenset({"CONFIRMED", "REVERTED", "SUPERSEDED"})
-UNRESOLVED_STATUSES = frozenset({"RECORDED", "PENDING", "INCLUDED", "REVIEW_REQUIRED"})
+UNRESOLVED_STATUSES = frozenset({"RECORDED", "PENDING", "REVIEW_REQUIRED"})
 
 
 class TransactionRepository:
@@ -109,7 +109,7 @@ class LedgerReconciler:
             self.session.commit()
             return
         except Exception as exc:
-            disappeared = row["status"] == "INCLUDED" and type(exc).__name__ == "TransactionNotFound"
+            disappeared = row.get("block_hash") is not None and type(exc).__name__ == "TransactionNotFound"
             self.repository.update(
                 transaction_id, status="REVIEW_REQUIRED" if disappeared else row["status"],
                 error_message="Previously included receipt disappeared; review the chain evidence" if disappeared
@@ -129,10 +129,6 @@ class LedgerReconciler:
             "gas_used": rpc_int(receipt["gasUsed"]) if receipt.get("gasUsed") is not None else None,
             "gas_price_gwei": str(Decimal(rpc_int(receipt["effectiveGasPrice"])) / Decimal(10**9)) if receipt.get("effectiveGasPrice") is not None else None,
         }
-        if not evidence.finalized:
-            self.repository.update(transaction_id, status="INCLUDED", error_message=None, **common)
-            self.session.commit()
-            return
         operation_rows = [dict(item) for item in self.session.execute(
             select(models.kick_txs).where(models.kick_txs.c.transaction_id == transaction_id)
         ).mappings()]
@@ -201,9 +197,7 @@ class LedgerReconciler:
                 "tx_hash": replacement_hash, "chain_id": original["chain_id"],
                 "signer": original["signer"], "nonce": original["nonce"],
             }, await self.web3_client.get_transaction(replacement_hash), chain_id=self.settings.chain_id)
-            evidence = await observe_transaction(self.web3_client, identity)
-            if not evidence.finalized:
-                raise LifecycleError("UNRESOLVED_ATTEMPTS", "Replacement is not finalized; original attempt remains unresolved.")
+            await observe_transaction(self.web3_client, identity)
             # Consuming the exact nonce resolves the original attempt. A
             # replacement's own successful receipt does not prove that the
             # original kick/settlement happened, even with similar calldata.
@@ -213,6 +207,6 @@ class LedgerReconciler:
             )
             self.session.execute(update(models.kick_txs).where(
                 models.kick_txs.c.transaction_id == transaction_id,
-            ).values(status="SUPERSEDED", error_message="Original attempt superseded by verified finalized nonce consumption"))
+            ).values(status="SUPERSEDED", error_message="Original attempt superseded by verified mined nonce consumption"))
             self.session.commit()
             return self.repository.get(transaction_id)

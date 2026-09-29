@@ -483,10 +483,11 @@ class OperationReconciler:
             transaction = await self.web3_client.get_transaction(tx_hash)
             identity = hydrate_legacy_identity({"tx_hash": tx_hash}, transaction, chain_id=self.chain_id)
             block = await self.web3_client.get_block(rpc_int(receipt["blockNumber"]))
-            proof = verify_evidence(identity, transaction=transaction, receipt=receipt,
-                block=block, finalized_head=finalized, chain_id=self.chain_id)
-            if not proof.finalized or rpc_int(receipt["status"]) != 1:
+            verify_evidence(identity, transaction=transaction, receipt=receipt, block=block, chain_id=self.chain_id)
+            if rpc_int(block["number"]) > rpc_int(finalized["number"]) or rpc_int(receipt["status"]) != 1:
                 raise EvidenceError("UNFINALIZED_SETTLEMENT", "A settlement needs a successful finalized receipt.")
+            if rpc_int(block["number"]) == rpc_int(finalized["number"]) and HexBytes(block["hash"]) != HexBytes(finalized["hash"]):
+                raise EvidenceError("NONCANONICAL_RECEIPT", "Settlement receipt conflicts with the finalized head.")
             receipt_cache[tx_hash] = receipt, block
         else:
             receipt, block = cached
@@ -573,6 +574,8 @@ class OperationReconciler:
                 raise EvidenceError("WRONG_CHAIN", "Settlement lookup RPC is on another chain.")
             finalized = await self.web3_client.get_block("finalized")
             latest_block = rpc_int(finalized["number"])
+            if len(HexBytes(finalized["hash"])) != 32:
+                raise EvidenceError("INCOMPLETE_RPC_EVIDENCE", "Finalized settlement boundary has no valid block hash.")
         except Exception:
             return errors + [self._round_error(kick, "finality_unavailable", "Finalized settlement evidence is unavailable; retry later.") for kick, _ in rounds]
         receipt_cache: dict = {}

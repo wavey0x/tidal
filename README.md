@@ -14,8 +14,9 @@ local commands ──> shared managed sender ──> Ethereum
 ```
 
 Every managed send commits its exact identity, unsigned intent and business
-links before broadcasting once. Pending and unfinalized attempts block the
-signer. Canonical finalized evidence is required before business outcomes change.
+links before broadcasting once. Unresolved attempts block the
+signer. A verified canonical mined receipt and matching business events complete
+the transaction and release the signer.
 There is no remote operator outbox, receipt-report protocol or background API
 receipt worker.
 

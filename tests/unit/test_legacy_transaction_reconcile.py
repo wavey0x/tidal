@@ -1,4 +1,4 @@
-"""Legacy intent conversion followed by the same native finalized evidence gate."""
+"""Legacy intent conversion followed by the same native mined receipt verification."""
 import json
 
 import pytest
@@ -30,7 +30,6 @@ def seed(runtime, operation, preview=None, *, existing=False):
             auction_address=AUCTION, token_address=TOKEN, tx_hash=HASH, status="SUBMITTED", created_at=NOW))
     runtime.signer.last_transaction = {"to": TARGET, "data": "0x123456", "value": 0, "chainId": 1, "nonce": 7}
     runtime.rpc.mined = True
-    runtime.rpc.finalized = 102
     return transaction_id, action, tx
 
 

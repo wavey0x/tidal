@@ -308,7 +308,7 @@ def _build_txn_service(session, *, preparer=None, executor=None, planner=None, l
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["RECORDED", "PENDING", "INCLUDED", "REVIEW_REQUIRED"])
+@pytest.mark.parametrize("status", ["RECORDED", "PENDING", "REVIEW_REQUIRED"])
 async def test_pending_signer_waits_before_planning_and_creates_no_empty_runs(session, status):
     session.execute(insert(models.transactions).values(
         operation="kick", status=status, signer="0x" + "1" * 40,

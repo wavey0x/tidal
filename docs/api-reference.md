@@ -30,8 +30,8 @@ or the running API's `/docs` page.
 
 `/transactions` supports `limit`, `offset`, `status` and `profile`. Individual
 transactions expose unsigned intent and business links; signed payloads are
-never retained. Pending/included states are provisional. Confirmation requires
-canonical finalized evidence and matching business events.
+never retained. Pending transactions remain unresolved. Confirmation requires a fresh canonical
+mined receipt and matching business events.
 
 API keys are created, listed and revoked locally with `tidal auth`. Protected
 routes require `Authorization: Bearer ...`. Restore preparation revokes old

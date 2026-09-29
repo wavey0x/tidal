@@ -56,8 +56,7 @@ The private secret file contains `RPC_URL`, `TXN_KEYSTORE_PATH`,
 Keep the file and original encrypted key private and recoverable. Local CLI
 commands do not use `TIDAL_API_BASE_URL` or `TIDAL_API_KEY`.
 
-Current-state reads must be fresh; default head/finalized age limits are 180 and
-1800 seconds. Prepared conditions expire after 300 seconds. Cached candidate
+Current-state reads must be fresh; the default head age limit is 180 seconds. Prepared conditions expire after 300 seconds. Cached candidate
 data defaults to a 1200-second limit. The no-fill policy retains retry delays
 of 720 and 1440 minutes. Provider failure can defer an action without blocking
 basic database validation or the restored read-only API.

@@ -81,29 +81,24 @@ def observation_readiness(settings, session) -> dict:
 
 
 async def chain_readiness(settings, web3) -> dict:
-    """A fresh current and finalized head, never a historical indexing claim."""
+    """A fresh current head, never a historical indexing claim."""
     try:
         if await web3.get_chain_id() != settings.chain_id:
             raise LifecycleError("WRONG_CHAIN", "RPC chain differs from configuration.")
         latest = await web3.get_block("latest")
-        finalized = await web3.get_block("finalized")
     except LifecycleError:
         raise
     except Exception as exc:
         raise LifecycleError("WAITING_FOR_RPC", f"Current chain reads unavailable ({type(exc).__name__}); retry when RPC is ready.") from exc
     try:
-        for block, age in ((latest, settings.chain_read_max_age_seconds),
-                           (finalized, settings.finality_max_age_seconds)):
-            if not -120 <= time.time() - rpc_int(block["timestamp"]) <= age:
-                raise LifecycleError("STALE_CHAIN", "Current chain or finalized head is stale; retry when RPC is ready.")
-            if len(HexBytes(block["hash"])) != 32:
-                raise ValueError("invalid hash")
-        if rpc_int(finalized["number"]) > rpc_int(latest["number"]):
-            raise ValueError("invalid finality head")
+        if not -120 <= time.time() - rpc_int(latest["timestamp"]) <= settings.chain_read_max_age_seconds:
+            raise LifecycleError("STALE_CHAIN", "Current chain head is stale; retry when RPC is ready.")
+        if len(HexBytes(latest["hash"])) != 32:
+            raise ValueError("invalid hash")
     except (ValueError, TypeError, KeyError) as exc:
-        raise LifecycleError("INVALID_RPC_EVIDENCE", "RPC returned incomplete current/finality evidence.") from exc
+        raise LifecycleError("INVALID_RPC_EVIDENCE", "RPC returned incomplete current chain evidence.") from exc
     return {"head_number": rpc_int(latest["number"]), "head_hash": "0x" + bytes(HexBytes(latest["hash"])).hex(),
-            "finalized_number": rpc_int(finalized["number"]), "checked_at": utcnow_iso()}
+            "checked_at": utcnow_iso()}
 
 
 def ledger_reconciler(settings, session, web3) -> LedgerReconciler:
@@ -322,7 +317,7 @@ async def resume(settings, session) -> dict:
                 retained = session.execute(select(func.max(models.transactions.c.nonce)).where(
                     models.transactions.c.chain_id == settings.chain_id, models.transactions.c.signer == address)).scalar()
                 if retained is not None and retained >= mempool and not known:
-                    raise LifecycleError("UNEXPECTED_NONCE", "RPC account nonce is behind retained finalized attempts.")
+                    raise LifecycleError("UNEXPECTED_NONCE", "RPC account nonce is behind retained mined attempts.")
                 baselines[address] = latest
                 if known:
                     warnings.append({"code": "UNRESOLVED_ATTEMPTS", "message": f"{address} remains blocked by {len(known)} retained attempt(s); schedules may observe and reconcile."})

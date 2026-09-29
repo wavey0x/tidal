@@ -36,6 +36,7 @@ def test_db_migrate_uses_same_tidal_home_from_different_working_directories(tmp_
             f"db_path: {tmp_path / 'tidal.db'}\n"
             "kick:\n"
             "  default_profile: volatile\n"
+            "  kick_limit_buffer_bps: 1000\n"
             "  no_fill:\n"
             "    retry_delays_minutes: [720, 1440]\n"
             "  profiles:\n"
@@ -90,6 +91,7 @@ def test_clear_no_fill_suspension_previews_then_applies(tmp_path, monkeypatch) -
             f"db_path: {db_path}\n"
             "kick:\n"
             "  default_profile: volatile\n"
+            "  kick_limit_buffer_bps: 1000\n"
             "  no_fill:\n"
             "    retry_delays_minutes: [720, 1440]\n"
             "  profiles:\n"
@@ -176,7 +178,7 @@ def test_scan_run_requires_rpc_url(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("RPC_URL", raising=False)
     config_path = tmp_path / "server.yaml"
     config_path.write_text(
-        "RPC_URL: ''\nDB_PATH: ./test.db\nkick:\n  default_profile: volatile\n  no_fill:\n    retry_delays_minutes: [720, 1440]\n  profiles:\n    volatile:\n      start_price_buffer_bps: 1000\n      min_price_buffer_bps: 500\n      step_decay_rate_bps: 25\n",
+        "RPC_URL: ''\nDB_PATH: ./test.db\nkick:\n  default_profile: volatile\n  kick_limit_buffer_bps: 1000\n  no_fill:\n    retry_delays_minutes: [720, 1440]\n  profiles:\n    volatile:\n      start_price_buffer_bps: 1000\n      min_price_buffer_bps: 500\n      step_decay_rate_bps: 25\n",
         encoding="utf-8",
     )
 
@@ -199,6 +201,7 @@ def test_scan_run_requires_keystore_when_auto_settle_requested(tmp_path, monkeyp
         "txn_keystore_passphrase: ''\n"
         "kick:\n"
         "  default_profile: volatile\n"
+        "  kick_limit_buffer_bps: 1000\n"
         "  no_fill:\n"
         "    retry_delays_minutes: [720, 1440]\n"
         "  profiles:\n"
@@ -228,6 +231,7 @@ def test_scan_run_requires_keystore_when_auto_enable_tokens_requested(tmp_path, 
         "txn_keystore_passphrase: ''\n"
         "kick:\n"
         "  default_profile: volatile\n"
+        "  kick_limit_buffer_bps: 1000\n"
         "  no_fill:\n"
         "    retry_delays_minutes: [720, 1440]\n"
         "  profiles:\n"
@@ -256,6 +260,7 @@ def test_scan_run_requires_no_confirmation_when_auto_settle_requested(tmp_path, 
         "db_path: ./test.db\n"
         "kick:\n"
         "  default_profile: volatile\n"
+        "  kick_limit_buffer_bps: 1000\n"
         "  no_fill:\n"
         "    retry_delays_minutes: [720, 1440]\n"
         "  profiles:\n"
@@ -281,6 +286,7 @@ def test_scan_run_requires_no_confirmation_when_auto_enable_tokens_requested(tmp
         "db_path: ./test.db\n"
         "kick:\n"
         "  default_profile: volatile\n"
+        "  kick_limit_buffer_bps: 1000\n"
         "  no_fill:\n"
         "    retry_delays_minutes: [720, 1440]\n"
         "  profiles:\n"
@@ -323,6 +329,7 @@ def test_scan_run_threads_transaction_automation_flags(
         "txn_keystore_passphrase: secret\n"
         "kick:\n"
         "  default_profile: volatile\n"
+        "  kick_limit_buffer_bps: 1000\n"
         "  no_fill:\n"
         "    retry_delays_minutes: [720, 1440]\n"
         "  profiles:\n"

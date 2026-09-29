@@ -146,7 +146,7 @@ Once a candidate is selected for preparation, Tidal does the expensive work only
 
 1. skip strategy candidates with a persisted disabled kick guard status
 2. read the live source balance
-3. apply token-specific USD kick cap if configured
+3. apply the resolved USD kick limit, sweeping the full balance when within its configured buffer
 4. skip if the live value falls below threshold
 5. fetch a live quote for the exact sell amount
 6. derive start price and minimum price from the live quote

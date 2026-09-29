@@ -225,12 +225,17 @@ def _select_sell_size(
         if max_usd_per_kick is not None:
             if price_usd <= 0:
                 raise ValueError("cached token price must be positive for token sizing")
-            usd_cap_raw = int(
-                ((max_usd_per_kick / price_usd) * (Decimal(10) ** candidate.decimals)).to_integral_value(
-                    rounding=ROUND_FLOOR
-                )
+            buffered_limit = max_usd_per_kick * (
+                Decimal(1) + Decimal(token_sizing_policy.kick_limit_buffer_bps) / 10_000
             )
-            selected_sell_raw = min(live_balance_raw, max(usd_cap_raw, 0))
+            # Sweep a small remainder into this lot, including the exact boundary.
+            if full_live_usd_value > buffered_limit:
+                usd_cap_raw = int(
+                    ((max_usd_per_kick / price_usd) * (Decimal(10) ** candidate.decimals)).to_integral_value(
+                        rounding=ROUND_FLOOR
+                    )
+                )
+                selected_sell_raw = min(live_balance_raw, max(usd_cap_raw, 0))
 
     selected_sell_normalized = to_decimal_string(selected_sell_raw, candidate.decimals)
     selected_sell_usd_value = Decimal(selected_sell_normalized) * price_usd

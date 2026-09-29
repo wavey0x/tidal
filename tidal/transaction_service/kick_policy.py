@@ -49,6 +49,7 @@ class PricingPolicy:
 class TokenSizingPolicy:
     default_limit: Decimal | None
     token_overrides: dict[str, Decimal]
+    kick_limit_buffer_bps: int
 
     def resolve(self, token_address: str) -> Decimal | None:
         return self.token_overrides.get(
@@ -246,6 +247,10 @@ def _build_pricing_policy(raw: Mapping[str, object]) -> PricingPolicy:
 
 
 def _build_token_sizing_policy(raw: Mapping[str, object]) -> TokenSizingPolicy:
+    buffer_bps = raw.get("kick_limit_buffer_bps")
+    if type(buffer_bps) is not int or buffer_bps < 0:
+        raise ValueError("kick_limit_buffer_bps must be a non-negative integer")
+
     raw_default_limit = raw.get("default_usd_kick_limit")
     default_limit = (
         None
@@ -269,7 +274,11 @@ def _build_token_sizing_policy(raw: Mapping[str, object]) -> TokenSizingPolicy:
             scope_name=f"usd_kick_limit[{token_address}]",
         )
 
-    return TokenSizingPolicy(default_limit=default_limit, token_overrides=token_overrides)
+    return TokenSizingPolicy(
+        default_limit=default_limit,
+        token_overrides=token_overrides,
+        kick_limit_buffer_bps=buffer_bps,
+    )
 
 
 def _build_ignore_policy(raw: Mapping[str, object]) -> IgnorePolicy:

@@ -120,10 +120,21 @@ Sell sizing uses:
 - the cached sell-token USD price
 - optional global `default_usd_kick_limit`
 - optional per-token `usd_kick_limit` overrides
+- required `kick_limit_buffer_bps`, a non-negative integer (1000 = 10%)
 
 That means Tidal can cap a large position to a smaller USD amount without fetching any extra live pricing data first.
 An explicit per-token limit takes precedence over the global default.
 If neither limit is configured, Tidal uses the full live balance.
+
+The resolved limit is a nominal lot size. If the full live USD value is at or
+below `limit * (1 + kick_limit_buffer_bps / 10000)`, Tidal sells the full balance.
+Above that boundary, it sells the nominal limit, rounded down to token units.
+The comparison uses decimal arithmetic before token-unit rounding.
+
+With a $3,000 limit and a 1000 bps buffer, $3,210 and exactly $3,300 are sold in
+full; $3,301 is capped at $3,000. Set the buffer to `0` for a strict limit. The
+same buffer applies to default and per-token limits. Minimum-value checks,
+cooldowns, and no-fill guards still apply; quotes use the exact selected amount.
 
 ## Just-In-Time Want Price
 

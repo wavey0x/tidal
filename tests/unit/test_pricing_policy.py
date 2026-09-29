@@ -12,6 +12,7 @@ def test_load_kick_config_reads_default_and_token_overrides(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+kick_limit_buffer_bps: 1000
 
 no_fill:
   retry_delays_minutes: [720, 1440]
@@ -43,6 +44,7 @@ cooldown_minutes: 60
     assert rule_a == Decimal("5000")
     assert rule_b == Decimal("25000")
     assert rule_missing == Decimal("3000")
+    assert config.token_sizing_policy.kick_limit_buffer_bps == 1000
     assert config.pricing_policy.default_profile_name == "volatile"
     assert config.cooldown_policy.default_minutes == 60
 
@@ -52,6 +54,7 @@ def test_load_kick_config_defaults_to_empty_overrides_when_absent(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+kick_limit_buffer_bps: 1000
 
 no_fill:
   retry_delays_minutes: [720, 1440]
@@ -85,6 +88,7 @@ def test_load_kick_config_parses_profile_overrides(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+kick_limit_buffer_bps: 1000
 
 no_fill:
   retry_delays_minutes: [720, 1440]
@@ -132,6 +136,7 @@ def test_load_kick_config_parses_ignore_and_cooldown_rules(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+kick_limit_buffer_bps: 1000
 
 no_fill:
   retry_delays_minutes: [720, 1440]
@@ -178,6 +183,7 @@ def test_load_kick_config_rejects_legacy_auctions_key(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+kick_limit_buffer_bps: 1000
 
 profiles:
   volatile:
@@ -211,6 +217,7 @@ def test_load_kick_config_requires_strict_no_fill_schedule(tmp_path, no_fill_yam
     kick_path.write_text(
         (
             "default_profile: volatile\n"
+            "kick_limit_buffer_bps: 1000\n"
             f"{no_fill_yaml}"
             "profiles:\n"
             "  volatile:\n"
@@ -230,6 +237,7 @@ def test_load_kick_config_rejects_duplicate_profile_overrides(tmp_path):
     kick_path.write_text(
         """
 default_profile: volatile
+kick_limit_buffer_bps: 1000
 
 profiles:
   volatile:
@@ -275,6 +283,7 @@ def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
     assert stable_profile.outlier_floor_enabled is True
     assert eva_usdt_profile.name == "stable"
     assert config.token_sizing_policy.default_limit == Decimal("3000")
+    assert config.token_sizing_policy.kick_limit_buffer_bps == 1000
     assert (
         config.token_sizing_policy.token_overrides[
             "0x419905009e4656fdc02418c7df35b1e61ed5f726"
@@ -323,3 +332,25 @@ def test_load_kick_config_accepts_packaged_kick_template(tmp_path):
         )
         == 1440
     )
+
+
+@pytest.mark.parametrize("buffer_bps", [0, 250, 1000, 2500])
+def test_kick_limit_buffer_accepts_non_negative_integers(buffer_bps):
+    raw = yaml.safe_load(read_template_text("server.yaml"))["kick"]
+    raw["kick_limit_buffer_bps"] = buffer_bps
+    assert build_kick_config(raw).token_sizing_policy.kick_limit_buffer_bps == buffer_bps
+
+
+@pytest.mark.parametrize("buffer_bps", [None, -1, True, False, 1.5, 1000.0, "1000", "bad"])
+def test_kick_limit_buffer_rejects_invalid_values(buffer_bps):
+    raw = yaml.safe_load(read_template_text("server.yaml"))["kick"]
+    raw["kick_limit_buffer_bps"] = buffer_bps
+    with pytest.raises(ValueError, match="kick_limit_buffer_bps must be a non-negative integer"):
+        build_kick_config(raw)
+
+
+def test_kick_limit_buffer_is_required():
+    raw = yaml.safe_load(read_template_text("server.yaml"))["kick"]
+    del raw["kick_limit_buffer_bps"]
+    with pytest.raises(ValueError, match="kick_limit_buffer_bps"):
+        build_kick_config(raw)

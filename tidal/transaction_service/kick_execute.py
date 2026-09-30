@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import structlog
+from eth_utils import to_checksum_address
 from tidal.lifecycle import LifecycleError
 
 from tidal.auction_price_units import format_buffer_pct
@@ -330,7 +331,7 @@ class KickExecutor:
             gas_estimate = await self.web3_client.estimate_gas(
                 {
                     "from": sender_address,
-                    "to": to_address,
+                    "to": to_checksum_address(to_address),
                     "data": tx_data,
                     "chainId": self.chain_id,
                 }
@@ -582,24 +583,19 @@ class KickExecutor:
             )
 
         intent = self.tx_builder.build_resolve_auction_intent(prepared_operation, sender=signer.checksum_address)
-        try:
-            gas_estimate = await self.web3_client.estimate_gas(
-                {
-                    "from": signer.checksum_address,
-                    "to": intent.to,
-                    "data": intent.data,
-                    "chainId": self.chain_id,
-                }
-            )
-        except Exception as exc:
-            friendly_error = _format_execution_error(exc)
+        gas_estimate, estimate_error = await self._estimate_transaction_data(
+            tx_data=intent.data,
+            to_address=intent.to,
+            sender_address=signer.checksum_address,
+        )
+        if gas_estimate is None:
             return self._fail(
                 run_id,
                 prepared_operation.candidate,
                 now_iso,
                 operation_type="resolve_auction",
                 status=KickStatus.ESTIMATE_FAILED,
-                error_message=friendly_error,
+                error_message=estimate_error,
                 **op_kwargs,
             )
 

@@ -6,9 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from eth_utils import to_checksum_address
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from tidal.chain.web3_client import Web3Client
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import QuoteResult
@@ -523,6 +525,83 @@ async def test_resolve_delegates_intent_and_preserves_provisional_operation(sess
     assert rows[0]["status"] == "SUBMITTED"
     assert rows[0]["token_address"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert rows[0]["stuck_abort_reason"] == "inactive kicked lot with stranded inventory"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gas_estimate", [100_000, 500_001])
+async def test_resolve_estimates_normalized_intent_through_web3(
+    session, recording_execution, monkeypatch, gas_estimate
+) -> None:
+    kicker = "0x354ed194390c431250b639ab5cba178d587612fd"
+    client = Web3Client("http://fixture.invalid", timeout_seconds=1, retry_attempts=1)
+    monkeypatch.setattr(client, "get_base_fee", AsyncMock(return_value=100_000_000))
+    monkeypatch.setattr(client, "get_max_priority_fee", AsyncMock(return_value=1_000_000_000))
+
+    async def rpc_response(method, params):
+        # Leave Web3's transaction formatters and checksum validation intact.
+        assert method in {"eth_chainId", "eth_estimateGas"}
+        result = "0x1" if method == "eth_chainId" else hex(gas_estimate)
+        return {"jsonrpc": "2.0", "id": 1, "result": result}
+
+    rpc = AsyncMock(side_effect=rpc_response)
+    monkeypatch.setattr(client.w3.provider, "make_request", rpc)
+    signer = SimpleNamespace(checksum_address=to_checksum_address(_FakeSigner.address))
+    builder = KickTxBuilder(web3_client=client, auction_kicker_address=kicker, chain_id=1)
+    prepared = PreparedResolveAuction(
+        candidate=_candidate(),
+        sell_token="0xd533a949740bb3306d119cc777fa900ba034cd52",
+        path=5,
+        reason="inactive kicked lot with stranded inventory",
+        balance_raw=7077,
+        requires_force=False,
+        receiver="0x5555555555555555555555555555555555555555",
+    )
+    intent = builder.build_resolve_auction_intent(prepared, sender=signer.checksum_address)
+    assert intent.to == kicker
+    managed = recording_execution(session)
+    executor = KickExecutor(
+        web3_client=client, signer=signer, kick_tx_repository=KickTxRepository(session),
+        tx_builder=builder, base_fee_cap_gwei=1, max_priority_fee_gwei=2,
+        max_gas_limit=500_000, chain_id=1, managed_executor=managed,
+    )
+
+    result = await executor.execute_resolve_auction(prepared, "run-checksum")
+
+    estimates = [call.args[1][0] for call in rpc.await_args_list if call.args[0] == "eth_estimateGas"]
+    assert len(estimates) == 1
+    assert estimates[0]["to"] == to_checksum_address(kicker)
+    assert estimates[0]["data"] == intent.data
+    if gas_estimate > 500_000:
+        assert result.status == KickStatus.ERROR
+        assert "gas estimate 500001 exceeds batch cap 500000" in result.error_message
+        managed.submit.assert_not_awaited()
+    else:
+        assert result.status == KickStatus.SUBMITTED
+        managed.submit.assert_awaited_once()
+        assert managed.submit.call_args.kwargs["transaction"]["data"] == intent.data
+
+
+@pytest.mark.asyncio
+async def test_batch_preflight_estimates_checksummed_intent_destination() -> None:
+    from web3._utils.validation import validate_address
+
+    async def estimate(tx):
+        validate_address(tx["to"])
+        return 100_000
+
+    executor = KickExecutor(
+        web3_client=SimpleNamespace(estimate_gas=AsyncMock(side_effect=estimate)),
+        signer=None, kick_tx_repository=None, tx_builder=None,
+        base_fee_cap_gwei=1, max_priority_fee_gwei=2, max_gas_limit=500_000, chain_id=1,
+    )
+    gas, error = await executor._estimate_transaction_data(
+        tx_data="0xfeedface",
+        to_address="0x354ed194390c431250b639ab5cba178d587612fd",
+        sender_address=to_checksum_address(_FakeSigner.address),
+    )
+
+    assert error is None
+    assert gas == 100_000
 
 
 @pytest.mark.asyncio

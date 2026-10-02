@@ -53,6 +53,13 @@ kick:
       step_decay_rate_bps: 15
       outlier_floor_enabled: true
 
+    # Let small v1.0.4 msETHWETH-f lots decay past the rounded 1-LP start.
+    volatile-20bps:
+      start_price_buffer_bps: 1000
+      min_price_buffer_bps: 500
+      step_decay_rate_bps: 20
+      outlier_floor_enabled: true
+
     semi-volatile:
       start_price_buffer_bps: 1000
       min_price_buffer_bps: 500
@@ -66,6 +73,9 @@ kick:
       outlier_floor_enabled: true
 
   profile_overrides:
+    - auction: "0x737c6ff4b4e13935b2b4e785047ab097993c9d0e" # msETHWETH-f
+      token: "0xd533a949740bb3306d119cc777fa900ba034cd52" # CRV
+      profile: volatile-20bps
     - auction: "0xA00E6b35C23442fa9D5149Cba5dd94623fFE6693" # Fee burner v1.0.4 auction
       token: "0x2A8e1E676Ec238d8A992307B495b45B3fEAa5e86" # OUSD
       profile: stable

@@ -1,10 +1,50 @@
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 import yaml
 
 from tidal.resources import read_template_text
+from tidal.auction_price_units import latent_terminal_full_lot_ask_raw
+from tidal.auction_versions import StartingPriceEncoding
 from tidal.transaction_service.kick_policy import build_kick_config, load_kick_config
+
+
+@pytest.mark.parametrize("packaged", [False, True], ids=["server", "packaged"])
+def test_msethweth_small_lot_profile_is_scoped_and_reaches_quote(packaged):
+    text = (
+        read_template_text("server.yaml")
+        if packaged
+        else (Path(__file__).resolve().parents[2] / "config/server.yaml").read_text()
+    )
+    policy = build_kick_config(yaml.safe_load(text)["kick"]).pricing_policy
+    auction = "0x737c6ff4b4e13935b2b4e785047ab097993c9d0e"
+    crv = "0xd533a949740bb3306d119cc777fa900ba034cd52"
+    other = "0x0000000000000000000000000000000000000001"
+    profile = policy.resolve(auction, crv)
+    default = policy.profiles[policy.default_profile_name]
+
+    assert policy.resolve(auction, other) == default
+    assert policy.resolve(other, crv) == default
+    assert profile.start_price_buffer_bps == default.start_price_buffer_bps
+    assert profile.min_price_buffer_bps == default.min_price_buffer_bps == 500
+    assert profile.outlier_floor_enabled is default.outlier_floor_enabled is True
+
+    # This real v1.0.4 lot cannot reach its quote in 24 hours at 15 bps.
+    pricing = dict(
+        encoding=StartingPriceEncoding.WHOLE_WANT,
+        starting_price_raw=1,
+        sell_amount_raw=673977045652087330052,
+        sell_decimals=18,
+        want_decimals=18,
+        step_duration_seconds=60,
+        auction_length_seconds=86400,
+    )
+    quote_raw = 93664022270628838
+    assert latent_terminal_full_lot_ask_raw(**pricing, step_decay_rate_bps=15) > quote_raw
+    assert latent_terminal_full_lot_ask_raw(
+        **pricing, step_decay_rate_bps=profile.step_decay_rate_bps
+    ) < quote_raw
 
 
 def test_load_kick_config_reads_default_and_token_overrides(tmp_path):

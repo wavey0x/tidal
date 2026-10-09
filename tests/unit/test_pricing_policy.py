@@ -11,14 +11,21 @@ from tidal.transaction_service.kick_policy import build_kick_config, load_kick_c
 
 
 @pytest.mark.parametrize("packaged", [False, True], ids=["server", "packaged"])
-def test_msethweth_small_lot_profile_is_scoped_and_reaches_quote(packaged):
+@pytest.mark.parametrize(
+    ("auction", "sell_amount_raw", "quote_raw"),
+    [
+        ("0x737c6ff4b4e13935b2b4e785047ab097993c9d0e", 673977045652087330052, 93664022270628838),
+        ("0x3e500a50051744c111f92b97aaf225a76c7315de", 798542063455129484319, 115319137406022423),
+    ],
+    ids=["msethweth", "oethasteth"],
+)
+def test_small_lp_lot_profile_is_scoped_and_reaches_discount(packaged, auction, sell_amount_raw, quote_raw):
     text = (
         read_template_text("server.yaml")
         if packaged
         else (Path(__file__).resolve().parents[2] / "config/server.yaml").read_text()
     )
     policy = build_kick_config(yaml.safe_load(text)["kick"]).pricing_policy
-    auction = "0x737c6ff4b4e13935b2b4e785047ab097993c9d0e"
     crv = "0xd533a949740bb3306d119cc777fa900ba034cd52"
     other = "0x0000000000000000000000000000000000000001"
     profile = policy.resolve(auction, crv)
@@ -30,21 +37,21 @@ def test_msethweth_small_lot_profile_is_scoped_and_reaches_quote(packaged):
     assert profile.min_price_buffer_bps == default.min_price_buffer_bps == 500
     assert profile.outlier_floor_enabled is default.outlier_floor_enabled is True
 
-    # This real v1.0.4 lot cannot reach its quote in 24 hours at 15 bps.
+    # These real v1.0.4 lots cannot reach the protected discount at 15 bps.
     pricing = dict(
         encoding=StartingPriceEncoding.WHOLE_WANT,
         starting_price_raw=1,
-        sell_amount_raw=673977045652087330052,
+        sell_amount_raw=sell_amount_raw,
         sell_decimals=18,
         want_decimals=18,
         step_duration_seconds=60,
         auction_length_seconds=86400,
     )
-    quote_raw = 93664022270628838
-    assert latent_terminal_full_lot_ask_raw(**pricing, step_decay_rate_bps=15) > quote_raw
+    minimum_raw = quote_raw * 9500 // 10000
+    assert latent_terminal_full_lot_ask_raw(**pricing, step_decay_rate_bps=15) > minimum_raw
     assert latent_terminal_full_lot_ask_raw(
         **pricing, step_decay_rate_bps=profile.step_decay_rate_bps
-    ) < quote_raw
+    ) < minimum_raw
 
 
 def test_load_kick_config_reads_default_and_token_overrides(tmp_path):

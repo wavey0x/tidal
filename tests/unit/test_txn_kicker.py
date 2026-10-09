@@ -329,6 +329,7 @@ async def _prepare_round_vector(
     step_decay_rate_bps: int = 15,
     auction_length_seconds: int = 86_400,
     step_duration_seconds: int = 60,
+    sell_amount_raw: int = 843_453_068_587_196_135_157,
 ):
     candidate = _candidate()
     candidate.auction_version = version
@@ -355,7 +356,7 @@ async def _prepare_round_vector(
         usd_threshold=100.0,
         require_curve_quote=True,
         erc20_reader=SimpleNamespace(
-            read_balance=AsyncMock(return_value=843_453_068_587_196_135_157),
+            read_balance=AsyncMock(return_value=sell_amount_raw),
             read_decimals=AsyncMock(return_value=18),
         ),
         pricing_policy=_pricing_policy(profile),
@@ -386,10 +387,40 @@ async def test_round_8_v104_is_rejected_by_terminal_guard() -> None:
         "sourceBalanceRaw": "843453068587196135157",
         "sellAmountRaw": "843453068587196135157",
         "floorQuoteAmountRaw": "96953501367832632",
+        "minimumFullLotQuoteRaw": "92105826299440462",
         "terminalAskRaw": "115138258855697109",
         "wantDecimals": 18,
     }
     assert "latent terminal full-lot ask 0.115138258855697109" in str(result.error_message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quote_amount_raw", [115_319_137_406_022_423, 106_887_454_417_755_110])
+async def test_oethasteth_requires_room_for_discount_before_expiry(quote_amount_raw) -> None:
+    inputs = dict(quote_amount_raw=quote_amount_raw, sell_amount_raw=798_542_063_455_129_484_319)
+    blocked = await _prepare_round_vector("1.0.4", **inputs, step_decay_rate_bps=15)
+    assert blocked.status == KickStatus.SKIP
+    assert blocked.reason_code == KickSkipReason.AUCTION_PRICE_GRANULARITY
+    terminal = int(blocked.reason_data["terminalAskRaw"])
+    minimum = int(blocked.reason_data["minimumFullLotQuoteRaw"])
+    assert terminal > minimum
+    if quote_amount_raw == 115_319_137_406_022_423:
+        # The failed auction passed the old check by touching the quote at expiry.
+        assert terminal < quote_amount_raw
+
+    prepared = await _prepare_round_vector("1.0.4", **inputs, step_decay_rate_bps=20)
+    assert isinstance(prepared, PreparedKick)
+    assert prepared.starting_price_raw == 1
+    # Faster decay must preserve the same protected minimum, not lower it.
+    assert prepared.minimum_price_scaled_1e18 * inputs["sell_amount_raw"] // 10**18 == minimum
+
+
+@pytest.mark.asyncio
+async def test_v105_also_requires_room_for_discount_before_expiry() -> None:
+    # A 70-minute auction at 15 bps reaches the buffered quote but not its 5% discount.
+    result = await _prepare_round_vector("1.0.5", auction_length_seconds=4200)
+    assert result.status == KickStatus.SKIP
+    assert "exceeds minimum full-lot price" in result.error_message
 
 
 @pytest.mark.asyncio

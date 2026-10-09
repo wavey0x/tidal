@@ -112,6 +112,17 @@ profile_overrides:
     profile: stable
 ```
 
+Before a kick, the latent asking price at auction expiry must be at or below
+the configured minimum full-lot price, including the discount from the trusted
+quote. Merely reaching the quote at expiry is insufficient: buyers need room
+for execution costs. The contract stops trading below its minimum price; it
+does not remain open at that price. This check preserves the entire configured
+discount band within the auction's lifetime without guaranteeing a fill.
+
+The scoped `volatile-20bps` profile applies to CRV lots for msETHWETH-f and
+OETHAstETH. It uses 20 bps per step with the existing 5% minimum-price buffer,
+allowing these small v1.0.4 lots to decay from their rounded 1-LP starting ask.
+
 ## Sell Sizing
 
 Sell sizing uses:

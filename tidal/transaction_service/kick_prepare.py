@@ -547,17 +547,20 @@ class KickPreparer:
                 error_message=f"terminal ask calculation failed: {exc}",
                 quote_response_json=quote_response_json,
             )
-        if terminal_ask_raw > floor_quote_amount_raw:
+        # Reaching the quote only at expiry leaves no useful buyer margin.
+        # Require the whole configured discount band to fit within the auction.
+        if terminal_ask_raw > minimum_full_lot_quote_raw:
             floor_quote_display = to_decimal_string(floor_quote_amount_raw, want_decimals)
+            minimum_display = to_decimal_string(minimum_full_lot_quote_raw, want_decimals)
             terminal_display = to_decimal_string(terminal_ask_raw, want_decimals)
             is_v104_rounding_pause = auction_spec.version == "1.0.4"
             return KickResult(
                 kick_tx_id=0,
                 status=KickStatus.SKIP,
                 error_message=(
-                    f"quote {floor_quote_display} {candidate.want_symbol or 'want-token'} is below "
                     f"latent terminal full-lot ask {terminal_display} "
-                    f"{candidate.want_symbol or 'want-token'}"
+                    f"{candidate.want_symbol or 'want-token'} exceeds minimum full-lot price "
+                    f"{minimum_display} (quote {floor_quote_display}); increase decay or lot size"
                 ),
                 sell_amount=str(sell_amount),
                 live_balance_raw=live_balance_raw,
@@ -573,6 +576,7 @@ class KickPreparer:
                         "sourceBalanceRaw": str(live_balance_raw),
                         "sellAmountRaw": str(sell_amount),
                         "floorQuoteAmountRaw": str(floor_quote_amount_raw),
+                        "minimumFullLotQuoteRaw": str(minimum_full_lot_quote_raw),
                         "terminalAskRaw": str(terminal_ask_raw),
                         "wantDecimals": want_decimals,
                     }

@@ -17,7 +17,7 @@ from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
 from tidal.transaction_service.evaluator import build_shortlist, sort_candidates
 from tidal.transaction_service.kick_policy import CooldownPolicy, IgnorePolicy
 from tidal.transaction_service.service import TxnService
-from tidal.transaction_service.kick_execute import BatchExecutionBlocked
+from tidal.transaction_service.kick_execute import BatchExecutionBlocked, KickExecutor
 from tidal.lifecycle import LifecycleError
 from tidal.transaction_service.types import (
     KickCandidate,
@@ -463,7 +463,8 @@ async def test_live_skip_below_threshold_not_counted(session):
 
 
 @pytest.mark.asyncio
-async def test_live_planner_prepare_error_counts_as_failure_and_persists(session):
+@pytest.mark.parametrize("with_sizing", [True, False])
+async def test_live_planner_prepare_error_counts_as_failure_and_persists(session, with_sizing):
     _seed_candidate(session)
     txn_run_repo = TxnRunRepository(session)
     kick_tx_repo = KickTxRepository(session)
@@ -498,44 +499,26 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
                         kick_tx_id=0,
                         status=KickStatus.ERROR,
                         error_message="quote API failed: upstream timeout",
+                        sell_amount="400000000000000000000" if with_sizing else None,
+                        live_balance_raw=1000 * 10**18 if with_sizing else None,
+                        usd_value="1000" if with_sizing else None,
+                        quote_response_json='{"providers": {"curve": {"status": "error"}}}',
                     ),
                 )
             ],
         )
     )
-    executor = MagicMock()
-
-    def _persist_fail(run_id, candidate, now_iso, *, status, error_message, **kwargs):  # noqa: ANN001
-        kick_tx_id = kick_tx_repo.insert(
-            {
-                "run_id": run_id,
-                "operation_type": "kick",
-                "source_type": candidate.source_type,
-                "source_address": candidate.source_address,
-                "strategy_address": candidate.source_address,
-                "token_address": candidate.token_address,
-                "auction_address": candidate.auction_address,
-                "status": status.value if isinstance(status, KickStatus) else status,
-                "created_at": now_iso,
-                "error_message": error_message,
-                "price_usd": candidate.price_usd,
-                "want_address": candidate.want_address,
-                "usd_value": kwargs.get("usd_value"),
-            }
-        )
-        return KickResult(kick_tx_id=kick_tx_id, status=status, error_message=error_message)
-
-    def _record_prepare_failure(*, run_id, candidate, result):  # noqa: ANN001
-        return _persist_fail(
-            run_id,
-            candidate,
-            datetime.now(timezone.utc).isoformat(),
-            status=result.status,
-            error_message=result.error_message,
-            usd_value=result.usd_value,
-        )
-
-    executor.record_prepare_failure = MagicMock(side_effect=_record_prepare_failure)
+    executor = KickExecutor(
+        web3_client=MagicMock(),
+        signer=None,
+        kick_tx_repository=kick_tx_repo,
+        tx_builder=MagicMock(),
+        base_fee_cap_gwei=5,
+        max_priority_fee_gwei=2,
+        max_gas_limit=500000,
+        chain_id=1,
+        managed_executor=MagicMock(),
+    )
     executor.managed_executor.reconciler.reconcile = AsyncMock(return_value=[])
 
     service = TxnService(
@@ -551,11 +534,16 @@ async def test_live_planner_prepare_error_counts_as_failure_and_persists(session
     assert result.status == "FAILED"
     assert result.kicks_attempted == 0
     assert result.kicks_failed == 1
-    executor.record_prepare_failure.assert_called_once()
     rows = session.execute(select(models.kick_txs)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["status"] == "ERROR"
     assert rows[0]["error_message"] == "quote API failed: upstream timeout"
+    assert rows[0]["requested_sell_amount"] == ("400000000000000000000" if with_sizing else None)
+    assert rows[0]["sell_amount"] is None
+    assert rows[0]["normalized_balance"] == ("400" if with_sizing else None)
+    assert rows[0]["usd_value"] == ("1000" if with_sizing else None)
+    assert rows[0]["quote_response_json"] == '{"providers": {"curve": {"status": "error"}}}'
+    assert rows[0]["tx_hash"] is None
 
 
 @pytest.mark.asyncio

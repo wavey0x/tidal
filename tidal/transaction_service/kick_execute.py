@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import structlog
 from tidal.lifecycle import LifecycleError
+from tidal.normalizers import to_decimal_string
 
 from tidal.auction_price_units import format_buffer_pct
 from tidal.time import utcnow_iso
@@ -184,6 +185,7 @@ class KickExecutor:
         token_address: str | None = None,
         token_symbol: str | None = None,
         sell_amount: str | None = None,
+        requested_sell_amount: str | None = None,
         starting_price: str | None = None,
         minimum_price: str | None = None,
         minimum_quote: str | None = None,
@@ -206,6 +208,7 @@ class KickExecutor:
             token_address=token_address,
             token_symbol=token_symbol,
             sell_amount=sell_amount,
+            requested_sell_amount=requested_sell_amount,
             starting_price=starting_price,
             minimum_price=minimum_price,
             minimum_quote=minimum_quote,
@@ -252,6 +255,10 @@ class KickExecutor:
             minimum_quote=result.minimum_quote,
             usd_value=result.usd_value,
             quote_response_json=result.quote_response_json,
+            normalized_balance=(
+                to_decimal_string(int(result.sell_amount), candidate.decimals)
+                if result.sell_amount is not None else None
+            ),
         )
         return KickResult(
             kick_tx_id=persisted.kick_tx_id,

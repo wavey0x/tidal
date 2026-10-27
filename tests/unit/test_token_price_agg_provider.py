@@ -327,6 +327,19 @@ def test_curve_quote_available_empty_amounts() -> None:
     assert result.curve_quote_available() is False
 
 
+@pytest.mark.parametrize("raw", [None, {"providers": []}, {"providers": {"curve": None}},
+                                {"providers": {"curve": {"error": "timeout"}}}])
+def test_quote_failure_summary_handles_missing_error_details(raw) -> None:
+    result = QuoteResult(
+        amount_out_raw=None,
+        token_out_decimals=18,
+        provider_statuses={"curve": "error", "lifi": "ok"},
+        provider_amounts={"lifi": 100},
+        raw_response=raw,
+    )
+    assert result.failure_summary() == "curve: error"
+
+
 @pytest.mark.asyncio
 async def test_quote_parses_per_provider_amounts() -> None:
     provider = _provider()

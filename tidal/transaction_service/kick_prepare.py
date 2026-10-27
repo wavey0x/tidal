@@ -378,6 +378,19 @@ class KickPreparer:
                 usd_value=str(selected_sell.selected_sell_usd_value),
             )
 
+        quote_response_json = None
+
+        def quote_failure(error_message: str) -> KickResult:
+            return KickResult(
+                kick_tx_id=0,
+                status=KickStatus.ERROR,
+                error_message=error_message,
+                live_balance_raw=live_balance_raw,
+                sell_amount=str(sell_amount),
+                usd_value=str(selected_sell.selected_sell_usd_value),
+                quote_response_json=quote_response_json,
+            )
+
         try:
             quote_result = await self.price_provider.quote(
                 token_in=candidate.token_address,
@@ -385,7 +398,7 @@ class KickPreparer:
                 amount_in=str(sell_amount),
             )
         except Exception as exc:
-            return KickResult(kick_tx_id=0, status=KickStatus.ERROR, error_message=f"quote API failed: {exc}")
+            return quote_failure(f"quote API failed: {exc}")
 
         if _quote_metadata_resolves_to_want(candidate, quote_result.raw_response):
             raw_token_in = quote_result.raw_response.get("token_in", {}) if isinstance(quote_result.raw_response, dict) else {}
@@ -406,7 +419,6 @@ class KickPreparer:
                 error_message="sell token resolves to want token in quote API",
             )
 
-        quote_response_json = None
         if quote_result.raw_response is not None:
             try:
                 cleaned = _clean_quote_response(quote_result.raw_response, request_url=quote_result.request_url)
@@ -414,6 +426,8 @@ class KickPreparer:
             except (TypeError, ValueError):
                 pass
 
+        failure_summary = quote_result.failure_summary()
+        failure_details = f"; {failure_summary}" if failure_summary else ""
         if quote_result.amount_out_raw is None:
             self.logger.warning(
                 "txn_quote_no_amount",
@@ -423,12 +437,7 @@ class KickPreparer:
                 provider_statuses=quote_result.provider_statuses,
                 request_url=quote_result.request_url,
             )
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message="no quote available for this pair",
-                quote_response_json=quote_response_json,
-            )
+            return quote_failure(f"no quote available for this pair{failure_details}")
 
         if self.require_curve_quote and not quote_result.curve_quote_available():
             curve_status = quote_result.provider_statuses.get("curve", "not present")
@@ -441,29 +450,14 @@ class KickPreparer:
                 provider_statuses=quote_result.provider_statuses,
                 request_url=quote_result.request_url,
             )
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message=f"curve quote unavailable (status: {curve_status})",
-                quote_response_json=quote_response_json,
-            )
+            return quote_failure(f"curve quote unavailable (status: {curve_status}){failure_details}")
 
         if quote_result.token_out_decimals is None:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message="quote response is missing want token decimals",
-                quote_response_json=quote_response_json,
-            )
+            return quote_failure("quote response is missing want token decimals")
         if quote_result.token_out_decimals != want_decimals:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message=(
-                    f"want token decimals mismatch: quote {quote_result.token_out_decimals}, "
-                    f"onchain {want_decimals}"
-                ),
-                quote_response_json=quote_response_json,
+            return quote_failure(
+                f"want token decimals mismatch: quote {quote_result.token_out_decimals}, "
+                f"onchain {want_decimals}"
             )
 
         amount_out_normalized = Decimal(to_decimal_string(quote_result.amount_out_raw, want_decimals))
@@ -475,12 +469,7 @@ class KickPreparer:
                 encoding=auction_spec.starting_price_encoding,
             )
         except ValueError as exc:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message=f"starting price encoding failed: {exc}",
-                quote_response_json=quote_response_json,
-            )
+            return quote_failure(f"starting price encoding failed: {exc}")
 
         buffer = Decimal(1) + Decimal(profile.start_price_buffer_bps) / Decimal(10_000)
         exact_value = amount_out_normalized * buffer
@@ -539,12 +528,7 @@ class KickPreparer:
                 auction_length_seconds=inspection.auction_length_seconds,
             )
         except ValueError as exc:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message=f"terminal ask calculation failed: {exc}",
-                quote_response_json=quote_response_json,
-            )
+            return quote_failure(f"terminal ask calculation failed: {exc}")
         if terminal_ask_raw > floor_quote_amount_raw:
             floor_quote_display = to_decimal_string(floor_quote_amount_raw, want_decimals)
             terminal_display = to_decimal_string(terminal_ask_raw, want_decimals)

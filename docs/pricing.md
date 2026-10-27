@@ -69,6 +69,14 @@ Tidal uses:
 
 If the first `200` response has provider failures and no amount, Tidal performs one short soft retry.
 
+When preparation fails, the error includes each unavailable provider's error
+type (or status if no type is returned), such as `curve: TIMEOUT; enso:
+PROVIDER_UNAVAILABLE; lifi: NO_ROUTE`. The retained operation keeps the selected
+live balance and its cached USD valuation even when no quote is available. The
+raw selected amount is recorded as the requested sell amount; an unsent failure
+has no executed sell amount or transaction hash. Repeated failures can therefore
+represent separate preparation attempts without any on-chain transaction.
+
 ## Curve Quote Strictness
 
 By default, kick preparation requires Curve to provide a positive route amount.

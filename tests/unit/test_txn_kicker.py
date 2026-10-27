@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,7 +16,7 @@ from tidal.persistence.repositories import KickTxRepository
 from tidal.pricing.token_price_agg import QuoteResult
 from tidal.transaction_service.kick_execute import KickExecutor, BatchExecutionBlocked
 from tidal.lifecycle import LifecycleError
-from tidal.transaction_service.kick_policy import PricingPolicy, PricingProfile
+from tidal.transaction_service.kick_policy import PricingPolicy, PricingProfile, TokenSizingPolicy
 from tidal.transaction_service.kick_prepare import KickPreparer
 from tidal.transaction_service.kick_tx import KickTxBuilder
 from tidal.transaction_service.types import (
@@ -252,6 +254,76 @@ async def test_kick_preparer_skips_active_auction() -> None:
 
     assert result.status == KickStatus.SKIP
     assert result.error_message == "auction still active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["no_amount", "curve_required", "transport"])
+async def test_quote_failure_preserves_sizing_and_provider_diagnostics(failure: str) -> None:
+    candidate = _candidate()
+    payload = {
+        "providers": {
+            "curve": {"status": "error", "error": {"type": "TIMEOUT"}},
+            "enso": {"status": "error", "error": {"type": "PROVIDER_UNAVAILABLE"}},
+            "lifi": {"status": "no_route", "error": {"type": "NO_ROUTE"}},
+        },
+    }
+    quote = QuoteResult(
+        amount_out_raw=10**18 if failure == "curve_required" else None,
+        token_out_decimals=18,
+        provider_statuses={name: entry["status"] for name, entry in payload["providers"].items()},
+        raw_response=payload,
+    )
+    price_provider = SimpleNamespace(
+        quote=AsyncMock(
+            return_value=quote,
+            side_effect=RuntimeError("upstream timeout") if failure == "transport" else None,
+        ),
+        quote_usd=AsyncMock(),
+    )
+    preparer = KickPreparer(
+        web3_client=object(),
+        price_provider=price_provider,
+        usd_threshold=100,
+        erc20_reader=SimpleNamespace(
+            read_balance=AsyncMock(return_value=1000 * 10**18),
+            read_decimals=AsyncMock(return_value=18),
+        ),
+        token_sizing_policy=TokenSizingPolicy(default_limit=Decimal("1000"), token_overrides={}),
+        start_price_buffer_bps=1000,
+        min_price_buffer_bps=500,
+    )
+
+    result = await preparer.prepare_kick(
+        candidate,
+        "run-quote-failure",
+        inspection=AuctionInspection(
+            auction_address=candidate.auction_address,
+            is_active_auction=False,
+            active_tokens=(),
+            auction_version="1.0.4",
+            auction_length_seconds=86_400,
+            step_duration_seconds=60,
+        ),
+    )
+
+    assert isinstance(result, KickResult)
+    assert result.status == KickStatus.ERROR
+    assert result.live_balance_raw == 1000 * 10**18
+    assert result.sell_amount == str(400 * 10**18)
+    assert Decimal(result.usd_value) == Decimal("1000")
+    assert result.tx_hash is None
+    price_provider.quote_usd.assert_not_awaited()
+    if failure == "transport":
+        assert result.error_message == "quote API failed: upstream timeout"
+    else:
+        assert "curve: TIMEOUT" in result.error_message
+        assert "enso: PROVIDER_UNAVAILABLE" in result.error_message
+        assert "lifi: NO_ROUTE" in result.error_message
+        assert json.loads(result.quote_response_json)["providers"] == payload["providers"]
+        if failure == "curve_required":
+            assert result.error_message.startswith("curve quote unavailable (status: error)")
+        else:
+            assert result.error_message.startswith("no quote available for this pair")
 
 
 @pytest.mark.asyncio

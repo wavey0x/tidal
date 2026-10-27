@@ -38,6 +38,20 @@ class QuoteResult:
         """True if the Curve provider returned a positive amount."""
         return self.provider_amounts.get("curve", 0) > 0
 
+    def failure_summary(self) -> str:
+        """Summarize provider failures without copying upstream error messages."""
+        providers = self.raw_response.get("providers") if isinstance(self.raw_response, dict) else None
+        details = []
+        for name, status in sorted(self.provider_statuses.items()):
+            if self.provider_amounts.get(name, 0) > 0:
+                continue
+            entry = providers.get(name) if isinstance(providers, dict) else None
+            error = entry.get("error") if isinstance(entry, dict) else None
+            error_type = error.get("type") if isinstance(error, dict) else None
+            reason = error_type if isinstance(error_type, str) and error_type else status or "unknown"
+            details.append(f"{name}: {reason}")
+        return "; ".join(details)
+
 
 class TokenPriceNotFoundError(Exception):
     """Raised when the price API indicates no price is available."""

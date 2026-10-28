@@ -199,3 +199,38 @@ This is a diagnostic warning, not an automatic rejection.
 - Do not assume the warning means the on-chain transaction is wrong.
 - Treat large warning deviations as a signal to inspect the want-token USD mark or quote path.
 - Stable-looking pairs should usually be mapped to the `stable` pricing profile in the authoritative server config.
+
+## Confirmed feasibility holds
+
+Before preparing a kick, Tidal checks that the configured auction can reach its
+protected minimum full-lot price before expiry. The calculation uses the live
+selected lot, contract version, token decimals, starting-price rounding, decay,
+duration, and configured buffers.
+
+When a successful trusted quote confirms that the terminal ask exceeds the
+protected quote by at least 25%, Tidal saves a candidate-specific hold. The
+existing kick timer skips quote requests for that candidate until its next full
+check, 24 hours later. Smaller gaps and provider failures retain normal checks.
+Holds survive restarts. Other candidates and settlement continue normally,
+including alternative tokens sharing the held candidate's auction.
+
+Fresh USD prices already collected by the scanner and changes to the selected
+lot can trigger an earlier full quote when they indicate the gap has narrowed.
+These estimates only wake preparation; execution always requires a fresh quote
+and all existing safeguards. Dust deposits or growth beyond an unchanged size
+cap do not clear a hold. Relevant contract or policy changes trigger a new check.
+If cached prices miss a recovery, the daily full check bounds the delay.
+
+The existing Alerts view shows the reason, required want-token output in the
+current starting-price band, and next full check. Existing alert delivery reports
+hold entry and recovery once each. The displayed recovery amount is a threshold
+for that price band; a changed starting-price band is recalculated before execution.
+
+For an immediate fresh preview, scope both the auction and token:
+
+```bash
+tidal kick run --dry-run --source-type strategy --auction AUCTION --token TOKEN --refresh-quote
+```
+
+`--refresh-quote` bypasses only the waiting period and cannot be used with
+`--headless`. It does not bypass pricing, freshness, transaction, or execution checks.

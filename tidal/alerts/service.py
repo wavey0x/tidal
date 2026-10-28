@@ -10,8 +10,8 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 
 from tidal.alerts.base import AlertMessage
-from tidal.automation_scope import current_automation_pairs, pair_in_automation_scope
 from tidal.auction_rounds import NoFillGuard, NoFillReason, RoundOutcome
+from tidal.automation_scope import current_automation_pairs, pair_in_automation_scope
 from tidal.normalizers import normalize_address
 from tidal.persistence import models
 from tidal.persistence.repositories import KickTxRepository
@@ -121,6 +121,9 @@ class AlertService:
         repeated_items, repeated_transitions = self._repeated_scan_failures()
         items.extend(repeated_items)
         transitions.extend(repeated_transitions)
+        feasibility_items, feasibility_transitions = self._feasibility_items(current)
+        items.extend(feasibility_items)
+        transitions.extend(feasibility_transitions)
         severity_rank = {"critical": 0, "high": 1, "warning": 2, "info": 3}
         items.sort(
             key=lambda item: (
@@ -137,6 +140,60 @@ class AlertService:
             items=tuple(items),
             transitions=tuple(transitions),
         )
+
+    def _feasibility_items(self, now: datetime) -> tuple[list[AlertItem], list[AlertMessage]]:
+        items, transitions = [], []
+        current_pairs = None
+        for row in self.session.execute(select(models.kick_prepare_status_latest)).mappings():
+            try:
+                detail = json.loads(row["detail_json"] or "{}")
+                opened = str(detail["holdOpenedAt"])
+                context = detail["context"]
+                want = context["want"]
+                if context["chainId"] != self.settings.chain_id:
+                    continue
+                held = row["status"] == "PAUSED"
+                if held:
+                    if current_pairs is None:
+                        current_pairs = current_automation_pairs(self.session, self.settings)
+                    if not pair_in_automation_scope(self.session, current_pairs, row):
+                        continue
+                if row["status"] not in {"PAUSED", "RECOVERED"}:
+                    continue
+                required = Decimal(detail["requiredQuoteRaw"]) / 10**int(detail["wantDecimals"])
+                next_check = str(detail["nextFullCheckAt"]) if held else None
+            except (ValueError, KeyError, TypeError, InvalidOperation):
+                continue
+            identity = ":".join(str(row[key]) for key in
+                                ("source_type", "source_address", "auction_address", "token_address"))
+            command = (f"tidal kick run --dry-run --source-type {row['source_type']} "
+                       f"--source {row['source_address']} --auction {row['auction_address']} "
+                       f"--token {row['token_address']} --refresh-quote")
+            want_label = self.session.scalar(select(models.tokens.c.symbol).where(
+                models.tokens.c.address == want,
+                models.tokens.c.chain_id == self.settings.chain_id,
+            )) or want
+            item = AlertItem(
+                id=f"kick_feasibility:{identity}", occurrence_id=f"kick_feasibility:{identity}:{opened}",
+                kind="kick_feasibility", severity="warning" if held else "info",
+                status="watching" if held else "resolved",
+                title="Kick waiting for viable pricing" if held else "Kick pricing checks resumed",
+                summary=(f"Auction {row['auction_address']}, sell token {row['token_address']}. " +
+                         (f"Confirmed auction pricing cannot reach the protected discount. "
+                         f"Needs at least {required:f} {want_label} in the current price band. "
+                         "Paid quotes are deferred; balance and price observations can trigger an earlier check."
+                         if held else "The pricing hold has cleared. Fresh preparation and execution checks still apply.")),
+                opened_at=opened, updated_at=str(row["checked_at"]),
+                retry_at=next_check,
+                scope={"sourceType": row["source_type"], "sourceAddress": row["source_address"],
+                       "auctionAddress": row["auction_address"], "tokenAddress": row["token_address"]},
+                evidence=detail, links={},
+                next_action={"instruction": "Wait for recovery or request a fresh scoped check.", "command": command},
+            )
+            if held:
+                items.append(item)
+            transitions.append(self._message(item, f"{item.occurrence_id}:{row['status']}"))
+        return items, transitions
 
     def _auction_retry_items(
         self, now: datetime

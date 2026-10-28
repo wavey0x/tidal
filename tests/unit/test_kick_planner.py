@@ -843,3 +843,28 @@ async def test_kick_planner_skips_single_kick_when_gas_estimate_exceeds_cap(monk
     assert plan.warnings == ["Gas estimate 501,428 exceeds txn_max_gas_limit 500,000"]
     assert plan.skipped_during_prepare[0].result is not None
     assert plan.skipped_during_prepare[0].result.status == KickStatus.ESTIMATE_FAILED
+
+
+@pytest.mark.asyncio
+async def test_held_candidate_does_not_starve_shared_auction_alternative(monkeypatch):
+    from tidal.transaction_service.types import KickResult, KickSkipReason
+    high = _candidate(token_address="0x" + "22" * 20, usd_value=2500)
+    low = _candidate(token_address="0x" + "66" * 20, usd_value=2000)
+    shortlist = SimpleNamespace(selected_candidates=[high], eligible_candidates=[high, low],
+        ignored_skips=[], cooldown_skips=[], deferred_same_auction_count=1,
+        deferred_same_auction_candidates=[low], limited_candidates=[])
+    deps = _FakeKickDeps(prepared_by_token={
+        high.token_address: KickResult(kick_tx_id=0, status=KickStatus.SKIP,
+            reason_code=KickSkipReason.AUCTION_FEASIBILITY_HOLD, error_message="held"),
+        low.token_address: _prepared(low)})
+    settlement = AsyncMock(return_value={high.auction_address: _inspection()})
+    monkeypatch.setattr(planner_module, "inspect_auction_settlements", settlement)
+    planner = KickPlanner(session=object(), settings=_settings(), preparer=deps, tx_builder=deps,
+        kick_tx_repository=_FakeKickTxRepository(), web3_client=object(),
+        shortlist_builder=lambda *a, **kw: shortlist, candidate_sorter=lambda candidates: list(candidates),
+        estimate_transaction_fn=AsyncMock(return_value=(210000, 252000, None)))
+    plan = await planner.plan(source_type="strategy", source_address=None, auction_address=None,
+        token_address=None, limit=1, sender="0x" + "bb" * 20, run_id="held-fallback", batch=False)
+    assert [op.candidate.token_address for op in plan.kick_operations] == [low.token_address]
+    assert deps.prepare_kick.await_count == 2
+    settlement.assert_awaited_once()

@@ -9,10 +9,10 @@ from tidal.alerts.dispatcher import AlertDispatcher
 from tidal.alerts.service import AlertService
 from tidal.alerts.telegram import TelegramAlertSink
 from tidal.async_resources import close_client
-from tidal.automation_scope import current_automation_pairs
 from tidal.auctionscan import AuctionScanService
-from tidal.chain.contracts.fee_burner import FeeBurnerReader
+from tidal.automation_scope import current_automation_pairs
 from tidal.chain.contracts.erc20 import ERC20Reader
+from tidal.chain.contracts.fee_burner import FeeBurnerReader
 from tidal.chain.contracts.multicall import MulticallClient
 from tidal.chain.contracts.yearn import (
     StrategyGaugeStatusReader,
@@ -22,11 +22,12 @@ from tidal.chain.contracts.yearn import (
 )
 from tidal.chain.web3_client import Web3Client
 from tidal.config import Settings
-from tidal.execution import ManagedExecutor
 from tidal.constants import (
     YEARN_AUCTION_REQUIRED_GOVERNANCE_ADDRESS,
     YEARN_CURVE_FACTORY_ADDRESS,
 )
+from tidal.execution import ManagedExecutor
+from tidal.operation_reconciler import OperationReconciler
 from tidal.persistence.repositories import (
     AuctionEnabledTokenRepository,
     AuctionEnabledTokenScanRepository,
@@ -34,8 +35,8 @@ from tidal.persistence.repositories import (
     FeeBurnerRepository,
     FeeBurnerTokenBalanceRepository,
     FeeBurnerTokenRepository,
-    KickTxRepository,
     KickGuardStatusRepository,
+    KickTxRepository,
     ScanItemErrorRepository,
     ScanRunRepository,
     StrategyRepository,
@@ -43,20 +44,19 @@ from tidal.persistence.repositories import (
     TokenRepository,
     VaultRepository,
 )
-from tidal.operation_reconciler import OperationReconciler
-from tidal.pricing.token_price_agg import TokenPriceAggProvider
 from tidal.pricing.service import TokenPriceRefreshService
+from tidal.pricing.token_price_agg import TokenPriceAggProvider
+from tidal.scanner.auction_mapper import StrategyAuctionMapper
+from tidal.scanner.auction_settler import AuctionSettlementService
+from tidal.scanner.auction_state import AuctionStateReader
+from tidal.scanner.auction_token_enabler import AuctionTokenEnablementService
 from tidal.scanner.balance_reader import BalanceReader
 from tidal.scanner.discovery import StrategyDiscoveryService
-from tidal.scanner.auction_mapper import StrategyAuctionMapper
-from tidal.scanner.auction_state import AuctionStateReader
-from tidal.scanner.auction_settler import AuctionSettlementService
-from tidal.scanner.auction_token_enabler import AuctionTokenEnablementService
 from tidal.scanner.fee_burner import FeeBurnerTokenResolver
 from tidal.scanner.reward_token_resolver import RewardTokenResolver
 from tidal.scanner.service import ScannerService
 from tidal.scanner.token_metadata import TokenMetadataService
-from tidal.paths import default_txn_lock_path
+from tidal.transaction_service.feasibility import KickFeasibilityHolds
 from tidal.transaction_service.kick_execute import KickExecutor
 from tidal.transaction_service.kick_prepare import KickPreparer
 from tidal.transaction_service.kick_tx import KickTxBuilder
@@ -307,7 +307,6 @@ def build_txn_service(
     owned_clients: AsyncExitStack | None = None,
 ):
     from tidal.persistence.repositories import KickTxRepository, TxnRunRepository
-
     from tidal.pricing.token_price_agg import TokenPriceAggProvider as _TPA
 
     if web3_client is None:
@@ -361,6 +360,9 @@ def build_txn_service(
     )
     preparer = KickPreparer(
         web3_client=web3_client,
+        feasibility_holds=KickFeasibilityHolds(
+            session, chain_id=settings.chain_id, price_max_age_seconds=settings.txn_data_freshness_limit_seconds,
+        ),
         price_provider=price_provider,
         usd_threshold=settings.txn_usd_threshold,
         require_curve_quote=resolved_require_curve_quote,

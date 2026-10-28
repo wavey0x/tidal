@@ -11,16 +11,14 @@ import structlog
 
 from tidal.async_resources import gather_reads
 from tidal.auction_price_units import (
-    compute_minimum_price_scaled_1e18,
-    compute_minimum_quote_unscaled,
+    auction_feasibility,
     decode_starting_price_amount,
-    encode_starting_price_raw,
-    latent_terminal_full_lot_ask_raw,
 )
 from tidal.auction_versions import approved_auction_spec_for_version
 from tidal.chain.contracts.erc20 import ERC20Reader
 from tidal.normalizers import to_decimal_string
 from tidal.scanner.auction_state import AuctionStateReader
+from tidal.transaction_service.feasibility import KickFeasibilityHolds
 from tidal.transaction_service.kick_policy import PricingPolicy, TokenSizingPolicy
 from tidal.transaction_service.kick_shared import (
     _DEFAULT_STEP_DECAY_RATE_BPS,
@@ -107,6 +105,7 @@ class KickPreparer:
         erc20_reader_factory: Callable[[Any], ERC20Reader] | None = None,
         auction_state_reader_factory: Callable[..., AuctionStateReader] | None = None,
         logger_instance=None,
+        feasibility_holds: KickFeasibilityHolds | None = None,
     ) -> None:
         self.web3_client = web3_client
         self.price_provider = price_provider
@@ -123,6 +122,7 @@ class KickPreparer:
         self.erc20_reader_factory = erc20_reader_factory or ERC20Reader
         self.auction_state_reader_factory = auction_state_reader_factory or AuctionStateReader
         self.logger = logger_instance or logger
+        self.feasibility_holds = feasibility_holds
 
     def _resolve_erc20_reader(self) -> ERC20Reader:
         if self.erc20_reader is not None:
@@ -232,6 +232,7 @@ class KickPreparer:
         run_id: str,
         *,
         inspection: AuctionInspection | None = None,
+        refresh_quote: bool = False,
     ) -> PreparedKick | KickResult:
         del run_id
         if candidate.token_address == candidate.want_address:
@@ -378,6 +379,35 @@ class KickPreparer:
                 usd_value=str(selected_sell.selected_sell_usd_value),
             )
 
+        context = {
+            "chainId": self.feasibility_holds.chain_id if self.feasibility_holds else 0,
+            "want": candidate.want_address, "version": auction_spec.version,
+            "encoding": auction_spec.starting_price_encoding.value,
+            "sellDecimals": sell_decimals, "wantDecimals": want_decimals,
+            "startBufferBps": profile.start_price_buffer_bps,
+            "minBufferBps": profile.min_price_buffer_bps,
+            "decayBps": profile.step_decay_rate_bps,
+            "stepSeconds": inspection.step_duration_seconds,
+            "lengthSeconds": inspection.auction_length_seconds,
+            "outlierFloor": profile.outlier_floor_enabled,
+            "sizeCapUsd": str(selected_sell.max_usd_per_kick),
+            "requireCurve": self.require_curve_quote,
+        }
+        if self.feasibility_holds and not refresh_quote:
+            deferred = self.feasibility_holds.deferred(
+                candidate, context=context, sell_amount=sell_amount, live_balance=live_balance_raw,
+            )
+            if deferred is not None:
+                required = to_decimal_string(int(deferred["requiredQuoteRaw"]), want_decimals)
+                return KickResult(
+                    kick_tx_id=0, status=KickStatus.SKIP,
+                    error_message=(f"pricing feasibility hold; needs at least {required} "
+                                   f"{candidate.want_symbol or 'want-token'}; next full check "
+                                   f"{deferred['nextFullCheckAt']} or earlier if conditions improve"),
+                    reason_code=KickSkipReason.AUCTION_FEASIBILITY_HOLD, reason_data=deferred,
+                    sell_amount=str(sell_amount), live_balance_raw=live_balance_raw,
+                )
+
         try:
             quote_result = await self.price_provider.quote(
                 token_in=candidate.token_address,
@@ -469,90 +499,49 @@ class KickPreparer:
             )
 
         amount_out_normalized = Decimal(to_decimal_string(quote_result.amount_out_raw, want_decimals))
+        floor_quote_amount_raw = _select_floor_quote_amount_raw(quote_result=quote_result, profile=profile)
         try:
-            starting_price_raw = encode_starting_price_raw(
-                amount_out_raw=quote_result.amount_out_raw,
-                want_decimals=want_decimals,
-                buffer_bps=profile.start_price_buffer_bps,
-                encoding=auction_spec.starting_price_encoding,
-            )
-        except ValueError as exc:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message=f"starting price encoding failed: {exc}",
-                quote_response_json=quote_response_json,
-            )
-
-        buffer = Decimal(1) + Decimal(profile.start_price_buffer_bps) / Decimal(10_000)
-        exact_value = amount_out_normalized * buffer
-        decoded_start = decode_starting_price_amount(
-            starting_price_raw,
-            auction_spec.starting_price_encoding,
-        )
-        if exact_value > 0 and decoded_start > exact_value * 2:
-            self.logger.warning(
-                "txn_starting_price_precision_loss",
-                source=candidate.source_address,
-                token=candidate.token_address,
-                exact_want_value=str(exact_value),
-                ceiled_value=str(decoded_start),
-            )
-
-        floor_quote_amount_raw = _select_floor_quote_amount_raw(
-            quote_result=quote_result,
-            profile=profile,
-        )
-        minimum_price_scaled_1e18 = compute_minimum_price_scaled_1e18(
-            amount_out_raw=floor_quote_amount_raw,
-            want_decimals=want_decimals,
-            sell_amount_raw=sell_amount,
-            sell_decimals=sell_decimals,
-            buffer_bps=profile.min_price_buffer_bps,
-        )
-        minimum_quote_unscaled = compute_minimum_quote_unscaled(
-            minimum_price_scaled_1e18=minimum_price_scaled_1e18,
-            sell_amount_raw=sell_amount,
-            sell_decimals=sell_decimals,
-        )
-
-        sell_scaler = 10 ** (18 - sell_decimals)
-        want_scaler = 10 ** (18 - want_decimals)
-        minimum_full_lot_quote_raw = (
-            sell_amount * sell_scaler * minimum_price_scaled_1e18
-        ) // 10**18 // want_scaler
-        if minimum_full_lot_quote_raw >= floor_quote_amount_raw:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.SKIP,
-                error_message="minimum full-lot quote is not below the trusted floor quote",
-                quote_response_json=quote_response_json,
-            )
-
-        try:
-            terminal_ask_raw = latent_terminal_full_lot_ask_raw(
-                encoding=auction_spec.starting_price_encoding,
-                starting_price_raw=starting_price_raw,
-                sell_amount_raw=sell_amount,
-                sell_decimals=sell_decimals,
-                want_decimals=want_decimals,
+            assessment = auction_feasibility(
+                amount_out_raw=quote_result.amount_out_raw, floor_quote_raw=floor_quote_amount_raw,
+                encoding=auction_spec.starting_price_encoding, sell_amount_raw=sell_amount,
+                sell_decimals=sell_decimals, want_decimals=want_decimals,
+                start_buffer_bps=profile.start_price_buffer_bps, min_buffer_bps=profile.min_price_buffer_bps,
                 step_decay_rate_bps=profile.step_decay_rate_bps,
                 step_duration_seconds=inspection.step_duration_seconds,
                 auction_length_seconds=inspection.auction_length_seconds,
             )
         except ValueError as exc:
-            return KickResult(
-                kick_tx_id=0,
-                status=KickStatus.ERROR,
-                error_message=f"terminal ask calculation failed: {exc}",
-                quote_response_json=quote_response_json,
-            )
+            return KickResult(kick_tx_id=0, status=KickStatus.ERROR,
+                              error_message=f"terminal ask calculation failed: {exc}",
+                              quote_response_json=quote_response_json)
+        starting_price_raw = assessment.starting_price_raw
+        minimum_price_scaled_1e18 = assessment.minimum_price_raw
+        minimum_quote_unscaled = assessment.minimum_quote_raw
+        minimum_full_lot_quote_raw = assessment.minimum_full_lot_raw
+        terminal_ask_raw = assessment.terminal_ask_raw
+        if minimum_full_lot_quote_raw >= floor_quote_amount_raw:
+            return KickResult(kick_tx_id=0, status=KickStatus.SKIP,
+                              error_message="minimum full-lot quote is not below the trusted floor quote",
+                              quote_response_json=quote_response_json)
+
+        exact_value = amount_out_normalized * (1 + Decimal(profile.start_price_buffer_bps) / 10_000)
+        decoded_start = decode_starting_price_amount(starting_price_raw, auction_spec.starting_price_encoding)
+        if exact_value > 0 and decoded_start > exact_value * 2:
+            self.logger.warning("txn_starting_price_precision_loss", source=candidate.source_address,
+                                token=candidate.token_address, exact_want_value=str(exact_value),
+                                ceiled_value=str(decoded_start))
         # Reaching the quote only at expiry leaves no useful buyer margin.
         # Require the whole configured discount band to fit within the auction.
         if terminal_ask_raw > minimum_full_lot_quote_raw:
             floor_quote_display = to_decimal_string(floor_quote_amount_raw, want_decimals)
             minimum_display = to_decimal_string(minimum_full_lot_quote_raw, want_decimals)
             terminal_display = to_decimal_string(terminal_ask_raw, want_decimals)
+            hold_detail = None
+            if self.feasibility_holds:
+                hold_detail = self.feasibility_holds.blocked(
+                    candidate, context=context, assessment=assessment, high=quote_result.amount_out_raw,
+                    floor=floor_quote_amount_raw, sell_amount=sell_amount, live_balance=live_balance_raw,
+                )
             is_v104_rounding_pause = auction_spec.version == "1.0.4"
             return KickResult(
                 kick_tx_id=0,
@@ -568,22 +557,19 @@ class KickPreparer:
                 quote_response_json=quote_response_json,
                 reason_code=(
                     KickSkipReason.AUCTION_PRICE_GRANULARITY
-                    if is_v104_rounding_pause
+                    if is_v104_rounding_pause or hold_detail
                     else None
                 ),
-                reason_data=(
-                    {
-                        "sourceBalanceRaw": str(live_balance_raw),
-                        "sellAmountRaw": str(sell_amount),
-                        "floorQuoteAmountRaw": str(floor_quote_amount_raw),
-                        "minimumFullLotQuoteRaw": str(minimum_full_lot_quote_raw),
-                        "terminalAskRaw": str(terminal_ask_raw),
-                        "wantDecimals": want_decimals,
-                    }
-                    if is_v104_rounding_pause
-                    else None
-                ),
+                reason_data=(hold_detail or {
+                    "sourceBalanceRaw": str(live_balance_raw), "sellAmountRaw": str(sell_amount),
+                    "floorQuoteAmountRaw": str(floor_quote_amount_raw),
+                    "minimumFullLotQuoteRaw": str(minimum_full_lot_quote_raw),
+                    "terminalAskRaw": str(terminal_ask_raw), "wantDecimals": want_decimals,
+                }) if is_v104_rounding_pause or hold_detail else None,
             )
+
+        if self.feasibility_holds:
+            self.feasibility_holds.recovered(candidate)
 
         want_price_usd_str: str | None = None
         try:

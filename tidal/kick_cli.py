@@ -171,6 +171,7 @@ def kick_run(
     require_curve_quote: bool | None = typer.Option(None, "--require-curve/--no-require-curve"),
     allow_killed_gauge: bool = typer.Option(False, "--allow-killed-gauge"),
     allow_no_fill_retry: bool = typer.Option(False, "--allow-no-fill-retry"),
+    refresh_quote: bool = typer.Option(False, "--refresh-quote", help="Recheck a scoped feasibility hold with a fresh quote; safety checks still apply."),
 ) -> None:
     """Prepare and execute locally under the shared lock; retained attempts gate sends."""
     unattended = no_confirmation or headless
@@ -181,6 +182,8 @@ def kick_run(
     source = normalize_cli_address(source_address, param_hint="--source")
     if allow_no_fill_retry and (not auction or not token):
         raise typer.BadParameter("--allow-no-fill-retry requires both --auction and --token")
+    if refresh_quote and (not auction or not token or headless):
+        raise typer.BadParameter("--refresh-quote requires --auction and --token and cannot be used with --headless")
     if allow_no_fill_retry and headless:
         raise typer.BadParameter("--allow-no-fill-retry cannot be used with --headless")
     configure_logging(output_mode=OutputMode.JSON if json_output else OutputMode.TEXT)
@@ -225,6 +228,7 @@ def kick_run(
                             source_address=source, auction_address=auction, token_address=token,
                             limit=limit, allow_no_fill_retry=allow_no_fill_retry,
                             allow_killed_gauge=allow_killed_gauge,
+                            **({"refresh_quote": True} if refresh_quote else {}),
                         )
                     except LifecycleError as exc:
                         if runs:

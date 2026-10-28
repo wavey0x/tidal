@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
 
 from tidal.auction_versions import StartingPriceEncoding
@@ -126,6 +127,66 @@ def latent_terminal_full_lot_ask_raw(
     ray_multiplier = ray - step_decay_rate_bps * 10**23
     terminal_price = _rmul(initial_price, _rpow(ray_multiplier, final_step))
     return (sell_amount_raw * sell_scaler * terminal_price) // WAD_INT // want_scaler
+
+
+@dataclass(frozen=True)
+class AuctionFeasibility:
+    starting_price_raw: int
+    minimum_price_raw: int
+    minimum_quote_raw: int
+    minimum_full_lot_raw: int
+    terminal_ask_raw: int
+    required_quote_raw: int
+
+    @property
+    def viable(self) -> bool:
+        return self.terminal_ask_raw <= self.minimum_full_lot_raw
+
+    @property
+    def clearly_blocked(self) -> bool:
+        # A conservative operational cutoff, not a relaxation of the execution guard.
+        return self.terminal_ask_raw * 4 >= self.minimum_full_lot_raw * 5
+
+
+def auction_feasibility(
+    *, amount_out_raw: int, floor_quote_raw: int, encoding: StartingPriceEncoding,
+    sell_amount_raw: int, sell_decimals: int, want_decimals: int,
+    start_buffer_bps: int, min_buffer_bps: int, step_decay_rate_bps: int,
+    step_duration_seconds: int, auction_length_seconds: int,
+) -> AuctionFeasibility:
+    """Use the same integer arithmetic for the execution guard and cheap rechecks."""
+    if floor_quote_raw <= 0 or not 0 <= min_buffer_bps < 10_000:
+        raise ValueError("positive floor quote and minimum buffer below 10000 bps required")
+    starting = encode_starting_price_raw(
+        amount_out_raw=amount_out_raw, want_decimals=want_decimals,
+        buffer_bps=start_buffer_bps, encoding=encoding,
+    )
+    minimum = compute_minimum_price_scaled_1e18(
+        amount_out_raw=floor_quote_raw, want_decimals=want_decimals,
+        sell_amount_raw=sell_amount_raw, sell_decimals=sell_decimals, buffer_bps=min_buffer_bps,
+    )
+    minimum_quote = compute_minimum_quote_unscaled(
+        minimum_price_scaled_1e18=minimum, sell_amount_raw=sell_amount_raw,
+        sell_decimals=sell_decimals,
+    )
+    minimum_full_lot = (
+        sell_amount_raw * 10 ** (18 - sell_decimals) * minimum
+    ) // WAD_INT // 10 ** (18 - want_decimals)
+    terminal = latent_terminal_full_lot_ask_raw(
+        encoding=encoding, starting_price_raw=starting, sell_amount_raw=sell_amount_raw,
+        sell_decimals=sell_decimals, want_decimals=want_decimals,
+        step_decay_rate_bps=step_decay_rate_bps, step_duration_seconds=step_duration_seconds,
+        auction_length_seconds=auction_length_seconds,
+    )
+    # Exact threshold for this starting-price band, including minimum-price rounding.
+    sell_scaled = sell_amount_raw * 10 ** (18 - sell_decimals)
+    want_scale = 10 ** (18 - want_decimals)
+    needed_rate = _ceil_div(terminal * WAD_INT * want_scale, sell_scaled)
+    required_quote = _ceil_div(
+        needed_rate * sell_amount_raw * 10**want_decimals * 10_000,
+        (10_000 - min_buffer_bps) * WAD_INT * 10**sell_decimals,
+    )
+    return AuctionFeasibility(starting, minimum, minimum_quote, minimum_full_lot, terminal, required_quote)
 
 
 def compute_floor_rate(

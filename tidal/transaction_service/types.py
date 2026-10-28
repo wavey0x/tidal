@@ -40,6 +40,7 @@ class KickStatus(str, Enum):
 
 class KickSkipReason(str, Enum):
     AUCTION_PRICE_GRANULARITY = "AUCTION_PRICE_GRANULARITY"
+    AUCTION_FEASIBILITY_HOLD = "AUCTION_FEASIBILITY_HOLD"
 
 
 @dataclass(slots=True)

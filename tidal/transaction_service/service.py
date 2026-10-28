@@ -192,6 +192,7 @@ class TxnService:
         token_address: str | None = None,
         allow_no_fill_retry: bool = False,
         allow_killed_gauge: bool = False,
+        refresh_quote: bool = False,
     ) -> TxnRunResult:
         run_id = str(uuid.uuid4())
         started_at = utcnow_iso()
@@ -219,7 +220,7 @@ class TxnService:
                     source_type=source_type, source_address=source_address,
                     auction_address=auction_address, limit=limit,
                     token_address=token_address, allow_no_fill_retry=allow_no_fill_retry,
-                    allow_killed_gauge=allow_killed_gauge,
+                    allow_killed_gauge=allow_killed_gauge, refresh_quote=refresh_quote,
                 )
         except LifecycleError as exc:
             if exc.code not in {"BUSY", "UNRESOLVED_ATTEMPTS"}:
@@ -245,6 +246,7 @@ class TxnService:
         token_address: str | None = None,
         allow_no_fill_retry: bool = False,
         allow_killed_gauge: bool = False,
+        refresh_quote: bool = False,
     ) -> TxnRunResult:
         # 1. INSERT txn_runs with status=RUNNING.
         self.txn_run_repository.create({
@@ -271,6 +273,7 @@ class TxnService:
             estimate_transactions=live,
             allow_no_fill_retry=allow_no_fill_retry,
             allow_killed_gauge=allow_killed_gauge,
+            **({"refresh_quote": True} if refresh_quote else {}),
         )
 
         logger.info(

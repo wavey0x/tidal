@@ -33,6 +33,10 @@ it does not bypass the one-unresolved-attempt-per-signer rule.
 See [operator policy](operator-guide.md), [kick selection](kick-selection.md)
 and [recovery](recovery.md). There are no API URL/key flags or remote outbox.
 
+`--refresh-quote` requests a fresh check of a [confirmed feasibility hold](pricing.md#confirmed-feasibility-holds).
+It requires both `--auction` and `--token`, rejects `--headless`, and bypasses only
+the waiting period. Use `--dry-run` to preview without signing or sending.
+
 Clear the current cooldown for selected auction/token pairs so the scheduled
 runner can process them normally:
 

@@ -29,6 +29,7 @@ from tidal.transaction_service.types import (
     KickPlan,
     KickResult,
     KickStatus,
+    KickSkipReason,
     PreparedKick,
     PreparedResolveAuction,
     SkippedPreparedCandidate,
@@ -178,6 +179,7 @@ class KickPlanner:
         estimate_transactions: bool = True,
         allow_killed_gauge: bool = False,
         allow_no_fill_retry: bool = False,
+        refresh_quote: bool = False,
     ) -> KickPlan:
         kick_config = self.settings.kick_config
         no_fill_guard = NoFillGuard(
@@ -229,6 +231,12 @@ class KickPlanner:
                 plan.ready_count = len(plan.resolve_operations) + len(plan.kick_operations)
                 return plan
 
+        selected_keys = {(c.source_address, c.auction_address, c.token_address) for c in candidates_to_prepare}
+        selected_auctions = {c.auction_address for c in candidates_to_prepare}
+        alternatives = [c for c in getattr(shortlist, "deferred_same_auction_candidates", ())
+                        if c.auction_address in selected_auctions]
+        if alternatives:
+            candidates_to_prepare += self._filter_kick_guard_disabled_candidates(alternatives, plan=plan) if not allow_killed_gauge else alternatives
         kick_inspections = await self.preparer.inspect_candidates(candidates_to_prepare)
         version_safe_candidates: list[KickCandidate] = []
         for candidate in candidates_to_prepare:
@@ -383,7 +391,13 @@ class KickPlanner:
 
         prepared_kicks: list[PreparedKick] = []
 
+        finished_auctions: set[str] = set()
         for candidate in clean_candidates:
+            key = (candidate.source_address, candidate.auction_address, candidate.token_address)
+            if candidate.auction_address in finished_auctions and key not in selected_keys:
+                continue
+            if key not in selected_keys:
+                plan.ranked_candidates.append(candidate)
             final_guard = no_fill_guard.decide(
                 auction_address=candidate.auction_address,
                 token_address=candidate.token_address,
@@ -402,13 +416,19 @@ class KickPlanner:
                 candidate,
                 run_id=run_id,
                 inspection=kick_inspections.get(_candidate_key(candidate)),
+                **({"refresh_quote": True} if refresh_quote else {}),
             )
             if isinstance(result, KickResult):
+                held = (result.reason_code == KickSkipReason.AUCTION_FEASIBILITY_HOLD
+                        or bool(result.reason_data and result.reason_data.get("nextFullCheckAt")))
+                if not held:
+                    finished_auctions.add(candidate.auction_address)
                 reason = result.error_message or "candidate was skipped during prepare"
                 plan.skipped_during_prepare.append(
                     SkippedPreparedCandidate(candidate=candidate, reason=reason, result=result)
                 )
                 continue
+            finished_auctions.add(candidate.auction_address)
             prepared_kicks.append(result)
 
         if not prepared_kicks:

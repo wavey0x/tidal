@@ -369,3 +369,20 @@ def test_next_pass_uses_retained_submission_order_even_after_restart(native):
     response = invoke(native, "--headless", "--json")
     assert response.exit_code == 0, response.output
     assert [options["source_type"] for _, _, options in native.captured] == ["strategy", "fee_burner"]
+
+
+@pytest.mark.parametrize("args", [[], ["--auction", "0x" + "2" * 40],
+    ["--auction", "0x" + "2" * 40, "--token", "0x" + "3" * 40, "--headless"]])
+def test_refresh_quote_requires_scoped_interactive_run(native, args):
+    response = invoke(native, "--refresh-quote", "--dry-run", *args)
+    assert response.exit_code != 0
+    assert native.captured == []
+
+
+def test_refresh_quote_passes_only_waiting_override(native):
+    response = invoke(native, "--refresh-quote", "--dry-run", "--source-type", "strategy",
+        "--auction", "0x" + "2" * 40, "--token", "0x" + "3" * 40, "--json")
+    assert response.exit_code == 0, response.output
+    assert native.captured[0][2]["refresh_quote"] is True
+    assert native.captured[0][2]["live"] is False
+    assert native.unlocks == []

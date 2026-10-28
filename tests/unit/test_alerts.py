@@ -527,3 +527,45 @@ def test_alerts_endpoint_is_public_and_read_only(tmp_path) -> None:
         response = client.get("/api/v1/tidal/alerts")
     assert response.status_code == 200
     assert response.json()["data"]["needsActionCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_feasibility_hold_alerts_only_on_entry_and_recovery(session, monkeypatch):
+    import json
+    from unittest.mock import AsyncMock
+    from tidal.transaction_service.feasibility import KickFeasibilityHolds
+    from tidal.transaction_service.types import KickCandidate
+    from tidal.auction_versions import StartingPriceEncoding
+    candidate = KickCandidate(source_type="strategy", source_address=SOURCE, token_address=TOKEN,
+        auction_address=AUCTION, want_address=WANT, normalized_balance="100", price_usd="1",
+        usd_value=100, decimals=0, auction_version="1.0.4")
+    context = dict(chainId=1, want=WANT, version="1.0.4", encoding=StartingPriceEncoding.WHOLE_WANT.value,
+        sellDecimals=0, wantDecimals=18, startBufferBps=1000, minBufferBps=500,
+        decayBps=15, stepSeconds=60, lengthSeconds=86400)
+    monkeypatch.setattr("tidal.alerts.service.current_automation_pairs",
+        lambda *args: frozenset({("strategy", SOURCE, AUCTION, TOKEN)}))
+    controller = KickFeasibilityHolds(session, chain_id=1, price_max_age_seconds=1200)
+    def blocked(now):
+        controller.blocked(candidate, context=context,
+            assessment=controller.assess(context, sell_amount=100, high=8 * 10**16, floor=8 * 10**16),
+            high=8 * 10**16, floor=8 * 10**16, sell_amount=100, live_balance=100, now=now)
+    blocked(NOW)
+    sink = SimpleNamespace(destination_codes=("operations_alerts",), send=AsyncMock())
+    dispatcher = AlertDispatcher(session=session, sink=sink)
+    service = AlertService(session=session, settings=_settings())
+    items, transitions = service._feasibility_items(NOW)
+    assert len(items) == 1 and items[0].retry_at
+    assert "--refresh-quote" in items[0].next_action["command"]
+    await dispatcher.dispatch(tuple(transitions))
+    # Daily unsuccessful full checks retain one hold occurrence.
+    blocked(NOW + timedelta(days=1))
+    await dispatcher.dispatch(tuple(service._feasibility_items(NOW + timedelta(days=1))[1]))
+    assert sink.send.await_count == 1
+    controller.recovered(candidate, now=NOW + timedelta(days=1, minutes=1))
+    items, transitions = service._feasibility_items(NOW + timedelta(days=1, minutes=1))
+    assert items == []
+    await dispatcher.dispatch(tuple(transitions))
+    await dispatcher.dispatch(tuple(transitions))
+    assert sink.send.await_count == 2
+    session.execute(models.kick_prepare_status_latest.update().values(detail_json=json.dumps([])))
+    assert service._feasibility_items(NOW) == ([], [])

@@ -6,7 +6,13 @@ END = '# END TIDAL NATIVE CAPTURE'
 
 def integrate(source):
     if BEGIN in source:
-        if source.count(BEGIN) != 1 or source.count(END) != 1 or '"${tidal_excludes[@]}"' not in source:
+        # The host mirror also excludes other applications now; retain its
+        # broader array instead of requiring the original Tidal-only name.
+        has_exclusions = any(
+            f'{name}=(' in source and f'"${{{name}[@]}}"' in source
+            for name in ('tidal_excludes', 'mirror_excludes')
+        )
+        if source.count(BEGIN) != 1 or source.count(END) != 1 or not has_exclusions:
             raise ValueError('Existing Tidal backup integration is incomplete; inspect before editing')
         return source
     anchor = 'overall_status=0\n'

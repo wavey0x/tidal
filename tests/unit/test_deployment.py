@@ -441,3 +441,23 @@ def test_api_unit_removes_signing_environment_without_changing_worker_credential
     assert 'UnsetEnvironment=TXN_KEYSTORE_PATH TXN_KEYSTORE_PASSPHRASE' in units['tidal-api.service']
     assert 'UnsetEnvironment' not in units['tidal.service']
     assert 'UnsetEnvironment' not in units['tidal-kick.service']
+
+
+def test_saved_service_identity_selects_dedicated_account_without_moving_operator_paths(tmp_path, monkeypatch):
+    user = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir='/nonexistent', pw_name='svc-tidal')
+    monkeypatch.setattr(deploy.pwd, 'getpwnam', lambda _: user)
+    app = deploy.Deployment(user='svc-tidal', home=tmp_path / 'wavey/.tidal')
+    assert app.operator_home == tmp_path / 'wavey'
+    assert app.releases == tmp_path / 'wavey/tidal-releases'
+
+    capture = tmp_path / 'capture.tar'
+    unit = deploy.unit_files('/release', '/config', '/state', 'svc-tidal')['tidal-api.service'].encode()
+    with deploy.tarfile.open(capture, 'w') as bundle:
+        member = deploy.tarfile.TarInfo('tidal-api.service')
+        member.size = len(unit)
+        bundle.addfile(member, io.BytesIO(unit))
+    assert deploy.captured_service_user(capture, deploy.digest(capture)) == 'svc-tidal'
+    with pytest.raises(ValueError, match='checksum'):
+        deploy.captured_service_user(capture, '0' * 64)
+    with pytest.raises(ValueError, match='unknown service account'):
+        deploy.service_user_from_unit('User=svc-tidal\nGroup=wavey\n')

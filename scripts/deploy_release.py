@@ -82,13 +82,36 @@ def unit_files(release, config, state, user):
             'SuccessExitStatus=75\nTimeoutStartSec=45min\n',
         'tidal-kick.service': '[Unit]\nDescription=Tidal kick automation cycle\nAfter=network-online.target\n' + workers +
             '\n[Service]\nType=oneshot\n' + common +
-            ''.join(f'ExecStart={cli} kick run --config {config}/server.yml --headless --source-type {source}\n'
-                    for source in ('strategy', 'fee-burner')) + 'SuccessExitStatus=75\nTimeoutStartSec=12min\n',
+            f'ExecStart={cli} kick run --config {config}/server.yml --headless\n'
+            'SuccessExitStatus=75\nTimeoutStartSec=12min\n',
         'tidal.timer': '[Unit]\nDescription=Tidal scanner every fifteen minutes\n' + workers +
             '\n[Timer]\nOnCalendar=*-*-* *:0/15:00 UTC\nPersistent=true\nUnit=tidal.service\n\n[Install]\nWantedBy=timers.target\n',
-        'tidal-kick.timer': '[Unit]\nDescription=Tidal hourly kick cycle\n' + workers +
-            '\n[Timer]\nOnBootSec=2min\nOnCalendar=hourly\nAccuracySec=30s\nPersistent=true\nUnit=tidal-kick.service\n\n[Install]\nWantedBy=timers.target\n',
+        'tidal-kick.timer': '[Unit]\nDescription=Tidal kick checks every minute\n' + workers +
+            '\n[Timer]\nOnBootSec=2min\nOnUnitInactiveSec=1min\nAccuracySec=1s\nUnit=tidal-kick.service\n\n[Install]\nWantedBy=timers.target\n',
     }
+
+
+def service_user_from_unit(unit):
+    users = re.findall(r'^User=([^\n]+)$', unit, re.M)
+    groups = re.findall(r'^Group=([^\n]+)$', unit, re.M)
+    if len(users) != 1 or len(groups) != 1 or users[0] != groups[0] or users[0] not in ('wavey', 'svc-tidal'):
+        raise ValueError('Tidal unit has an unknown service account')
+    return users[0]
+
+
+def installed_service_user():
+    unit = Path('/etc/systemd/system/tidal-api.service')
+    return service_user_from_unit(unit.read_text()) if unit.is_file() else 'wavey'
+
+
+def captured_service_user(capture, checksum):
+    if not re.fullmatch('[a-f0-9]{64}', checksum) or digest(capture) != checksum:
+        raise ValueError('Select the exact independently retrieved capture checksum')
+    with tarfile.open(capture) as bundle:
+        member = bundle.getmember('tidal-api.service')
+        if not member.isfile() or member.size > 8192:
+            raise ValueError('Capture has an invalid Tidal API unit')
+        return service_user_from_unit(bundle.extractfile(member).read().decode())
 
 
 class Deployment:
@@ -97,8 +120,9 @@ class Deployment:
                  lock='/var/lib/electro-backup/locks/application-tidal', releases=None):
         self.user = pwd.getpwnam(user)
         self.home = Path(home or (Path(self.user.pw_dir) / '.tidal'))
+        self.operator_home = Path(self.user.pw_dir) if user == 'wavey' else self.home.parent
         self.state, self.config, self.units, self.lock = map(Path, (state, config, units, lock))
-        self.releases = Path(releases or (Path(self.user.pw_dir) / 'tidal-releases'))
+        self.releases = Path(releases or (self.operator_home / 'tidal-releases'))
         self.database = self.home / 'server/tidal.db'
 
     @contextmanager
@@ -281,9 +305,9 @@ class Deployment:
         # Preserve the original split setup as data. These directories are small
         # enough to retain whole, including encrypted keys and the old runtimes.
         with tarfile.open(protected / 'legacy-configuration.tar.gz', 'w:gz') as archive:
-            for path in (self.home, Path(repository), Path(self.user.pw_dir) / '.local/share/uv/tools/tidal',
-                         Path(self.user.pw_dir) / 'server-backup/backup.sh',
-                         Path(self.user.pw_dir) / '.local/bin/tidal', Path(self.user.pw_dir) / '.local/bin/tidal-server',
+            for path in (self.home, Path(repository), self.operator_home / '.local/share/uv/tools/tidal',
+                         self.operator_home / 'server-backup/backup.sh',
+                         self.operator_home / '.local/bin/tidal', self.operator_home / '.local/bin/tidal-server',
                          *extra_sources):
                 if path.exists():
                     archive.add(path, arcname=str(path).lstrip('/'))
@@ -555,14 +579,14 @@ class Deployment:
         launcher = f'#!/bin/bash\nset -euo pipefail\nexport TIDAL_HOME={self.home}\nexport TIDAL_CONFIG={self.config}/server.yml\nexport TIDAL_ENV_FILE={self.config}/server.env\nexec {release}/.venv/bin/python -I -m tidal.cli "$@"\n'
         for relative in ('.local/bin/tidal', '.local/bin/tidal-server', 'tidal/venv/bin/tidal', 'tidal/venv/bin/tidal-server',
                          '.local/share/uv/tools/tidal/bin/tidal', '.local/share/uv/tools/tidal/bin/tidal-server'):
-            atomic(Path(self.user.pw_dir) / relative, launcher, mode=0o755)
+            atomic(self.operator_home / relative, launcher, mode=0o755)
         # Retain the existing application-owned pathname as a strict dispatcher.
         dispatcher = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {installer} "$@"\n'
-        atomic(Path(self.user.pw_dir) / 'tidal/deploy-tidal.sh', dispatcher, mode=0o755)
+        atomic(self.operator_home / 'tidal/deploy-tidal.sh', dispatcher, mode=0o755)
         capture = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {installer} capture\n'
         atomic('/usr/local/sbin/tidal-backup', capture, mode=0o755)
         from install_daily_capture import integrate
-        daily = Path(self.user.pw_dir) / 'server-backup/backup.sh'
+        daily = self.operator_home / 'server-backup/backup.sh'
         if not daily.exists():
             return  # A replacement host need not have the retired mirror job.
         original = daily.read_text()
@@ -712,7 +736,9 @@ def main():
     if os.geteuid() != 0:
         parser.error('Run the application deployment entry point as root')
     os.umask(0o077)
-    deployment = Deployment()
+    user = (captured_service_user(args.capture, args.sha256)
+            if args.operation == 'restore' else installed_service_user())
+    deployment = Deployment(user=user, home='/home/wavey/.tidal' if user == 'svc-tidal' else None)
     with deployment.locked():
         if args.operation == 'install':
             result = deployment.install(args.archive, args.sha256, args.configuration, args.legacy_repository)

@@ -461,3 +461,15 @@ def test_saved_service_identity_selects_dedicated_account_without_moving_operato
         deploy.captured_service_user(capture, '0' * 64)
     with pytest.raises(ValueError, match='unknown service account'):
         deploy.service_user_from_unit('User=svc-tidal\nGroup=wavey\n')
+
+
+def test_root_installer_keeps_service_configuration_read_only(host, monkeypatch):
+    writes = []
+    monkeypatch.setattr(deploy.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(deploy, 'atomic', lambda path, content, **kwargs: writes.append((path, kwargs)))
+    host.app.write_private_config('server.env', b'fixture')
+    path, options = writes[0]
+    assert path == host.app.config / 'server.env'
+    assert options['mode'] == 0o640
+    assert options['owner'].pw_uid == 0
+    assert options['owner'].pw_gid == host.app.user.pw_gid

@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import uuid
 
 
@@ -124,6 +125,13 @@ class Deployment:
         self.state, self.config, self.units, self.lock = map(Path, (state, config, units, lock))
         self.releases = Path(releases or (self.operator_home / 'tidal-releases'))
         self.database = self.home / 'server/tidal.db'
+
+    def write_private_config(self, name, content):
+        # Only the root-owned installer edits service-readable configuration.
+        owner = (SimpleNamespace(pw_uid=0, pw_gid=self.user.pw_gid)
+                 if os.geteuid() == 0 else self.user)
+        atomic(self.config / name, content, mode=0o640 if os.geteuid() == 0 else 0o600,
+               owner=owner)
 
     @contextmanager
     def locked(self):
@@ -395,7 +403,7 @@ class Deployment:
         self.config.chmod(0o750)
         os.chown(self.config, 0, self.user.pw_gid)
         for name in PRIVATE_FILES:
-            atomic(self.config / name, (candidate / name).read_bytes(), owner=self.user)
+            self.write_private_config(name, (candidate / name).read_bytes())
         if json.loads((protected / 'manifest.json').read_text())['legacy']:
             with tempfile.TemporaryDirectory(prefix='tidal-import-') as temporary:
                 original = Path(temporary)
@@ -548,7 +556,7 @@ class Deployment:
                 self.config.mkdir(mode=0o750, parents=True, exist_ok=True)
                 os.chown(self.config, 0, self.user.pw_gid)
                 for name in PRIVATE_FILES:
-                    atomic(self.config / name, (candidate / name).read_bytes(), owner=self.user)
+                    self.write_private_config(name, (candidate / name).read_bytes())
                 journal['phase'] = 'installed'
                 write_json(receipt, journal)
             if journal['phase'] == 'installed':

@@ -338,6 +338,7 @@ def test_replacement_host_does_not_need_the_retired_daily_mirror(host, monkeypat
     monkeypatch.setitem(sys.modules, 'install_daily_capture', daily)
     deploy.Deployment.install_entry_points(host.app, host.release, '/fixture/archive')
     assert '/usr/local/sbin/tidal-backup' in written
+    assert f'cd {host.release}\n' in written[str(host.app.operator_home / '.local/bin/tidal')]
     assert not any(path.endswith('/server-backup/backup.sh') for path in written)
 
 
@@ -461,6 +462,21 @@ def test_saved_service_identity_selects_dedicated_account_without_moving_operato
         deploy.captured_service_user(capture, '0' * 64)
     with pytest.raises(ValueError, match='unknown service account'):
         deploy.service_user_from_unit('User=svc-tidal\nGroup=wavey\n')
+
+
+def test_opt_installation_keeps_tidal_state_private_and_installed_code_read_only(monkeypatch):
+    user = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir='/nonexistent', pw_name='svc-tidal')
+    monkeypatch.setattr(deploy.pwd, 'getpwnam', lambda _: user)
+    app = deploy.Deployment(user='svc-tidal')
+    assert app.home == Path('/var/lib/tidal')
+    assert app.releases == Path('/opt/tidal-releases')
+    units = deploy.unit_files('/opt/tidal-releases/revision', '/etc/electro/apps/tidal',
+                              '/var/lib/electro/apps/tidal', 'svc-tidal')
+    for name in deploy.SERVICES:
+        assert 'ProtectSystem=strict' in units[name]
+        assert 'ProtectHome=yes' in units[name]
+        assert 'ReadWritePaths=/var/lib/tidal' in units[name]
+    assert '/home/wavey/' not in ''.join(units.values())
 
 
 def test_root_installer_keeps_service_configuration_read_only(host, monkeypatch):

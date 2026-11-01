@@ -71,6 +71,8 @@ def unit_files(release, config, state, user):
     common = (f'User={user}\nGroup={user}\nWorkingDirectory={release}\n'
         f'EnvironmentFile={config}/server.env\nEnvironment=PYTHONDONTWRITEBYTECODE=1\n'
         'Environment=PYTHONUNBUFFERED=1\nUMask=0077\nTimeoutStopSec=120\n')
+    if user == 'svc-tidal' and str(release).startswith('/opt/tidal-releases/'):
+        common += 'ProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nReadWritePaths=/var/lib/tidal\n'
     cli = f'{release}/.venv/bin/python -I -m tidal.cli'
     held = f'ConditionPathExists=!{state}/held\n'
     workers = held + f'ConditionPathExists=!{state}/workers-held\n'
@@ -120,10 +122,10 @@ class Deployment:
                  config='/etc/electro/apps/tidal', units='/etc/systemd/system',
                  lock='/var/lib/electro-backup/locks/application-tidal', releases=None):
         self.user = pwd.getpwnam(user)
-        self.home = Path(home or (Path(self.user.pw_dir) / '.tidal'))
+        self.home = Path(home or ('/var/lib/tidal' if user == 'svc-tidal' else Path(self.user.pw_dir) / '.tidal'))
         self.operator_home = Path(self.user.pw_dir) if user == 'wavey' else self.home.parent
         self.state, self.config, self.units, self.lock = map(Path, (state, config, units, lock))
-        self.releases = Path(releases or (self.operator_home / 'tidal-releases'))
+        self.releases = Path(releases or ('/opt/tidal-releases' if user == 'svc-tidal' and home is None else self.operator_home / 'tidal-releases'))
         self.database = self.home / 'server/tidal.db'
 
     def write_private_config(self, name, content):
@@ -584,17 +586,24 @@ class Deployment:
             atomic(installer.with_name(name), Path(__file__).with_name(name).read_bytes(), mode=0o644)
         # Old console script locations now use the selected native runtime.
         # Preserve their previous bytes/links in the original-state archive.
-        launcher = f'#!/bin/bash\nset -euo pipefail\nexport TIDAL_HOME={self.home}\nexport TIDAL_CONFIG={self.config}/server.yml\nexport TIDAL_ENV_FILE={self.config}/server.env\nexec {release}/.venv/bin/python -I -m tidal.cli "$@"\n'
-        for relative in ('.local/bin/tidal', '.local/bin/tidal-server', 'tidal/venv/bin/tidal', 'tidal/venv/bin/tidal-server',
-                         '.local/share/uv/tools/tidal/bin/tidal', '.local/share/uv/tools/tidal/bin/tidal-server'):
-            atomic(self.operator_home / relative, launcher, mode=0o755)
+        launcher = f'#!/bin/bash\nset -euo pipefail\nexport TIDAL_HOME={self.home}\nexport TIDAL_CONFIG={self.config}/server.yml\nexport TIDAL_ENV_FILE={self.config}/server.env\ncd {release}\nexec {release}/.venv/bin/python -I -m tidal.cli "$@"\n'
+        if self.home == Path('/var/lib/tidal'):
+            for name in ('tidal', 'tidal-server'):
+                atomic(Path('/usr/local/bin') / name, launcher, mode=0o755)
+        else:
+            for relative in ('.local/bin/tidal', '.local/bin/tidal-server', 'tidal/venv/bin/tidal', 'tidal/venv/bin/tidal-server',
+                             '.local/share/uv/tools/tidal/bin/tidal', '.local/share/uv/tools/tidal/bin/tidal-server'):
+                atomic(self.operator_home / relative, launcher, mode=0o755)
         # Retain the existing application-owned pathname as a strict dispatcher.
         dispatcher = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {installer} "$@"\n'
-        atomic(self.operator_home / 'tidal/deploy-tidal.sh', dispatcher, mode=0o755)
+        atomic(Path('/usr/local/sbin/tidal-deploy') if self.home == Path('/var/lib/tidal')
+               else self.operator_home / 'tidal/deploy-tidal.sh', dispatcher, mode=0o755)
         capture = f'#!/bin/bash\nset -euo pipefail\nexec /usr/bin/python3 {installer} capture\n'
         atomic('/usr/local/sbin/tidal-backup', capture, mode=0o755)
         from install_daily_capture import integrate
         daily = self.operator_home / 'server-backup/backup.sh'
+        if self.home == Path('/var/lib/tidal'):
+            return
         if not daily.exists():
             return  # A replacement host need not have the retired mirror job.
         original = daily.read_text()
@@ -746,7 +755,16 @@ def main():
     os.umask(0o077)
     user = (captured_service_user(args.capture, args.sha256)
             if args.operation == 'restore' else installed_service_user())
-    deployment = Deployment(user=user, home='/home/wavey/.tidal' if user == 'svc-tidal' else None)
+    old_capture = False
+    if args.operation == 'restore':
+        with tarfile.open(args.capture) as bundle:
+            unit = bundle.extractfile('tidal-api.service').read(8193).decode()
+        old_capture = 'WorkingDirectory=/home/wavey/tidal-releases/' in unit
+        if not old_capture and 'WorkingDirectory=/opt/tidal-releases/' not in unit:
+            raise ValueError('Tidal capture has an unknown installed release path')
+    deployment = Deployment(user=user,
+        home='/home/wavey/.tidal' if old_capture and user == 'svc-tidal' else None,
+        releases='/home/wavey/tidal-releases' if old_capture else None)
     with deployment.locked():
         if args.operation == 'install':
             result = deployment.install(args.archive, args.sha256, args.configuration, args.legacy_repository)

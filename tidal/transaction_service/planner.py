@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
 
 from eth_utils import to_checksum_address
 
@@ -165,6 +166,37 @@ class KickPlanner:
         self.candidate_sorter = candidate_sorter or sort_candidates
         self.estimate_transaction_fn = estimate_transaction_fn
 
+    def _filter_quote_cooldown(self, candidates: list[KickCandidate], plan: KickPlan) -> list[KickCandidate]:
+        minutes = self.settings.quote_failure_cooldown_minutes
+        if minutes == 0:
+            return candidates
+        ready = []
+        now = datetime.now(timezone.utc)
+        for candidate in candidates:
+            failure = self.kick_tx_repository.last_unsent_quote_failure(
+                candidate.auction_address, candidate.token_address,
+            )
+            retry_at = None
+            if failure is not None:
+                try:
+                    failed_at = datetime.fromisoformat(str(failure["created_at"]))
+                    if failed_at.tzinfo is not None:
+                        retry_at = failed_at + timedelta(minutes=minutes)
+                except (ValueError, KeyError):
+                    pass
+            if retry_at is None or retry_at <= now:
+                ready.append(candidate)
+                continue
+            # No new error row: skipping must not extend the original cooldown.
+            plan.cooldown_skips.append({
+                "sourceAddress": candidate.source_address,
+                "auctionAddress": candidate.auction_address,
+                "tokenAddress": candidate.token_address,
+                "tokenSymbol": candidate.token_symbol,
+                "detail": f"Quote preparation cooldown until {retry_at.isoformat()}",
+            })
+        return ready
+
     async def plan(
         self,
         *,
@@ -237,6 +269,12 @@ class KickPlanner:
                         if c.auction_address in selected_auctions]
         if alternatives:
             candidates_to_prepare += self._filter_kick_guard_disabled_candidates(alternatives, plan=plan) if not allow_killed_gauge else alternatives
+        if not refresh_quote:
+            candidates_to_prepare = self._filter_quote_cooldown(candidates_to_prepare, plan)
+        if not candidates_to_prepare:
+            plan.ready_count = 0
+            return plan
+
         kick_inspections = await self.preparer.inspect_candidates(candidates_to_prepare)
         version_safe_candidates: list[KickCandidate] = []
         for candidate in candidates_to_prepare:

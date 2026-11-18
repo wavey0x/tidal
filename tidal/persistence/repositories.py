@@ -994,6 +994,19 @@ class KickTxRepository:
         )
         return candidates[0]
 
+    def last_unsent_quote_failure(self, auction_address: str, token_address: str) -> dict[str, object] | None:
+        # Inspect the latest operation, so a later success clears an older failure.
+        row = self.session.execute(select(models.kick_txs).where(
+            models.kick_txs.c.operation_type == "kick",
+            models.kick_txs.c.auction_address == auction_address,
+            models.kick_txs.c.token_address == token_address,
+        ).order_by(models.kick_txs.c.id.desc()).limit(1)).mappings().first()
+        if row is None or row["status"] != "ERROR" or row["tx_hash"] or row["transaction_id"]:
+            return None
+        if row["quote_response_json"] or str(row["error_message"] or "").startswith("quote API failed:"):
+            return dict(row)
+        return None
+
     def last_kick_for_auction_token(
         self, auction_address: str, token_address: str
     ) -> dict[str, object] | None:

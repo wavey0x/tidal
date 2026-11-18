@@ -154,6 +154,7 @@ async def test_quote_usd_requests_v1_price_with_token_and_chain_id() -> None:
         "token": "0x4e3fbd56cd56c3e72c1403e103b45db9da5b9d2b",
         "chain_id": 1,
         "use_underlying": "true",
+        "providers": "defillama,curve,lifi",
     }
     assert captured["authorization"] is None
 
@@ -363,6 +364,7 @@ async def test_quote_parses_per_provider_amounts() -> None:
         "chain_id": 1,
         "use_underlying": "true",
         "timeout_ms": 7000,
+        "providers": "curve,lifi",
     }
 
 
@@ -385,7 +387,7 @@ async def test_quote_retries_on_all_provider_failure_then_succeeds() -> None:
                 "summary": {"high_amount_out": None},
                 "token_out": {"decimals": 6},
                 "providers": {
-                    "curve": {"status": "error", "amount_out": None},
+                    "curve": {"status": "error", "amount_out": None, "error": {"type": "TIMEOUT"}},
                     "enso": {"status": "error", "amount_out": None},
                 },
             }
@@ -422,7 +424,7 @@ async def test_quote_returns_none_when_both_attempts_fail() -> None:
             "summary": {"high_amount_out": None},
             "token_out": {"decimals": 6},
             "providers": {
-                "curve": {"status": "error", "amount_out": None},
+                "curve": {"status": "error", "amount_out": None, "error": {"type": "TIMEOUT"}},
                 "enso": {"status": "no_route", "amount_out": None},
             },
         }
@@ -461,3 +463,34 @@ async def test_quote_no_retry_when_no_providers() -> None:
 
     assert call_count == 1
     assert result.amount_out_raw is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,error_type", [("no_route", "NO_ROUTE"), ("bad_request", "INVALID_REQUEST"), ("error", "PROVIDER_UNAVAILABLE"), ("error", "RATE_LIMITED"), ("error", "UPSTREAM_HTTP")])
+async def test_quote_does_not_repeat_known_failures(status, error_type):
+    provider = _provider()
+    requests = []
+    async def fetch(client, path, params):
+        requests.append(params)
+        return {"summary": {"high_amount_out": None}, "providers": {"curve": {"status": status, "error": {"type": error_type}}}}
+    provider._get_price = fetch
+    await provider.quote("0x" + "a" * 40, "0x" + "b" * 40, "100")
+    assert len(requests) == 1
+    assert requests[0]["providers"] == "curve,lifi"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_enso_opt_in_applies_to_both_operations():
+    provider = TokenPriceAggProvider(chain_id=1, base_url="https://prices.wavey.info", api_key=None,
+        timeout_seconds=10, retry_attempts=1, price_providers=["curve", "enso"], quote_providers=["lifi", "enso"])
+    requests = {}
+    async def fetch(client, path, params):
+        requests[path] = params
+        return {"summary": {"median_price": "1", "high_amount_out": "100"}}
+    provider._get_price = fetch
+    await provider.quote_usd("0x" + "a" * 40, 18)
+    await provider.quote("0x" + "a" * 40, "0x" + "b" * 40, "100")
+    assert requests["/v1/price"]["providers"] == "curve,enso"
+    assert requests["/v1/quote"]["providers"] == "lifi,enso"
+    await provider.close()

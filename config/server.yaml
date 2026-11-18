@@ -1,3 +1,7 @@
+# Enso is opt-in. Keep quote providers limited to those supporting swap quotes.
+price_providers: [defillama, curve, lifi]
+quote_providers: [curve, lifi]
+quote_failure_cooldown_minutes: 15
 # Tracked, authoritative server runtime config.
 # Keep secrets in config/.env for local repo use, or set TIDAL_ENV_FILE outside Git.
 # Set TIDAL_HOME in the service environment if you want mutable state outside the repo checkout.

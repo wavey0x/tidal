@@ -9,6 +9,20 @@ Tidal uses two different kinds of pricing data:
 
 The system is intentionally designed so cached prices are good enough for ordering, while live quotes are only fetched when a specific candidate is actually being prepared.
 
+## Provider selection
+
+Enso is opt-in. `price_providers` defaults to `[defillama, curve, lifi]` and
+`quote_providers` to `[curve, lifi]`. Both lists must be non-empty. Add `enso`
+to either list to enable it for that operation. Every scanner, CLI and API preview
+sends the explicit list to Prices API. Environment overrides `PRICE_PROVIDERS`
+and `QUOTE_PROVIDERS` use JSON arrays. Prices API credentials remain app-specific.
+
+After an unsent quote preparation fails, the same auction/token pair waits
+`quote_failure_cooldown_minutes` (default 15; 0 disables it). The existing saved
+failure sets the deadline; skipped cycles do not extend it. No quotes are cached
+for execution, and configured Curve requirements remain enforced. The existing
+scoped manual `--refresh-quote` option bypasses this wait.
+
 ## Scan-Time USD Price Refresh
 
 During each scan, Tidal refreshes token USD prices through:
@@ -67,7 +81,7 @@ Tidal uses:
 - `summary.high_amount_out` as the quote output amount
 - provider-level statuses and amounts for diagnostics
 
-If the first `200` response has provider failures and no amount, Tidal performs one short soft retry.
+If the first `200` response has no amount and a timeout or transport error, Tidal retries once. No-route, rejected, rate-limited and open-circuit responses do not trigger an immediate retry.
 
 ## Curve Quote Strictness
 

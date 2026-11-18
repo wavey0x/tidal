@@ -151,6 +151,8 @@ def build_scanner_service(
             api_key=settings.token_price_agg_key,
             timeout_seconds=settings.price_timeout_seconds,
             retry_attempts=settings.price_retry_attempts,
+            price_providers=settings.price_providers,
+            quote_providers=settings.quote_providers,
         ),
         token_repository=token_repository,
     )
@@ -349,6 +351,8 @@ def build_txn_service(
         api_key=settings.token_price_agg_key,
         timeout_seconds=settings.price_timeout_seconds,
         retry_attempts=settings.price_retry_attempts,
+        price_providers=settings.price_providers,
+        quote_providers=settings.quote_providers,
     )
     if owned_clients is not None:
         owned_clients.push_async_callback(close_client, price_provider)

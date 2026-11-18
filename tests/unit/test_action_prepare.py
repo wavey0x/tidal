@@ -66,6 +66,7 @@ class _FakeAliasSession:
 def _kick_settings() -> SimpleNamespace:
     return SimpleNamespace(
         txn_usd_threshold=100.0,
+        quote_failure_cooldown_minutes=15,
         txn_data_freshness_limit_seconds=1200,
         kick_config=SimpleNamespace(
             ignore_policy=object(),
@@ -130,6 +131,9 @@ class _FakeKickDeps:
 
 
 class _FakeKickTxRepository:
+    def last_unsent_quote_failure(self, auction_address, token_address):
+        return None
+
     def list_pair_operations(self, auction_address: str, token_address: str):
         del auction_address, token_address
         return []
@@ -1151,6 +1155,8 @@ async def test_load_strategy_deploy_defaults_includes_receiver_address(monkeypat
             token_price_agg_key=None,
             price_timeout_seconds=10,
             price_retry_attempts=1,
+            price_providers=["defillama", "curve", "lifi"],
+            quote_providers=["curve", "lifi"],
             txn_start_price_buffer_bps=1000,
         ),
         strategy_address=strategy_address,

@@ -60,12 +60,18 @@ class TokenPriceAggProvider:
         api_key: str | None,
         timeout_seconds: int,
         retry_attempts: int,
+        price_providers: list[str] | None = None,
+        quote_providers: list[str] | None = None,
     ):
         self.chain_id = chain_id
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self.retry_attempts = retry_attempts
+        self.price_providers = ["defillama", "curve", "lifi"] if price_providers is None else price_providers
+        self.quote_providers = ["curve", "lifi"] if quote_providers is None else quote_providers
+        if not self.price_providers or not self.quote_providers:
+            raise ValueError("Provider lists must not be empty")
         self.quote_token_address = "usd"
         self.quote_token_decimals = 0
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -90,8 +96,7 @@ class TokenPriceAggProvider:
         """Fetch a direct token_in -> token_out quote via /v1/quote.
 
         If the first attempt returns HTTP 200 but all providers failed
-        (amount_out_raw is None with providers present), retries once
-        after a 2-second delay to handle transient rate-limiting.
+        with a retryable timeout or transport error, retries once after two seconds.
         """
         params = {
             "token_in": normalize_address(token_in),
@@ -100,6 +105,7 @@ class TokenPriceAggProvider:
             "chain_id": self.chain_id,
             "use_underlying": "true",
             "timeout_ms": self.quote_timeout_ms,
+            "providers": ",".join(self.quote_providers),
         }
         client = await self._client()
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
@@ -113,8 +119,8 @@ class TokenPriceAggProvider:
             if result.amount_out_raw is not None or attempt + 1 >= max_soft_retries:
                 return result
 
-            # All providers failed — likely transient rate-limiting, retry.
-            if not result.provider_statuses:
+            # A no-route, open circuit or quota rejection will not improve in two seconds.
+            if not _has_retryable_quote_failure(payload):
                 return result
 
             logger.info(
@@ -181,6 +187,7 @@ class TokenPriceAggProvider:
 
         path = "/v1/price"
         params = {
+            "providers": ",".join(self.price_providers),
             "token": normalized_token,
             "chain_id": self.chain_id,
             "use_underlying": "true",
@@ -388,3 +395,14 @@ def _to_decimal(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _has_retryable_quote_failure(payload: Any) -> bool:
+    providers = payload.get("providers") if isinstance(payload, dict) else None
+    if not isinstance(providers, dict):
+        return False
+    for entry in providers.values():
+        error = entry.get("error") if isinstance(entry, dict) else None
+        if isinstance(error, dict) and error.get("type") in {"TIMEOUT", "INTERNAL_TRANSPORT_TIMEOUT", "DEADLINE_EXCEEDED"}:
+            return True
+    return False

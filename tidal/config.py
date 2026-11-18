@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import dotenv_values
@@ -111,6 +111,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("TOKEN_PRICE_AGG_BASE_URL", "CURVE_API_BASE_URL"),
     )
     token_price_agg_key: str | None = Field(default=None, alias="TOKEN_PRICE_AGG_KEY")
+    price_providers: list[Literal["defillama", "curve", "lifi", "enso"]] = Field(
+        default_factory=lambda: ["defillama", "curve", "lifi"], min_length=1, alias="PRICE_PROVIDERS",
+    )
+    quote_providers: list[Literal["curve", "lifi", "enso"]] = Field(
+        default_factory=lambda: ["curve", "lifi"], min_length=1, alias="QUOTE_PROVIDERS",
+    )
+    quote_failure_cooldown_minutes: int = Field(default=15, ge=0, alias="QUOTE_FAILURE_COOLDOWN_MINUTES")
     price_timeout_seconds: int = Field(default=10, alias="PRICE_TIMEOUT_SECONDS")
     price_retry_attempts: int = Field(default=3, alias="PRICE_RETRY_ATTEMPTS")
     price_concurrency: int = Field(default=10, alias="PRICE_CONCURRENCY")

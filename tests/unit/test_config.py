@@ -268,3 +268,17 @@ def test_api_configuration_excludes_signing_credentials_without_changing_workers
     assert workers.txn_keystore_passphrase == "fixture-secret"
     assert api.kick_config == workers.kick_config
     assert api.resolved_config_path == workers.resolved_config_path
+
+
+def test_provider_defaults_opt_in_and_validation(monkeypatch):
+    from tidal.config import Settings
+    settings = Settings(_env_file=None)
+    assert settings.price_providers == ["defillama", "curve", "lifi"]
+    assert settings.quote_providers == ["curve", "lifi"]
+    assert settings.quote_failure_cooldown_minutes == 15
+    monkeypatch.setenv("QUOTE_PROVIDERS", '["curve", "enso"]')
+    assert Settings(_env_file=None).quote_providers == ["curve", "enso"]
+    for providers in ([], ["typo"], ["defillama"]):
+        monkeypatch.delenv("QUOTE_PROVIDERS", raising=False)
+        with pytest.raises(ValueError):
+            Settings(quote_providers=providers, _env_file=None)

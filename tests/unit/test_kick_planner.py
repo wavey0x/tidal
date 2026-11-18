@@ -15,6 +15,7 @@ from tidal.transaction_service.types import AuctionInspection, KickCandidate, Ki
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         txn_usd_threshold=100.0,
+        quote_failure_cooldown_minutes=15,
         txn_data_freshness_limit_seconds=1200,
         txn_max_gas_limit=500000,
         auction_kicker_address="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -145,6 +146,9 @@ class _FakeKickGuardStatusRepository:
 
 
 class _FakeKickTxRepository:
+    def last_unsent_quote_failure(self, auction_address, token_address):
+        return None
+
     def list_pair_operations(self, auction_address: str, token_address: str):
         del auction_address, token_address
         return []
@@ -868,3 +872,30 @@ async def test_held_candidate_does_not_starve_shared_auction_alternative(monkeyp
     assert [op.candidate.token_address for op in plan.kick_operations] == [low.token_address]
     assert deps.prepare_kick.await_count == 2
     settlement.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_quote_failure_cooldown_skips_preparation_without_extending_deadline():
+    from datetime import datetime, timedelta, timezone
+    candidate = _candidate(token_address="0x" + "2" * 40, usd_value=2500)
+    failure = {"created_at": (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()}
+    repository = _FakeKickTxRepository()
+    repository.last_unsent_quote_failure = lambda *args: failure
+    shortlist = SimpleNamespace(selected_candidates=[candidate], eligible_candidates=[candidate],
+        ignored_skips=[], cooldown_skips=[], no_fill_skips=[], deferred_same_auction_count=0, limited_candidates=[])
+    deps = _FakeKickDeps(prepared_by_token={})
+    planner = KickPlanner(session=object(), settings=_settings(), preparer=deps, tx_builder=deps,
+        kick_tx_repository=repository, shortlist_builder=lambda *a, **k: shortlist)
+    first = await planner.plan(sender=None, run_id="first")
+    second = await planner.plan(sender=None, run_id="second")
+    assert first.cooldown_skips == second.cooldown_skips
+    assert len(first.cooldown_skips) == 1
+    assert first.ready_count == 0
+    assert first.skipped_during_prepare == []
+    deps.prepare_kick.assert_not_called()
+    deps.inspect_candidates.assert_not_called()
+    failure["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()
+    assert planner._filter_quote_cooldown([candidate], first) == [candidate]
+    failure["created_at"] = datetime.now(timezone.utc).isoformat()
+    planner.settings.quote_failure_cooldown_minutes = 0
+    assert planner._filter_quote_cooldown([candidate], first) == [candidate]

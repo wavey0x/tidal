@@ -106,6 +106,7 @@ class KickPreparer:
         auction_state_reader_factory: Callable[..., AuctionStateReader] | None = None,
         logger_instance=None,
         feasibility_holds: KickFeasibilityHolds | None = None,
+        compare_enso: bool = False,
     ) -> None:
         self.web3_client = web3_client
         self.price_provider = price_provider
@@ -123,6 +124,7 @@ class KickPreparer:
         self.auction_state_reader_factory = auction_state_reader_factory or AuctionStateReader
         self.logger = logger_instance or logger
         self.feasibility_holds = feasibility_holds
+        self.compare_enso = compare_enso
 
     def _resolve_erc20_reader(self) -> ERC20Reader:
         if self.erc20_reader is not None:
@@ -434,6 +436,15 @@ class KickPreparer:
                 kick_tx_id=0,
                 status=KickStatus.SKIP,
                 error_message="sell token resolves to want token in quote API",
+            )
+
+        if (
+            self.compare_enso and candidate.source_type == "strategy" and self.require_curve_quote
+            and quote_result.amount_out_raw and quote_result.token_out_decimals == want_decimals
+            and quote_result.curve_quote_available() and quote_result.provider_statuses.get("curve") == "ok"
+        ):
+            quote_result = await self.price_provider.compare_enso(
+                quote_result, candidate.token_address, candidate.want_address, str(sell_amount),
             )
 
         quote_response_json = None

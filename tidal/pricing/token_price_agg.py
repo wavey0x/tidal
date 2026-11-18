@@ -92,21 +92,24 @@ class TokenPriceAggProvider:
             await self._http_client.aclose()
             self._http_client = None
 
-    async def quote(self, token_in: str, token_out: str, amount_in: str) -> QuoteResult:
-        """Fetch a direct token_in -> token_out quote via /v1/quote.
-
-        If the first attempt returns HTTP 200 but all providers failed
-        with a retryable timeout or transport error, retries once after two seconds.
-        """
-        params = {
+    def _quote_params(self, token_in: str, token_out: str, amount_in: str, providers: str):
+        return {
             "token_in": normalize_address(token_in),
             "token_out": normalize_address(token_out),
             "amount_in": amount_in,
             "chain_id": self.chain_id,
             "use_underlying": "true",
             "timeout_ms": self.quote_timeout_ms,
-            "providers": ",".join(self.quote_providers),
+            "providers": providers,
         }
+
+    async def quote(self, token_in: str, token_out: str, amount_in: str) -> QuoteResult:
+        """Fetch a direct token_in -> token_out quote via /v1/quote.
+
+        If the first attempt returns HTTP 200 but all providers failed
+        with a retryable timeout or transport error, retries once after two seconds.
+        """
+        params = self._quote_params(token_in, token_out, amount_in, ",".join(self.quote_providers))
         client = await self._client()
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
         request_url = f"{self.base_url}/v1/quote?{query_string}"
@@ -134,7 +137,23 @@ class TokenPriceAggProvider:
 
         return result  # type: ignore[possibly-undefined]
 
-    def _parse_quote_response(self, payload: Any, request_url: str) -> QuoteResult:
+    async def compare_enso(self, base: QuoteResult, token_in: str, token_out: str, amount_in: str) -> QuoteResult:
+        """Compare the same lot once after the required providers have quoted."""
+        if not base.raw_response or "enso" in self.quote_providers:
+            return base
+        params = self._quote_params(token_in, token_out, amount_in, "enso")
+        try:
+            extra = await self._get_price(await self._client(), "/v1/quote", params)
+            combined = _combine_enso(base.raw_response, extra, params)
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            logger.info("strategy_enso_comparison_unavailable", reason=type(exc).__name__)
+            return base
+        if combined is None:
+            logger.info("strategy_enso_comparison_unavailable", reason="no comparable quote")
+            return base
+        return self._parse_quote_response(combined, base.request_url)
+
+    def _parse_quote_response(self, payload: Any, request_url: str | None) -> QuoteResult:
         """Parse a /v1/quote response payload into a QuoteResult."""
         amount_out_raw = None
         token_out_decimals = None
@@ -294,6 +313,44 @@ class TokenPriceAggProvider:
         if price_usd < 0:
             raise ValueError("negative usd quote")
         return price_usd
+
+def _combine_enso(base: dict, extra: dict, params: dict) -> dict | None:
+    if not isinstance(extra, dict) or "enso" in base["providers"]:
+        return None
+    for payload in (base, extra):
+        if payload["chain_id"] != params["chain_id"]:
+            return None
+        for side in ("token_in", "token_out"):
+            token = payload[side]
+            if str(token["address"]).lower() != params[side].lower() or token["decimals"] != base[side]["decimals"]:
+                return None
+    enso = extra["providers"]["enso"]
+    if not enso["success"] or enso["status"] != "ok" or int(enso["amount_out"]) <= 0:
+        return None
+    providers = {**base["providers"], "enso": enso}
+    amounts = []
+    for entry in providers.values():
+        if entry["success"] and entry["status"] == "ok":
+            if str(entry["amount_in"]) != params["amount_in"] or int(entry["amount_out"]) <= 0:
+                return None
+            amounts.append(int(entry["amount_out"]))
+    base_vault = (base.get("quote") or {}).get("vault_context") or {}
+    extra_vault = (extra.get("quote") or {}).get("vault_context") or {}
+    if any(base_vault.get(side) != extra_vault.get(side) for side in ("underlying_token_in", "underlying_token_out")):
+        return None
+
+    amounts.sort()
+    median = (amounts[len(amounts) // 2] + amounts[(len(amounts) - 1) // 2]) // 2
+    summary = {
+        "requested_providers": len(providers),
+        "successful_providers": len(amounts),
+        "failed_providers": len(providers) - len(amounts),
+        "high_amount_out": str(amounts[-1]),
+        "low_amount_out": str(amounts[0]),
+        "median_amount_out": str(median),
+    }
+    return {**base, "provider_order": [*base["provider_order"], "enso"], "providers": providers, "summary": summary}
+
 
 def _is_retryable_price_error(exc: BaseException) -> bool:
     status_code = _http_status_code(exc)

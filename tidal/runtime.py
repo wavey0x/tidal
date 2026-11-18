@@ -370,6 +370,7 @@ def build_txn_service(
         price_provider=price_provider,
         usd_threshold=settings.txn_usd_threshold,
         require_curve_quote=resolved_require_curve_quote,
+        compare_enso=settings.strategy_kick_compare_enso,
         erc20_reader=erc20_reader,
         auction_state_reader=auction_state_reader,
         pricing_policy=kick_config.pricing_policy,

@@ -79,11 +79,14 @@ def _pricing_policy(profile: PricingProfile) -> PricingPolicy:
     )
 
 
-async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult, *, expected_type=PreparedKick):
+async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult, *, expected_type=PreparedKick, compare=None, source_type="strategy"):
     candidate = _candidate()
+    candidate.source_type = source_type
     preparer = KickPreparer(
         web3_client=object(),
+        compare_enso=compare is not None,
         price_provider=SimpleNamespace(
+            compare_enso=compare,
             quote=AsyncMock(return_value=quote_result),
             quote_usd=AsyncMock(return_value=SimpleNamespace(price_usd="1")),
         ),
@@ -111,6 +114,18 @@ async def _prepare_with_quote(profile: PricingProfile, quote_result: QuoteResult
     )
     assert isinstance(result, expected_type)
     return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,curve,expected", [("strategy", True, True), ("fee_burner", True, False), ("strategy", False, False)])
+async def test_optional_enso_only_compares_curve_confirmed_strategy(source, curve, expected):
+    profile = PricingProfile(name="default", start_price_buffer_bps=1000, min_price_buffer_bps=500, step_decay_rate_bps=20)
+    providers = {"curve" if curve else "lifi": 1000}
+    base = _quote_result(high=1000, provider_amounts=providers)
+    compare = AsyncMock(return_value=_quote_result(high=1002, provider_amounts={**providers, "enso": 1002}))
+    await _prepare_with_quote(profile, base, compare=compare, source_type=source,
+                              expected_type=PreparedKick if curve else KickResult)
+    assert compare.await_count == int(expected)
 
 
 def _quote_result(*, high: int, provider_amounts: dict[str, int]) -> QuoteResult:

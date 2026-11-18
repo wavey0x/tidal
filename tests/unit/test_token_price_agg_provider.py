@@ -494,3 +494,46 @@ async def test_explicit_enso_opt_in_applies_to_both_operations():
     assert requests["/v1/price"]["providers"] == "curve,enso"
     assert requests["/v1/quote"]["providers"] == "lifi,enso"
     await provider.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", [None, "quota", "amount", "pair", "decimals", "vault", "no_route"])
+async def test_compare_enso_uses_one_matching_lot_or_keeps_base(problem):
+    from unittest.mock import AsyncMock
+
+    provider = _provider()
+    sell, buy = "0x" + "01" * 20, "0x" + "02" * 20
+    def response(quotes):
+        return {
+            "chain_id": 1, "token_in": {"address": sell, "decimals": 18},
+            "token_out": {"address": buy, "decimals": 6}, "quote": {}, "provider_order": list(quotes),
+            "providers": {k: {"amount_in": "100", "amount_out": str(v), "status": "ok", "success": True}
+                          for k, v in quotes.items()}, "summary": {"high_amount_out": str(max(quotes.values()))},
+        }
+    base = provider._parse_quote_response(response({"curve": 99, "lifi": 98}), "baseline")
+    extra = response({"enso": 105})
+    if problem == "amount":
+        extra["providers"]["enso"]["amount_in"] = "10"
+    if problem == "pair":
+        extra["token_out"]["address"] = sell
+    if problem == "decimals":
+        extra["token_out"]["decimals"] = 18
+    if problem == "vault":
+        extra["quote"]["vault_context"] = {"underlying_token_out": sell}
+    if problem == "no_route":
+        extra["providers"]["enso"]["status"] = "no_route"
+    provider._client = AsyncMock()
+    provider._get_price = AsyncMock(return_value=extra, side_effect=httpx.ReadTimeout("quota") if problem == "quota" else None)
+    result = await provider.compare_enso(base, sell, buy, "100")
+    provider._get_price.assert_awaited_once()
+    params = provider._get_price.await_args.args[2]
+    assert (params["providers"], params["amount_in"], params["token_in"], params["token_out"]) == ("enso", "100", sell, buy)
+    if problem:
+        assert result is base
+    else:
+        assert result.amount_out_raw == 105
+        assert result.provider_amounts == {"curve": 99, "lifi": 98, "enso": 105}
+        assert result.raw_response["summary"] == {
+            "requested_providers": 3, "successful_providers": 3, "failed_providers": 0,
+            "high_amount_out": "105", "median_amount_out": "99", "low_amount_out": "98",
+        }

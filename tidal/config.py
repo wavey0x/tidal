@@ -117,6 +117,7 @@ class Settings(BaseSettings):
     quote_providers: list[Literal["curve", "lifi", "enso"]] = Field(
         default_factory=lambda: ["curve", "lifi"], min_length=1, alias="QUOTE_PROVIDERS",
     )
+    strategy_kick_compare_enso: bool = Field(default=False, alias="STRATEGY_KICK_COMPARE_ENSO")
     quote_failure_cooldown_minutes: int = Field(default=15, ge=0, alias="QUOTE_FAILURE_COOLDOWN_MINUTES")
     price_timeout_seconds: int = Field(default=10, alias="PRICE_TIMEOUT_SECONDS")
     price_retry_attempts: int = Field(default=3, alias="PRICE_RETRY_ATTEMPTS")
